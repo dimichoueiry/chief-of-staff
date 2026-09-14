@@ -4,11 +4,15 @@
   "description": "A chief of staff for one person: remembers every commitment you made to yourself and speaks first every morning.",
   "type": "module",
   "private": true,
-  "bin": { "cos": "./dist/cli/cos.js" },
-  "engines": { "node": ">=20" },
+  "bin": {
+    "cos": "./dist/cli/cos.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "cos": "tsx src/cli/cos.ts",
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node scripts/copy-assets.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
