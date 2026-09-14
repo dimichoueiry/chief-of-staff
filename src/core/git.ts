@@ -45,10 +45,10 @@ export async function commitPaths(
   return (await git(repoDir, ["rev-parse", "--short", "HEAD"])).trim();
 }
 
-/** ISO timestamp of the most recent commit touching `dir`, or null if none. */
+/** Author date (ISO) of the most recent commit in `dir`, or null if none. */
 export async function lastCommitDate(dir: string): Promise<string | null> {
   try {
-    const out = await git(dir, ["log", "-1", "--format=%cI"]);
+    const out = await git(dir, ["log", "-1", "--format=%aI"]);
     return out.trim() || null;
   } catch {
     return null;

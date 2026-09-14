@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key><string>com.chief-of-staff.calendar</string>
+  <key>CFBundleName</key><string>cos-calendar</string>
+  <key>NSCalendarsFullAccessUsageDescription</key>
+  <string>Chief of Staff reads today's events to plan your day around real free time.</string>
+  <key>NSCalendarsUsageDescription</key>
+  <string>Chief of Staff reads today's events to plan your day around real free time.</string>
+</dict>
+</plist>
