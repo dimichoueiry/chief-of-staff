@@ -91,3 +91,18 @@ examples/     a sample selfhub for demos and tests
 - No database, no vector store, no queue. Markdown and git.
 - One loop, many prompts. Not many agents.
 - Every memory write is a commit.
+
+## Status
+
+| Piece | State |
+|---|---|
+| Memory contract: ledger, journal, reminders, notes, git-commit-on-write | done, tested |
+| Context assembler with cadence / silence / parked-review flags | done, tested |
+| Sensors: calendar via EventKit or icalBuddy, git activity → last touched | done, tested (EventKit needs one-time Calendar permission) |
+| Brief: rule-based (offline) and model (structured output) | done, tested; model path needs `ANTHROPIC_API_KEY` |
+| Brain: one tool-use loop, prompt templates, write tools | done, tested with a scripted model |
+| CLI: brief, ask, focus, capture, wrap, silence-check, decide, remind, done, note, projects, calendar, context, init | done |
+| Scheduler: launchd agents (07:00 brief, 12:00 silence check, 18:00 wrap nudge) | done; `npm run build && cos scheduler install` |
+| UI: the pill + brief panel served locally, browser speech recognition | done; `cos ui` |
+| Voice: `say` for speech, whisper.cpp for listening, typed fallback | done; `cos say brief`, `cos talk` |
+| Native menubar shell, Fn double-tap system-wide, wake word | not yet: the web page is built to be hosted by a Tauri or Swift shell |
