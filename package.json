@@ -1,0 +1,26 @@
+{
+  "name": "chief-of-staff",
+  "version": "0.1.0",
+  "description": "A chief of staff for one person: remembers every commitment you made to yourself and speaks first every morning.",
+  "type": "module",
+  "private": true,
+  "bin": { "cos": "./dist/cli/cos.js" },
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "cos": "tsx src/cli/cos.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
+    "commander": "^15.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.23.0",
+    "typescript": "^5.9.0",
+    "vitest": "^5.0.0"
+  }
+}

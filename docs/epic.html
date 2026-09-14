@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A chief of staff that lives on my laptop</title>
+<style>
+  :root {
+    --bg: #faf9f7;
+    --panel: #ffffff;
+    --ink: #1c1b19;
+    --ink-soft: #4a4843;
+    --muted: #8a877f;
+    --line: #e7e4dd;
+    --accent: #b4531f;
+    --accent-soft: #f3e3d8;
+    --good: #2f6f4f;
+    --shadow: 0 1px 2px rgba(28,27,25,.04), 0 8px 30px rgba(28,27,25,.06);
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16150f;
+      --panel: #1f1e18;
+      --ink: #efece3;
+      --ink-soft: #cfccc2;
+      --muted: #928e82;
+      --line: #32302a;
+      --accent: #e08a4f;
+      --accent-soft: #2c2318;
+      --good: #7fc79e;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 12px 40px rgba(0,0,0,.35);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 0 28px 120px; }
+
+  /* Hero */
+  header.hero {
+    padding: 88px 0 40px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 8px;
+  }
+  .kicker {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 18px;
+  }
+  h1 {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: clamp(34px, 6vw, 52px);
+    line-height: 1.08;
+    letter-spacing: -.01em;
+    margin: 0 0 20px;
+  }
+  .standfirst {
+    font-size: 20px;
+    line-height: 1.5;
+    color: var(--ink-soft);
+    max-width: 60ch;
+    margin: 0;
+  }
+  .meta-row {
+    margin-top: 28px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--muted);
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+  }
+
+  /* Section */
+  section { padding: 48px 0; border-bottom: 1px solid var(--line); }
+  section:last-of-type { border-bottom: none; }
+  h2 {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: 27px;
+    letter-spacing: -.01em;
+    margin: 0 0 20px;
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+  }
+  h2 .num {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--accent);
+    font-weight: 500;
+    flex: none;
+  }
+  h3 {
+    font-family: var(--sans);
+    font-weight: 650;
+    font-size: 18px;
+    margin: 30px 0 8px;
+    letter-spacing: -.005em;
+  }
+  p { margin: 0 0 16px; }
+  p.lead { font-size: 18.5px; color: var(--ink-soft); }
+  strong { font-weight: 650; color: var(--ink); }
+  a { color: var(--accent); }
+
+  /* Pull / one-liner */
+  .oneliner {
+    background: var(--accent-soft);
+    border-radius: 14px;
+    padding: 26px 28px;
+    margin: 8px 0 22px;
+    font-family: var(--serif);
+    font-size: 22px;
+    line-height: 1.4;
+    color: var(--ink);
+  }
+  .oneliner .q { color: var(--accent); font-weight: 600; }
+
+  /* Blockquote — press release */
+  blockquote {
+    margin: 0;
+    padding: 24px 26px;
+    background: var(--panel);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 12px 12px 0;
+    box-shadow: var(--shadow);
+    font-family: var(--serif);
+    font-size: 18px;
+    line-height: 1.55;
+    color: var(--ink-soft);
+  }
+  blockquote em { color: var(--ink); font-style: italic; }
+  blockquote .cite {
+    display: block;
+    margin-top: 14px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    font-style: normal;
+    color: var(--muted);
+  }
+
+  /* Tables */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0 20px;
+    font-size: 15.5px;
+  }
+  th {
+    text-align: left;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 500;
+    padding: 0 14px 10px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  td {
+    padding: 12px 14px 12px 0;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+    color: var(--ink-soft);
+  }
+  td strong { color: var(--ink); }
+  tr:last-child td { border-bottom: none; }
+  .tag {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 20px;
+    white-space: nowrap;
+  }
+  .tag.miss { background: var(--accent-soft); color: var(--accent); }
+  .tag.have { background: color-mix(in srgb, var(--good) 16%, transparent); color: var(--good); }
+
+  /* Story cards */
+  .story {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 22px 24px;
+    margin: 16px 0;
+    box-shadow: var(--shadow);
+  }
+  .story h3 { margin-top: 0; display: flex; gap: 10px; align-items: baseline; }
+  .story h3 .id {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 2px 8px;
+    border-radius: 6px;
+    flex: none;
+  }
+  .story .want { color: var(--ink-soft); margin-bottom: 14px; }
+  .story .ac-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    display: block;
+    margin-bottom: 6px;
+  }
+  ul.ac { margin: 0; padding: 0; list-style: none; }
+  ul.ac li {
+    position: relative;
+    padding: 5px 0 5px 26px;
+    font-size: 15.5px;
+    color: var(--ink-soft);
+    line-height: 1.5;
+  }
+  ul.ac li::before {
+    content: "";
+    position: absolute;
+    left: 4px;
+    top: 12px;
+    width: 7px; height: 7px;
+    border: 1.5px solid var(--accent);
+    border-radius: 2px;
+  }
+
+  /* Code */
+  pre {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px 22px;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 13.5px;
+    line-height: 1.6;
+    color: var(--ink-soft);
+    box-shadow: var(--shadow);
+  }
+  code { font-family: var(--mono); font-size: .88em; background: var(--accent-soft); color: var(--accent); padding: 1px 6px; border-radius: 5px; }
+  pre code { background: none; color: inherit; padding: 0; }
+  .cmt { color: var(--muted); }
+
+  /* Callout */
+  .callout {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--good);
+    border-radius: 0 12px 12px 0;
+    padding: 20px 24px;
+    margin: 20px 0;
+    box-shadow: var(--shadow);
+  }
+  .callout .t { font-weight: 650; margin-bottom: 8px; color: var(--good); font-size: 14px; letter-spacing: .01em; }
+
+  /* FAQ */
+  .faq { margin: 14px 0; }
+  .faq details {
+    border-bottom: 1px solid var(--line);
+    padding: 6px 0;
+  }
+  .faq summary {
+    cursor: pointer;
+    font-weight: 600;
+    padding: 12px 0;
+    list-style: none;
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    color: var(--ink);
+  }
+  .faq summary::-webkit-details-marker { display: none; }
+  .faq summary::after { content: "+"; color: var(--accent); font-family: var(--mono); font-size: 20px; line-height: 1; }
+  .faq details[open] summary::after { content: "–"; }
+  .faq details[open] summary { color: var(--accent); }
+  .faq .a { padding: 0 0 16px; color: var(--ink-soft); font-size: 16px; }
+
+  ol.plainlist { padding-left: 22px; }
+  ol.plainlist li { margin-bottom: 10px; color: var(--ink-soft); }
+  ol.plainlist li strong { color: var(--ink); }
+
+  footer.foot {
+    padding-top: 40px;
+    font-family: var(--mono);
+    font-size: 12.5px;
+    color: var(--muted);
+    text-align: center;
+  }
+
+  ::selection { background: var(--accent-soft); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <p class="kicker">Epic &middot; Personal assistant</p>
+    <h1>A chief of staff that lives on my laptop</h1>
+    <p class="standfirst">It remembers every commitment I&rsquo;ve made to myself, and every morning it tells me what matters today &mdash; before I ask.</p>
+    <div class="meta-row">
+      <span>Draft 1</span>
+      <span>2026&#8209;09&#8209;14</span>
+      <span>Owner: Dimitri</span>
+    </div>
+  </header>
+
+  <section>
+    <h2><span class="num">01</span> The problem</h2>
+    <p class="lead">I run many parallel things: a job, a master&rsquo;s, side projects, a class I teach, people I advise. My working memory is the bottleneck, not my ability.</p>
+    <p>Projects go quiet not because I decided to stop, but because I forgot they existed. When I do sit down to work, I spend the first twenty minutes reconstructing &ldquo;where was I, what matters, what did I promise myself.&rdquo;</p>
+    <p><strong>What I do about it today:</strong> nothing systematic. Scattered notes, a calendar, whatever is on top of the Desktop. That is the real competitor &mdash; doing nothing.</p>
+    <div class="callout">
+      <div class="t">PROBLEM STATEMENT</div>
+      I have no single place that remembers what I am working on, why, how often I said I&rsquo;d touch it, and what the next move is &mdash; and nothing that puts that in front of me without being asked.
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">02</span> The one-line product</h2>
+    <div class="oneliner"><span class="q">A chief of staff for one person.</span> It remembers every commitment I&rsquo;ve made to myself, and every morning it tells me what matters today, before I ask.</div>
+    <p>Not a chatbot. Not a to-do app. Not a calendar. Those are inputs. The product is the <strong>memory plus the initiative</strong>: it knows, and it speaks first.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">03</span> The core insight</h2>
+    <p class="lead">This is a memory problem, not an AI problem.</p>
+    <p>Every scenario I described &mdash; &ldquo;what should I do today,&rdquo; &ldquo;top 3 ROI moves on project X,&rdquo; &ldquo;you said Thursdays&rdquo; &mdash; is trivial for a model <em>if the model has the right context</em>. The whole difficulty is getting that context to exist, stay current, and load automatically.</p>
+    <p>Three memory stores, in order of how much they already exist:</p>
+    <table>
+      <thead><tr><th>Store</th><th>What it holds</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Identity</strong></td><td>Who I am, how I work, what I value, how I write</td><td><span class="tag have">Exists</span> <code>~/selfhub</code></td></tr>
+        <tr><td><strong>Commitments</strong></td><td>Projects, why each matters, cadence, status, next action, last touched</td><td><span class="tag miss">Missing</span> goals files empty</td></tr>
+        <tr><td><strong>Journal</strong></td><td>What actually happened each day, what I said I&rsquo;d do, what I chose</td><td><span class="tag miss">Missing</span></td></tr>
+      </tbody>
+    </table>
+    <p>The assistant is a thin loop over these three files plus the calendar. <strong>Build the ledger first.</strong> Everything else is prompt engineering on top of a ledger that exists.</p>
+  </section>
+
+  <section>
+    <h2><span class="num">04</span> Working backwards</h2>
+    <p>The press-release quote. If this sentence ever feels boring, the product is wrong.</p>
+    <blockquote>
+      I open my laptop Thursday morning and it says: <em>It&rsquo;s Thursday. You told me Thursdays are for MLGuerrilla. You haven&rsquo;t touched it in 12 days. Last time you said the next step was recording the intro video. You have a free block 2&ndash;4pm. Want to do it then?</em> I didn&rsquo;t have to remember any of that. Now I can finally trust that nothing I care about silently dies.
+      <span class="cite">&mdash; Dimitri, Montreal</span>
+    </blockquote>
+  </section>
+
+  <section>
+    <h2><span class="num">05</span> User stories</h2>
+    <p>Persona: <strong>me</strong>, a builder with too many threads. Each story has acceptance criteria checkable in a day, not a quarter.</p>
+
+    <div class="story">
+      <h3><span class="id">US-1</span> The morning brief</h3>
+      <p class="want">It&rsquo;s there when I open the laptop. I start the day oriented instead of reconstructing.</p>
+      <span class="ac-label">Acceptance</span>
+      <ul class="ac">
+        <li>Appears without me typing anything, within 10 seconds of login or first unlock after 6am.</li>
+        <li>Contains: today&rsquo;s date and weekday, the day&rsquo;s calendar, the 1&ndash;3 recommended things, and any cadence nudges due.</li>
+        <li>Fits on one screen. If it scrolls, it failed.</li>
+      </ul>
+    </div>
+
+    <div class="story">
+      <h3><span class="id">US-2</span> &ldquo;What should I do today?&rdquo;</h3>
+      <p class="want">A ranked, opinionated answer, so I stop deciding by whatever is loudest.</p>
+      <span class="ac-label">Acceptance</span>
+      <ul class="ac">
+        <li>Names concrete next actions, not projects (&ldquo;record intro video,&rdquo; not &ldquo;work on MLGuerrilla&rdquo;).</li>
+        <li>Every recommendation cites its reason from the ledger (&ldquo;because you said this ships Sept 30&rdquo;).</li>
+        <li>Respects free time on the calendar. Never suggests 4 hours of work into a 1-hour day.</li>
+      </ul>
+    </div>
+
+    <div class="story">
+      <h3><span class="id">US-3</span> &ldquo;Highest-ROI three things?&rdquo;</h3>
+      <p class="want">The three highest-leverage moves for a project, so the first twenty minutes are work, not orientation.</p>
+      <span class="ac-label">Acceptance</span>
+      <ul class="ac">
+        <li>Reads the project&rsquo;s ledger entry, its git log if it has one, and the last journal mentions.</li>
+        <li>Returns exactly three items, each with a one-line why and a rough size (30 min / half day / multi-day).</li>
+        <li>If the ledger has no &ldquo;why&rdquo; for the project, it asks me before answering &mdash; and saves the answer.</li>
+      </ul>
+    </div>
+
+    <div class="story">
+      <h3><span class="id">US-4</span> The cadence nudge</h3>
+      <p class="want">&ldquo;You said Thursdays.&rdquo; The assistant holds me to stated cadences, so the promise survives my memory.</p>
+      <span class="ac-label">Acceptance</span>
+      <ul class="ac">
+        <li>&ldquo;I want to work on X every Thursday&rdquo; is written to the ledger as a cadence, no further action from me.</li>
+        <li>On the matching day the brief opens with the nudge, including days since last touch.</li>
+        <li>I can say &ldquo;not this week&rdquo; and it stops for one cycle without deleting the cadence.</li>
+      </ul>
+    </div>
+
+    <div class="story">
+      <h3><span class="id">US-5</span> Capture is one sentence, not a form</h3>
+      <p class="want">I tell it things in plain sentences, so the ledger stays current without discipline.</p>
+      <span class="ac-label">Acceptance</span>
+      <ul class="ac">
+        <li>&ldquo;I&rsquo;m starting a project called Y, it&rsquo;s for Z&rdquo; creates a ledger entry.</li>
+        <li>&ldquo;I finished the landing page&rdquo; updates last-touched and next action.</li>
+        <li>&ldquo;Park drawcal for now&rdquo; sets status to parked; it stops appearing in briefs until I say otherwise.</li>
+        <li>Every write is a git commit in the selfhub repo, so I can see and undo what it did.</li>
+      </ul>
+    </div>
+
+    <div class="story">
+      <h3><span class="id">US-6</span> Resurfacing the forgotten</h3>
+      <p class="want">It notices silence, so dropping a project becomes a decision I make rather than a thing that happens to me.</p>
+      <span class="ac-label">Acceptance</span>
+      <ul class="ac">
+        <li>Any active project untouched for 14 days appears in the brief with one question: keep, park, or kill.</li>
+        <li>The answer is recorded. Parked projects resurface once a month with the same question.</li>
+      </ul>
+    </div>
+
+    <div class="story">
+      <h3><span class="id">US-7</span> End-of-day close</h3>
+      <p class="want">Today&rsquo;s me leaves a two-line note, so tomorrow&rsquo;s brief has something true to work from.</p>
+      <span class="ac-label">Acceptance</span>
+      <ul class="ac">
+        <li>One prompt at a set time or on &ldquo;wrap up&rdquo;: what did you touch today, what&rsquo;s the next move?</li>
+        <li>Appended to the journal with the date. Under 60 seconds to complete.</li>
+        <li>Skipping is allowed. The assistant infers from git activity what it can.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">06</span> The riskiest assumption</h2>
+    <p><strong>The assumption:</strong> that I will actually read the brief and feed the ledger, every day, for more than a week. Every personal-productivity system dies here. The AI is not the risk. My own compliance is.</p>
+    <p><strong>The test &mdash; two weeks, zero app code:</strong></p>
+    <ol class="plainlist">
+      <li>Create <code>~/selfhub/goals/projects.md</code> as the commitments ledger, one entry per active project. Filling this in by hand <em>is</em> the first real deliverable. It will take an hour and it will hurt, because it forces the list to be finite.</li>
+      <li>Create <code>~/selfhub/journal/</code> with one file per day.</li>
+      <li>Write one prompt file, <code>brief.md</code>: read selfhub, read the ledger, read the last 7 journal days, read today&rsquo;s calendar, produce the one-screen brief.</li>
+      <li>Run it automatically at login (a launchd agent running <code>claude -p</code>) or as a scheduled routine every morning at 7.</li>
+      <li>Close the day by hand: two lines in the journal file.</li>
+    </ol>
+    <div class="callout">
+      <div class="t">SUCCESS THRESHOLD &mdash; DECIDED NOW</div>
+      On day 14: I have read at least <strong>11 of 14</strong> briefs, and the ledger has been updated at least <strong>8 times</strong>. If yes, build the real thing. If no, the problem is not &ldquo;I need a better app&rdquo; &mdash; look at <em>why</em> I didn&rsquo;t engage before writing any more code.
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">07</span> The ledger schema</h2>
+    <p>The whole product is this file.</p>
+<pre><code>## MLGuerrilla
+- why: teach ML the way I wish I&rsquo;d been taught; audience I already have
+- status: active          <span class="cmt"># active | parked | done | killed</span>
+- cadence: Thursday       <span class="cmt"># or "weekly", "daily", "none"</span>
+- next: record the intro video for lesson 3
+- last touched: 2026-09-02
+- deadline: none
+- notes: video setup lives in ~/Desktop/mlguerrilla-teach</code></pre>
+    <p>Rules that make it work:</p>
+    <ul class="ac">
+      <li><strong>One <code>next</code> per project.</strong> If I can&rsquo;t name the next physical action, the project is parked, not active.</li>
+      <li><strong><code>why</code> is mandatory.</strong> The assistant ranks by it. A project without a why cannot be ranked and cannot be defended.</li>
+      <li><strong><code>last touched</code> is updated by the assistant</strong>, from git activity and journal mentions, so I don&rsquo;t have to.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2><span class="num">08</span> Where to start: the first week</h2>
+    <table>
+      <thead><tr><th>Day</th><th>Do</th><th>Output</th></tr></thead>
+      <tbody>
+        <tr><td><strong>1</strong></td><td>Write <code>projects.md</code> by hand. Every active thread. Kill or park anything without a why.</td><td>A finite list. Probably shorter than expected.</td></tr>
+        <tr><td><strong>1</strong></td><td>Write the <code>brief.md</code> prompt. Test it once manually.</td><td>A brief that is roughly right.</td></tr>
+        <tr><td><strong>2</strong></td><td>Wire it to login (launchd) or a 7am scheduled routine.</td><td>It shows up without asking.</td></tr>
+        <tr><td><strong>2&ndash;7</strong></td><td>Live with it. Two-line journal each night. Fix the prompt when it&rsquo;s wrong.</td><td>Evidence about the assumption in &sect;06.</td></tr>
+        <tr><td><strong>8</strong></td><td>Add US-3 as a second prompt file: <code>focus.md &lt;project&gt;</code>.</td><td>&ldquo;Top 3 ROI&rdquo; works from the terminal.</td></tr>
+        <tr><td><strong>14</strong></td><td>Judge against the threshold.</td><td>Build / rethink decision.</td></tr>
+      </tbody>
+    </table>
+    <p>What this deliberately excludes: a UI, a database, a vector store, an agent framework, voice, phone notifications. Every one is a &ldquo;not yet&rdquo; with a trigger &mdash; <strong>when the file-based version has survived a month of real use.</strong></p>
+  </section>
+
+  <section>
+    <h2><span class="num">09</span> Architecture, by version</h2>
+    <h3>v0 &middot; weeks 1&ndash;2 &middot; files plus Claude Code</h3>
+    <p>selfhub markdown as memory. Two prompt files. launchd or a scheduled routine for initiative. Git for undo. Cost: near zero. Ceiling: no persistent conversation, no push to phone.</p>
+    <h3>v1 &middot; month 2 &middot; a menubar app</h3>
+    <p>A small macOS menubar app (Swift or Tauri) whose only job is: show the brief on wake, accept one line of capture, call the same prompts. Calendar and Gmail via existing connectors or Google APIs. Memory stays as markdown in selfhub &mdash; that is the point. <strong>The app is disposable; the ledger is not.</strong></p>
+    <h3>v2 &middot; when v1 is boring &middot; it writes the ledger itself</h3>
+    <p>Watches git activity across <code>~/Desktop/*</code>, infers last-touched, drafts journal entries for approval, notices when a calendar event matches a project. Initiative moves from &ldquo;scheduled&rdquo; to &ldquo;event-driven.&rdquo;</p>
+    <div class="callout">
+      <div class="t">NEVER, UNTIL A REAL REASON APPEARS</div>
+      A database, a vector store, a fine-tuned model, multi-user anything.
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">10</span> Hostile FAQ</h2>
+    <div class="faq">
+      <details><summary>How is this different from a to-do app with reminders?</summary><div class="a">A to-do app stores what I typed. This stores <em>why</em>, ranks by it, and speaks first. The difference is who carries the memory. Also, to-do apps have never once asked me &ldquo;do you still want this?&rdquo;</div></details>
+      <details><summary>How is this different from just opening Claude and asking?</summary><div class="a">Context. Bare Claude doesn&rsquo;t know I said Thursdays. This one does, because the ledger and journal load every time, and it is scheduled to talk to me &mdash; not the other way around.</div></details>
+      <details><summary>Won&rsquo;t the ledger rot like every other system I&rsquo;ve tried?</summary><div class="a">Yes, if capture costs more than a sentence. That&rsquo;s why US-5 exists and why the assistant, not me, owns <code>last touched</code>. Section 06 is the honest test of whether it rots anyway.</div></details>
+      <details><summary>What about privacy?</summary><div class="a">Everything lives in a local git repo I own. The model sees it at request time &mdash; the same exposure as any Claude Code session today.</div></details>
+      <details><summary>Why markdown and not a database?</summary><div class="a">I can read it, edit it anywhere, diff it, and undo it. The assistant reads it with <code>cat</code>. A database earns its place when files stop working, and 20 projects in one file will not stop working.</div></details>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">11</span> Not doing</h2>
+    <table>
+      <thead><tr><th>Not doing</th><th>Revisit when</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Phone notifications</strong></td><td>The laptop brief has been read 25 of 30 days.</td></tr>
+        <tr><td><strong>Voice interface</strong></td><td>I catch myself wanting to talk to it while walking, three times.</td></tr>
+        <tr><td><strong>Auto-reading email</strong></td><td>The brief is consistently right about everything <em>except</em> things that arrived by email.</td></tr>
+        <tr><td><strong>Sharing with anyone else</strong></td><td>Never planned. This is for one person.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer class="foot">
+    A chief of staff that lives on my laptop &middot; Draft 1 &middot; 2026&#8209;09&#8209;14
+  </footer>
+
+</div>
+</body>
+</html>
