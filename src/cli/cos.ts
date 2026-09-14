@@ -14,8 +14,16 @@ import { Notes } from "../core/notes.js";
 import { Reminders } from "../core/reminders.js";
 import { buildBrief, buildDecisions } from "../logic/brief.js";
 import { daysIdle } from "../logic/cadence.js";
-import { bold, dim, renderBrief, type Target } from "../output/render.js";
+import { decide, isChoice } from "../logic/decide.js";
+import { createUiServer } from "../ui/server.js";
+import { notify, saveBrief } from "../output/notify.js";
+import { bold, dim, renderBrief, renderBriefNotification, renderBriefSpeech, type Target } from "../output/render.js";
+import { access } from "node:fs/promises";
+import { resolve } from "node:path";
+import * as launchd from "../scheduler/launchd.js";
 import { formatEvent, todayEvents } from "../sensors/calendar.js";
+import { pickStt } from "../voice/stt.js";
+import { speak } from "../voice/tts.js";
 import { applyActivity, scanActivity } from "../sensors/git.js";
 import { isISODate, todayISO } from "../util/dates.js";
 import { ask, confirm } from "./prompt.js";
@@ -132,12 +140,22 @@ program
   .option("--json", "print the brief as JSON")
   .option("--md", "print markdown")
   .option("--speech", "print the spoken version")
-  .action(async (o: { offline?: boolean; json?: boolean; md?: boolean; speech?: boolean }) => {
+  .option("--speak", "read it aloud")
+  .option("--notify", "send a macOS notification and cache the brief for the UI")
+  .action(async (o: { offline?: boolean; json?: boolean; md?: boolean; speech?: boolean; speak?: boolean; notify?: boolean }) => {
     const { brief, source } = await getBrief(config(), Boolean(o.offline));
-    if (o.json) return console.log(JSON.stringify(brief, null, 2));
-    const target: Target = o.md ? "markdown" : o.speech ? "speech" : "terminal";
-    process.stdout.write(renderBrief(brief, target));
-    if (target === "terminal") console.log(dim(`— ${source}`));
+    await saveBrief(brief, source);
+    if (o.notify) {
+      const n = renderBriefNotification(brief);
+      await notify(n.title, n.body);
+    }
+    if (o.json) console.log(JSON.stringify(brief, null, 2));
+    else {
+      const target: Target = o.md ? "markdown" : o.speech ? "speech" : "terminal";
+      process.stdout.write(renderBrief(brief, target));
+      if (target === "terminal") console.log(dim(`— ${source}`));
+    }
+    if (o.speak) await speak(renderBriefSpeech(brief));
   });
 
 // ---------- model intents ----------
@@ -219,11 +237,15 @@ program
   .command("silence-check")
   .description("projects gone quiet: keep, park, or kill?")
   .option("--json", "print as JSON")
-  .action(async (o: { json?: boolean }) => {
+  .option("--notify", "send a macOS notification when something needs a decision")
+  .action(async (o: { json?: boolean; notify?: boolean }) => {
     const cfg = config();
     await syncTouches(cfg);
     const ctx = await buildContext({ config: cfg, intent: "silence-check", today: today() });
     const decisions = buildDecisions(ctx);
+    if (o.notify && decisions.length) {
+      await notify(`${decisions.length} project${decisions.length === 1 ? "" : "s"} gone quiet`, decisions.map((d) => d.project).join(", ") + " — keep, park, or kill?");
+    }
     if (o.json) return console.log(JSON.stringify(decisions, null, 2));
     if (!decisions.length) return console.log("Nothing has gone quiet.");
     for (const d of decisions) {
@@ -239,19 +261,32 @@ program
   .argument("<choice>", "keep | park | kill")
   .description("answer a keep / park / kill question")
   .action(async (project: string, choice: string) => {
-    const cfg = config();
-    const ledger = new Ledger(cfg.selfhubDir);
-    const p = await ledger.find(project);
-    if (!p) fail(`No project matches "${project}".`);
     const c = choice.toLowerCase();
-    if (c === "keep") {
-      await ledger.writeProject(p.name, { status: "active", lastTouched: today() }, `cos: keep "${p.name}"`);
-      console.log(`Keeping ${p.name}. Last touched reset to today; it will resurface if it goes quiet again.`);
-    } else if (c === "park" || c === "kill") {
-      const status = c === "park" ? "parked" : "killed";
-      await ledger.writeProject(p.name, { status, lastTouched: today() }, `cos: ${c} "${p.name}"`);
-      console.log(`${p.name} → ${status}.${c === "park" ? " It comes back for review in a month." : ""}`);
-    } else fail("choice must be keep, park or kill");
+    if (!isChoice(c)) fail("choice must be keep, park or kill");
+    const r = await decide(new Ledger(config().selfhubDir), project, c, today());
+    console.log(r.message);
+  });
+
+program
+  .command("ui")
+  .description("the pill + brief in your browser (same page a menubar shell will host)")
+  .option("--port <n>", "port", process.env.COS_UI_PORT ?? "4747")
+  .option("--no-open", "do not open the browser")
+  .action(async (o: { port: string; open: boolean }) => {
+    const cfg = config();
+    const server = createUiServer({ config: cfg, hasApiKey: hasApiKey(), today: program.opts<{ today?: string }>().today });
+    const port = Number(o.port) || 4747;
+    await new Promise<void>((resolveListen, reject) => {
+      server.once("error", reject);
+      server.listen(port, "127.0.0.1", () => resolveListen());
+    });
+    const url = `http://127.0.0.1:${port}`;
+    console.log(`Chief of Staff UI at ${url}${hasApiKey() ? "" : dim("  (offline mode: brief, decisions and capture work; questions need ANTHROPIC_API_KEY)")}`);
+    console.log(dim("Ctrl+C to stop."));
+    if (o.open && process.platform === "darwin") {
+      const { execFile } = await import("node:child_process");
+      execFile("open", [url]);
+    }
   });
 
 program
@@ -325,6 +360,103 @@ program
   .action(async (intent: Intent, o: { project?: string }) => {
     const ctx = await buildContext({ config: config(), intent, project: o.project, today: today() });
     console.log(renderContext(ctx));
+  });
+
+// ---------- initiative: scheduler and nudges ----------
+
+program
+  .command("nudge")
+  .argument("<what>", "wrap")
+  .description("send a nudge notification (used by the evening job)")
+  .action(async (what: string) => {
+    if (what !== "wrap") fail("nudge: only 'wrap' is defined");
+    const ok = await notify("Wrap up your day", "Two lines: what did you touch, what's next? → cos wrap");
+    console.log(ok ? "Nudged." : "Notifications are not available here.");
+  });
+
+const scheduler = program.command("scheduler").description("make it speak first: launchd jobs for the brief, the silence check and the wrap-up nudge");
+
+scheduler
+  .command("install")
+  .option("--morning <HH:MM>", "brief time", launchd.DEFAULT_SCHEDULE.morning)
+  .option("--evening <HH:MM>", "wrap-up nudge time", launchd.DEFAULT_SCHEDULE.evening)
+  .option("--silence <HH:MM>", "silence check time", launchd.DEFAULT_SCHEDULE.silence)
+  .description("install (or reinstall) the launchd agents")
+  .action(async (o: { morning: string; evening: string; silence: string }) => {
+    if (process.platform !== "darwin") fail("The scheduler uses launchd and only runs on macOS.");
+    const root = resolve(new URL("../..", import.meta.url).pathname);
+    const entry = resolve(root, "dist", "cli", "cos.js");
+    try {
+      await access(entry);
+    } catch {
+      fail(`Build first so launchd has a stable entry point: npm run build   (expected ${entry})`);
+    }
+    const jobs = await launchd.install({ node: process.execPath, entry, cwd: root }, { morning: o.morning, evening: o.evening, silence: o.silence });
+    for (const j of jobs) console.log(`${j.at}  ${launchd.label(j)}  ${dim(j.description)}`);
+    console.log(dim(`logs: ${launchd.LOG_DIR}`));
+  });
+
+scheduler
+  .command("uninstall")
+  .description("remove the launchd agents")
+  .action(async () => {
+    const removed = await launchd.uninstall();
+    console.log(removed.length ? `Removed ${removed.join(", ")}` : "Nothing installed.");
+  });
+
+scheduler
+  .command("status")
+  .description("show what is installed and loaded")
+  .action(async () => {
+    for (const s of await launchd.status()) {
+      console.log(`${s.at}  ${s.label}  ${s.installed ? (s.loaded ? "loaded" : "installed, not loaded") : dim("not installed")}`);
+    }
+  });
+
+// ---------- voice ----------
+
+program
+  .command("say")
+  .argument("[text...]", "text to speak; 'brief' speaks today's brief")
+  .option("--offline", "rule-based brief")
+  .description("read something aloud")
+  .action(async (words: string[], o: { offline?: boolean }) => {
+    const joined = words.join(" ").trim();
+    if (!joined || joined === "brief") {
+      const { brief } = await getBrief(config(), Boolean(o.offline));
+      await saveBrief(brief, "say");
+      return speak(renderBriefSpeech(brief));
+    }
+    await speak(joined);
+  });
+
+program
+  .command("talk")
+  .option("--seconds <n>", "max seconds to listen", "12")
+  .description("speak a question (or type it), hear the answer")
+  .action(async (o: { seconds: string }) => {
+    needKey();
+    const stt = await pickStt();
+    let question: string;
+    if (stt) {
+      console.log(dim(`Listening (${stt.name})… speak now.`));
+      question = await stt.listen(Number(o.seconds) || 12);
+      if (!question) return console.log("Heard nothing.");
+      console.log(`${bold("You:")} ${question}`);
+    } else {
+      console.log(dim("No speech-to-text available (set COS_WHISPER_MODEL with whisper-cli + sox installed). Type instead."));
+      question = await ask("You: ");
+      if (!question) return;
+    }
+    const cfg = config();
+    await syncTouches(cfg);
+    try {
+      const r = await runIntent({ config: cfg, intent: "ask", message: question, today: today() });
+      console.log(`${bold("Chief of staff:")} ${r.text}`);
+      await speak(r.text);
+    } catch (err) {
+      await modelError(err);
+    }
   });
 
 program.parseAsync().catch((err) => fail(err instanceof Error ? err.message : String(err)));
