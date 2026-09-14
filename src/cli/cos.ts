@@ -1,0 +1,330 @@
+#!/usr/bin/env node
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, relative } from "node:path";
+import Anthropic from "@anthropic-ai/sdk";
+import { Command } from "commander";
+import { runIntent, RefusedError } from "../brain/loop.js";
+import type { Brief } from "../brain/schema.js";
+import { loadConfig, loadDotenv, type Config } from "../config.js";
+import { buildContext, renderContext, type Intent } from "../core/context.js";
+import { commitPaths, ensureRepo } from "../core/git.js";
+import { Journal } from "../core/journal.js";
+import { Ledger, PROJECT_STATUSES, normalizeStatus } from "../core/ledger.js";
+import { Notes } from "../core/notes.js";
+import { Reminders } from "../core/reminders.js";
+import { buildBrief, buildDecisions } from "../logic/brief.js";
+import { daysIdle } from "../logic/cadence.js";
+import { bold, dim, renderBrief, type Target } from "../output/render.js";
+import { formatEvent, todayEvents } from "../sensors/calendar.js";
+import { applyActivity, scanActivity } from "../sensors/git.js";
+import { isISODate, todayISO } from "../util/dates.js";
+import { ask, confirm } from "./prompt.js";
+
+loadDotenv();
+const program = new Command();
+program
+  .name("cos")
+  .description("A chief of staff for one person.")
+  .version("0.1.0")
+  .option("--today <date>", "pretend today is this YYYY-MM-DD (for demos)")
+  .option("--selfhub <dir>", "memory repo (overrides COS_SELFHUB)");
+
+function config(): Config {
+  const o = program.opts<{ selfhub?: string }>();
+  if (o.selfhub) process.env.COS_SELFHUB = o.selfhub;
+  return loadConfig();
+}
+function today(): string {
+  const t = program.opts<{ today?: string }>().today;
+  if (t && !isISODate(t)) fail("--today must be YYYY-MM-DD");
+  return t ?? todayISO();
+}
+function fail(msg: string): never {
+  console.error(msg);
+  process.exit(1);
+}
+function hasApiKey(): boolean {
+  return Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+}
+function needKey(): void {
+  if (!hasApiKey()) fail("This command talks to the model. Set ANTHROPIC_API_KEY in .env (see .env.example).");
+}
+async function modelError(err: unknown): Promise<never> {
+  if (err instanceof RefusedError) fail(err.message);
+  if (err instanceof Anthropic.AuthenticationError) fail("The API key was rejected. Check ANTHROPIC_API_KEY.");
+  if (err instanceof Anthropic.RateLimitError) fail("Rate limited. Try again in a moment.");
+  if (err instanceof Anthropic.APIError) fail(`API error ${err.status}: ${err.message}`);
+  throw err;
+}
+
+/** Keep 'last touched' honest before anything reads the ledger. */
+async function syncTouches(cfg: Config, quiet = true): Promise<void> {
+  const touched = await applyActivity(new Ledger(cfg.selfhubDir), await scanActivity(cfg.projectRoots));
+  if (!quiet) {
+    if (!touched.length) console.log("Nothing new in git.");
+    for (const t of touched) console.log(`touched ${t.project} → ${t.date}  (${t.path})`);
+  }
+}
+
+// ---------- init ----------
+
+const LEDGER_TEMPLATE = `# Projects
+
+One block per project. Fields: why · status (active | parked | done | killed) · cadence · next · last touched · deadline · notes · path
+Rules: one next action per project. why is mandatory. last touched is maintained for you from git activity.
+Add a project with: cos capture "starting a project: <name>, it's for <why>"
+`;
+
+program
+  .command("init")
+  .description("scaffold the memory stores in your selfhub (ledger, reminders, notes)")
+  .option("-y, --yes", "do not ask for confirmation")
+  .action(async (o: { yes?: boolean }) => {
+    const cfg = config();
+    const ledger = new Ledger(cfg.selfhubDir);
+    const files: [string, string][] = [
+      [ledger.paths.ledger, LEDGER_TEMPLATE],
+      [ledger.paths.reminders, "# Reminders\n\n"],
+      [ledger.paths.notesInbox, "# Inbox\n\n"],
+    ];
+    const missing: [string, string][] = [];
+    for (const f of files) {
+      try {
+        await readFile(f[0]);
+      } catch {
+        missing.push(f);
+      }
+    }
+    if (!missing.length) return console.log(`Already initialised: ${cfg.selfhubDir}`);
+    console.log(`Will create in ${cfg.selfhubDir}:\n${missing.map((m) => `  ${relative(cfg.selfhubDir, m[0])}`).join("\n")}`);
+    if (!(await confirm("Create these files and commit?", o.yes))) return console.log("Nothing written.");
+    await ensureRepo(cfg.selfhubDir);
+    for (const [file, text] of missing) {
+      await mkdir(dirname(file), { recursive: true });
+      await writeFile(file, text, "utf8");
+    }
+    await mkdir(ledger.paths.journalDir, { recursive: true });
+    const hash = await commitPaths(cfg.selfhubDir, missing.map((m) => relative(cfg.selfhubDir, m[0])), "cos: initialise memory stores");
+    console.log(`Initialised${hash ? ` (commit ${hash})` : ""}. Next: cos capture "starting a project: <name>, it's for <why>"`);
+  });
+
+// ---------- brief ----------
+
+async function getBrief(cfg: Config, offline: boolean): Promise<{ brief: Brief; source: string }> {
+  await syncTouches(cfg);
+  const day = today();
+  if (offline || !hasApiKey()) {
+    const ctx = await buildContext({ config: cfg, intent: "brief", today: day });
+    return { brief: buildBrief(ctx), source: hasApiKey() ? "rules" : "rules (no ANTHROPIC_API_KEY)" };
+  }
+  try {
+    const r = await runIntent({ config: cfg, intent: "brief", today: day });
+    return { brief: r.brief!, source: cfg.model };
+  } catch (err) {
+    return modelError(err);
+  }
+}
+
+program
+  .command("brief")
+  .description("today's brief: 1-3 next actions, schedule, decisions, reminders")
+  .option("--offline", "rule-based brief, no model call")
+  .option("--json", "print the brief as JSON")
+  .option("--md", "print markdown")
+  .option("--speech", "print the spoken version")
+  .action(async (o: { offline?: boolean; json?: boolean; md?: boolean; speech?: boolean }) => {
+    const { brief, source } = await getBrief(config(), Boolean(o.offline));
+    if (o.json) return console.log(JSON.stringify(brief, null, 2));
+    const target: Target = o.md ? "markdown" : o.speech ? "speech" : "terminal";
+    process.stdout.write(renderBrief(brief, target));
+    if (target === "terminal") console.log(dim(`— ${source}`));
+  });
+
+// ---------- model intents ----------
+
+async function runAndPrint(intent: Intent, message?: string, project?: string): Promise<void> {
+  needKey();
+  const cfg = config();
+  await syncTouches(cfg);
+  let streamed = false;
+  try {
+    const r = await runIntent({
+      config: cfg,
+      intent,
+      message,
+      project,
+      today: today(),
+      onText: (t) => {
+        streamed = true;
+        process.stdout.write(t);
+      },
+    });
+    if (!streamed) process.stdout.write(r.text);
+    process.stdout.write("\n");
+    const writes = r.toolCalls.filter((c) => !c.isError && !c.name.startsWith("get_"));
+    if (writes.length) console.log(dim(`${writes.length} change${writes.length === 1 ? "" : "s"} committed to ${cfg.selfhubDir}`));
+  } catch (err) {
+    await modelError(err);
+  }
+}
+
+program
+  .command("ask")
+  .argument("<question...>", "anything: 'what should I do today?'")
+  .description("ask the chief of staff")
+  .action((q: string[]) => runAndPrint("ask", q.join(" ")));
+
+program
+  .command("focus")
+  .argument("<project>", "project name")
+  .description("top 3 highest-leverage moves for one project")
+  .action(async (project: string) => {
+    const p = await new Ledger(config().selfhubDir).find(project);
+    if (!p) fail(`No project matches "${project}". See: cos projects`);
+    await runAndPrint("focus", undefined, p.name);
+  });
+
+program
+  .command("capture")
+  .argument("<sentence...>", "one sentence; it gets filed to the right place")
+  .description("file a sentence: project, reminder, note or journal")
+  .action((s: string[]) => runAndPrint("capture", s.join(" ")));
+
+// ---------- wrap ----------
+
+program
+  .command("wrap")
+  .argument("[text...]", "what you touched today and what's next")
+  .option("--assist", "let the model write the entry from git activity and your notes")
+  .description("end-of-day journal entry")
+  .action(async (text: string[], o: { assist?: boolean }) => {
+    const cfg = config();
+    await syncTouches(cfg);
+    let body = text.join(" ").trim();
+    if (o.assist) return runAndPrint("wrap", body || undefined);
+    if (!body) {
+      if (!process.stdin.isTTY) fail("Give the entry as an argument, or run in a terminal.");
+      const touched = await ask("What did you touch today? ");
+      const next = await ask("What's the next move? ");
+      body = [touched && `Touched: ${touched}`, next && `Next: ${next}`].filter(Boolean).join("\n");
+      if (!body) return console.log("Nothing written.");
+    }
+    const hash = await new Journal(cfg.selfhubDir).append(today(), body);
+    console.log(`Journal ${today()} updated${hash ? ` (commit ${hash})` : ""}.`);
+  });
+
+// ---------- deterministic commands ----------
+
+program
+  .command("silence-check")
+  .description("projects gone quiet: keep, park, or kill?")
+  .option("--json", "print as JSON")
+  .action(async (o: { json?: boolean }) => {
+    const cfg = config();
+    await syncTouches(cfg);
+    const ctx = await buildContext({ config: cfg, intent: "silence-check", today: today() });
+    const decisions = buildDecisions(ctx);
+    if (o.json) return console.log(JSON.stringify(decisions, null, 2));
+    if (!decisions.length) return console.log("Nothing has gone quiet.");
+    for (const d of decisions) {
+      console.log(bold(d.question));
+      if (d.reason) console.log(`  ${d.reason}`);
+      console.log(`  ${dim(`cos decide "${d.project}" ${d.options.join("|")}`)}`);
+    }
+  });
+
+program
+  .command("decide")
+  .argument("<project>")
+  .argument("<choice>", "keep | park | kill")
+  .description("answer a keep / park / kill question")
+  .action(async (project: string, choice: string) => {
+    const cfg = config();
+    const ledger = new Ledger(cfg.selfhubDir);
+    const p = await ledger.find(project);
+    if (!p) fail(`No project matches "${project}".`);
+    const c = choice.toLowerCase();
+    if (c === "keep") {
+      await ledger.writeProject(p.name, { status: "active", lastTouched: today() }, `cos: keep "${p.name}"`);
+      console.log(`Keeping ${p.name}. Last touched reset to today; it will resurface if it goes quiet again.`);
+    } else if (c === "park" || c === "kill") {
+      const status = c === "park" ? "parked" : "killed";
+      await ledger.writeProject(p.name, { status, lastTouched: today() }, `cos: ${c} "${p.name}"`);
+      console.log(`${p.name} → ${status}.${c === "park" ? " It comes back for review in a month." : ""}`);
+    } else fail("choice must be keep, park or kill");
+  });
+
+program
+  .command("touch")
+  .description("update 'last touched' from git activity in your project folders")
+  .action(async () => syncTouches(config(), false));
+
+program
+  .command("remind")
+  .argument("<date>", "YYYY-MM-DD")
+  .argument("<text...>")
+  .description("add a one-off reminder")
+  .action(async (date: string, text: string[]) => {
+    if (!isISODate(date)) fail("date must be YYYY-MM-DD");
+    await new Reminders(config().selfhubDir).add(date, text.join(" "));
+    console.log(`Reminder set for ${date}.`);
+  });
+
+program
+  .command("done")
+  .argument("<match...>", "words from the reminder")
+  .description("complete a reminder")
+  .action(async (m: string[]) => {
+    const hit = await new Reminders(config().selfhubDir).complete(m.join(" "));
+    console.log(hit ? `Done: ${hit.text}` : "No open reminder matches.");
+  });
+
+program
+  .command("note")
+  .argument("<text...>")
+  .description("keep a thought in the inbox")
+  .action(async (t: string[]) => {
+    await new Notes(config().selfhubDir).add(t.join(" "), today());
+    console.log("Noted.");
+  });
+
+program
+  .command("projects")
+  .description("list the ledger")
+  .option("--all", "include done and killed")
+  .action(async (o: { all?: boolean }) => {
+    const projects = await new Ledger(config().selfhubDir).read();
+    const day = today();
+    const rows = projects.filter((p) => o.all || ["active", "parked"].includes(normalizeStatus(p.status)));
+    if (!rows.length) return console.log('No projects yet. Try: cos init, then cos capture "starting a project: ..."');
+    const w = Math.max(...rows.map((p) => p.name.length));
+    for (const p of rows) {
+      const idle = daysIdle(p, day);
+      const status = normalizeStatus(p.status).padEnd(6);
+      const age = idle === null ? "never" : `${String(idle).padStart(3)}d`;
+      console.log(`${p.name.padEnd(w)}  ${status}  ${age.padStart(5)}  ${p.cadence ? `[${p.cadence}] ` : ""}${p.next ?? dim("(no next action)")}`);
+    }
+    console.log(dim(`statuses: ${PROJECT_STATUSES.join(", ")}`));
+  });
+
+program
+  .command("calendar")
+  .description("today's events as the sensor sees them")
+  .action(async () => {
+    const r = await todayEvents(today());
+    console.log(`source: ${r.provider}${r.error ? `  (error: ${r.error})` : ""}`);
+    if (!r.events.length) console.log("no events");
+    for (const e of r.events) console.log(formatEvent(e));
+  });
+
+program
+  .command("context")
+  .argument("[intent]", "brief | ask | focus | capture | wrap", "brief")
+  .option("--project <name>")
+  .description("print the memory block the model would see")
+  .action(async (intent: Intent, o: { project?: string }) => {
+    const ctx = await buildContext({ config: config(), intent, project: o.project, today: today() });
+    console.log(renderContext(ctx));
+  });
+
+program.parseAsync().catch((err) => fail(err instanceof Error ? err.message : String(err)));
