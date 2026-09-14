@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Chief of Staff</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <main class="stage">
+    <section class="panel" id="panel" aria-live="polite">
+      <header class="panel-head">
+        <div>
+          <h1 id="greeting">Loading…</h1>
+          <p class="headline" id="headline"></p>
+        </div>
+        <div class="head-actions">
+          <button class="chip chip-accent" id="btn-speak" title="Read it to me">▶ read aloud</button>
+          <button class="chip" id="btn-refresh" title="Rebuild the brief">↻</button>
+        </div>
+      </header>
+
+      <h2 class="section accent">Today's focus</h2>
+      <ol class="focus" id="focus"></ol>
+
+      <h2 class="section accent">Schedule</h2>
+      <ul class="schedule" id="schedule"></ul>
+
+      <div id="decisions-wrap" hidden>
+        <h2 class="section attention">Needs a decision</h2>
+        <ul class="decisions" id="decisions"></ul>
+      </div>
+
+      <div id="reminders-wrap" hidden>
+        <h2 class="section rose">Reminders</h2>
+        <ul class="reminders" id="reminders"></ul>
+      </div>
+
+      <div id="nudges-wrap" hidden>
+        <h2 class="section accent">Nudges</h2>
+        <ul class="nudges" id="nudges"></ul>
+      </div>
+
+      <footer class="panel-foot" id="source"></footer>
+    </section>
+
+    <section class="answer" id="answer" hidden>
+      <div class="answer-head">
+        <span class="spark">✦</span>
+        <span id="answer-title">Chief of staff</span>
+        <button class="chip chip-accent" id="answer-speak">▶ reading aloud</button>
+      </div>
+      <pre id="answer-text"></pre>
+    </section>
+
+    <form class="pill" id="pill" data-state="idle" autocomplete="off">
+      <button type="button" class="mic" id="mic" title="Talk (or press Fn twice)" aria-label="Talk">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+          <rect x="9" y="3" width="6" height="11" rx="3" fill="currentColor"/>
+          <path d="M5 11a7 7 0 0 0 14 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          <path d="M12 18v3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </button>
+      <div class="wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="dots" aria-hidden="true"><i></i><i></i><i></i></div>
+      <input id="pill-input" type="text" placeholder="Ask anything…" />
+      <span class="status" id="pill-status"></span>
+      <button type="button" class="mode" id="mode" title="Auto decides: capture or ask">auto</button>
+      <kbd>fn fn</kbd>
+    </form>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>
