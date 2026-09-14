@@ -20,12 +20,27 @@ export async function isRepo(dir: string): Promise<boolean> {
   }
 }
 
-/** Create the directory and initialise a git repo there if it is not one already. */
+/** Absolute path of the repo that owns `dir`, or null. */
+export async function topLevel(dir: string): Promise<string | null> {
+  try {
+    return (await git(dir, ["rev-parse", "--show-toplevel"])).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Make `dir` the top level of its own git repo. A memory folder nested inside
+ * some other repo (a sample inside a project, a folder under ~/Documents that
+ * happens to be tracked) gets its own repo so commit-on-write never lands in
+ * the parent's history.
+ */
 export async function ensureRepo(dir: string): Promise<void> {
   await mkdir(dir, { recursive: true });
-  if (!(await isRepo(dir))) {
-    await git(dir, ["init", "-q", "-b", "main"]);
-  }
+  const { realpath } = await import("node:fs/promises");
+  const top = await topLevel(dir);
+  if (top && top === (await realpath(dir))) return;
+  await git(dir, ["init", "-q", "-b", "main"]);
 }
 
 /**
