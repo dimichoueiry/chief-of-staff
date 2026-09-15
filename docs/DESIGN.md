@@ -59,5 +59,12 @@ Esc or a tap anywhere dismisses. The pill floats above every app; you never swit
 - `scheduler/launchd.ts` makes it speak first: the morning brief lands as a
   notification and is cached for the UI before you open anything.
 
-Not built yet, by design: a native menubar shell, a wake word, phone notifications.
-Each has a revisit trigger in `EPIC.md`.
+- `apps/menubar` is the native shell (Swift, AppKit + WebKit). A borderless,
+  non-activating panel anchored bottom-centre hosts the page with `?shell=1`; the page
+  drops its backdrop and reports its height so the window grows upward. The shell owns
+  what a page cannot: the global double-tap Fn monitor, the ⌥Space hotkey, on-device
+  speech recognition (streamed into the pill through `window.cosShell`), the menubar
+  menu, and starting the local server.
+
+Not built yet, by design: a wake word and phone notifications. Each has a revisit
+trigger in `EPIC.md`.

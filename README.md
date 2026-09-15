@@ -57,6 +57,39 @@ Install the morning trigger so it speaks first:
 cos scheduler install        # launchd: 07:00 brief, 18:00 wrap, daily silence check
 ```
 
+## The desktop app
+
+A native menubar app hosts the pill. It runs entirely on your Mac.
+
+```bash
+npm run build
+npm run cos -- menubar install   # builds ~/Applications/Chief of Staff.app, opens it, starts at login
+```
+
+- **Double-tap Fn** anywhere: the pill appears and listens. Double-tap again when you're done talking.
+- **⌥Space** anywhere: the pill appears for typing.
+- **Esc** or clicking elsewhere dismisses it.
+- The ✦ menubar icon opens today's brief, focus on a project, read aloud, and rebuild.
+
+First run asks for three permissions: Accessibility (to see the Fn key), Microphone and
+Speech Recognition (to listen, on-device). If double-tapping Fn also opens the emoji picker
+or dictation, set System Settings › Keyboard › "Press 🌐 key to" to "Do Nothing".
+Rebuilding the app changes its signature, so macOS may ask for these again.
+
+`cos menubar open` relaunches it; `cos menubar uninstall` removes the app and the login item.
+Logs live in `~/.cos/logs`.
+
+## Keys
+
+One key, and only for the model features:
+
+| Key | Needed for | Without it |
+|---|---|---|
+| `ANTHROPIC_API_KEY` | `ask`, `focus`, model-written brief, smart capture | the rule-based brief, decisions, reminders and simple capture still work |
+
+Everything else is local and keyless: calendar through macOS EventKit, speech out through
+`say`, speech in through Apple's on-device recogniser, memory in git.
+
 ## Configuration
 
 Everything is an environment variable (see `.env.example`):
@@ -105,4 +138,5 @@ examples/     a sample selfhub for demos and tests
 | Scheduler: launchd agents (07:00 brief, 12:00 silence check, 18:00 wrap nudge) | done; `npm run build && cos scheduler install` |
 | UI: the pill + brief panel served locally, browser speech recognition | done; `cos ui` |
 | Voice: `say` for speech, whisper.cpp for listening, typed fallback | done; `cos say brief`, `cos talk` |
-| Native menubar shell, Fn double-tap system-wide, wake word | not yet: the web page is built to be hosted by a Tauri or Swift shell |
+| Native menubar shell: floating pill, double-tap Fn, ⌥Space, native on-device listening | done; `cos menubar install` |
+| Wake word, phone notifications, autonomy epic | not yet |
