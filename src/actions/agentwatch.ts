@@ -34,8 +34,11 @@ function cut(s: string, max: number): string {
   return s.length <= max ? s : `${s.slice(0, max - 1).trimEnd()}…`;
 }
 
-/** The notification (title, body) and the line the conversation gets, for one finish. */
-export function describeFinish(f: AgentFinished): { title: string; body: string; line: string } {
+/** How a finish is said out loud: one short sentence, since they may not be looking. */
+const SPOKEN: Record<string, string> = { done: "is done", failed: "failed", "needs you": "needs you", idle: "is idle", stopped: "stopped" };
+
+/** The notification (title, body), what is said out loud, and the line the conversation gets, for one finish. */
+export function describeFinish(f: AgentFinished): { title: string; body: string; speech: string; line: string } {
   const name = f.event.title || "An agent";
   const where = tilde(f.event.cwd) || f.event.project || "";
   const engine = f.event.engine ?? "claude";
@@ -43,6 +46,7 @@ export function describeFinish(f: AgentFinished): { title: string; body: string;
   return {
     title: `${cut(name, 60)}: ${f.word}`,
     body: `${engine}${where ? ` in ${where}` : ""}.${said ? ` ${cut(said, 140)}` : ""}`,
+    speech: `${cut(name, 60)} ${SPOKEN[f.word] ?? f.word}.`,
     line: `Agent "${name}" (${engine}${where ? ` in ${where}` : ""}, id ${f.event.sessionId.slice(0, 8)}) finished: ${f.word}.${said ? ` It last said: ${said}` : ""}`,
   };
 }

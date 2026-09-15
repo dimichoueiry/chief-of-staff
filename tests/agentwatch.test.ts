@@ -102,14 +102,16 @@ describe("describing a finish", () => {
     expect(describeFinish(f)).toEqual({
       title: "Refactor auth: done",
       body: "claude in ~/Desktop/drawcal. Moved the auth code into auth/ and all 42 tests pass.",
+      speech: "Refactor auth is done.",
       line: 'Agent "Refactor auth" (claude in ~/Desktop/drawcal, id aaaa1111) finished: done. It last said: Moved the auth code into auth/ and all 42 tests pass.',
     });
     const long = describeFinish({ event: event({ to: "blocked", engine: "codex", cwd: "", project: "mlg" }), word: "needs you", lastSaid: "x".repeat(400) });
     expect(long.title).toBe("Refactor auth: needs you");
+    expect(long.speech).toBe("Refactor auth needs you.");
     expect(long.body).toBe(`codex in mlg. ${"x".repeat(139)}…`);
     expect(long.line.endsWith(`It last said: ${"x".repeat(299)}…`)).toBe(true);
     expect(describeFinish({ event: event({ to: "stopped", title: "csv tool", cwd: "", project: "" }), word: "stopped" })).toEqual({
-      title: "csv tool: stopped", body: "claude.", line: 'Agent "csv tool" (claude, id aaaa1111) finished: stopped.',
+      title: "csv tool: stopped", body: "claude.", speech: "csv tool stopped.", line: 'Agent "csv tool" (claude, id aaaa1111) finished: stopped.',
     });
   });
 
@@ -242,9 +244,14 @@ describe("Agent Grid's event stream", () => {
       const home = await mkdtemp(join(tmpdir(), "cos-home-"));
       process.env.COS_HOME = home;
       const told: string[] = [];
+      const spoken: string[] = [];
       const server = createUiServer({
         config: loadConfig({ COS_SELFHUB: selfhub, COS_PROJECT_ROOTS: "/nonexistent" }),
         today: "2026-09-15", offline: true, allowSpeech: false, backgroundSummaries: false,
+        speaker: async (text, o) => {
+          spoken.push(`${text} (cues: ${Object.entries(o.cues ?? {}).filter(([, on]) => on).map(([c]) => c).join(",") || "none"})`);
+          return { engine: "say", pieces: 1, stopped: false, cued: [] };
+        },
         agentGrid: grid(),
         agentWatch: {
           retryMs: 20,
@@ -263,6 +270,7 @@ describe("Agent Grid's event stream", () => {
         fake.emit(event({ id: "run1-1" })); // the same event again: nothing
         await tick(50);
         expect(told).toEqual(["Refactor auth: done — claude in ~/Desktop/drawcal. All done, tests pass."]);
+        expect(spoken).toEqual(["Refactor auth is done. (cues: none)"]);
         const c = (await (await fetch(`http://127.0.0.1:${port}/api/conversation`)).json()) as { turns: { role: string; text: string }[] };
         expect(c.turns.map((t) => [t.role, t.text])).toEqual([
           ["event", 'Agent "Refactor auth" (claude in ~/Desktop/drawcal, id aaaa1111) finished: done. It last said: All done, tests pass.'],

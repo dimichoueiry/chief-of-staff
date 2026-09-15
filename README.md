@@ -321,7 +321,8 @@ Agent Grid mints a new key every time it starts; it now writes it to `~/.agentgr
 **When an agent finishes, you hear about it.** While the app runs, it listens to Agent Grid's
 event stream (`GET /api/events`, no polling); an agent that was working and has settled (done,
 failed, needs you, idle, stopped) gets a macOS notification naming it, how it ended and its last
-words, and the same line goes into the conversation so the assistant knows on your next message
+words, a short spoken line ("Refactor auth is done", since you may not be looking), and the same
+line goes into the conversation so the assistant knows on your next message
 ("did the auth refactor finish?"). Each finish is told once: if the stream drops (Agent Grid
 restarted, a quiet spell) it reconnects with the last event id it saw and Agent Grid replays what
 was missed, nothing twice. Off when `cos access agents off`. `cos agents --follow` prints the

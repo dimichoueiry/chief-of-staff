@@ -728,6 +728,9 @@ export function createUiServer(o: UiOptions): Server {
           pillQueue = job.catch(() => undefined);
           await job;
           await (w.notifier ?? notify)(said.title, said.body);
+          // Said out loud too: they may not be looking at the screen. A reply being spoken is cut short.
+          const speaker = o.speaker ?? (o.allowSpeech === false ? null : speak);
+          if (speaker) await speaker(said.speech, { cues: { start: false, turn: false } }).catch((err) => Log(`agent finished: couldn't say it: ${(err as Error).message}`));
         },
       });
     });
