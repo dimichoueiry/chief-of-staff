@@ -10,9 +10,43 @@ struct ShellConfig: Codable {
   static var file: URL { home.appendingPathComponent("menubar.json") }
   static var logs: URL { home.appendingPathComponent("logs") }
 
+  /// A packaged app (`cos menubar package`) carries its own Node and runtime and runs those, on any Mac, with no
+  /// menubar.json. A developer build has neither and reads the file `cos menubar build` wrote.
   static func load() -> ShellConfig? {
-    guard let data = try? Data(contentsOf: file) else { return nil }
-    return try? JSONDecoder().decode(ShellConfig.self, from: data)
+    let saved = (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode(ShellConfig.self, from: $0) }
+    if let bundled = bundled(port: saved?.port ?? 4747) { return bundled }
+    return saved
+  }
+
+  static func bundled(port: Int) -> ShellConfig? {
+    let contents = Bundle.main.bundleURL.appendingPathComponent("Contents")
+    let helpers = contents.appendingPathComponent("Helpers")
+    let node = helpers.appendingPathComponent("node")
+    let runtime = contents.appendingPathComponent("Resources/runtime")
+    let fm = FileManager.default
+    guard fm.isExecutableFile(atPath: node.path), fm.fileExists(atPath: runtime.appendingPathComponent("dist/cli/cos.js").path) else { return nil }
+    seedHelpers(from: helpers)
+    return ShellConfig(node: node.path, repo: runtime.path, port: port)
+  }
+
+  /// The prebuilt calendar, screen and player helpers go where the server looks for them (~/.cos/bin), so this Mac
+  /// never needs swiftc. A helper already there is replaced only when the bundled one is newer.
+  static func seedHelpers(from dir: URL) {
+    let fm = FileManager.default
+    guard let names = try? fm.contentsOfDirectory(atPath: dir.path) else { return }
+    let bin = home.appendingPathComponent("bin")
+    try? fm.createDirectory(at: bin, withIntermediateDirectories: true)
+    for name in names where name.hasPrefix("cos-") {
+      let source = dir.appendingPathComponent(name)
+      let target = bin.appendingPathComponent(name)
+      if let have = modified(target), let bundled = modified(source), have >= bundled { continue }
+      try? fm.removeItem(at: target)
+      if (try? fm.copyItem(at: source, to: target)) != nil { Log.write("helper \(name) installed from the app") }
+    }
+  }
+
+  private static func modified(_ url: URL) -> Date? {
+    (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
   }
 
   var baseURL: URL { URL(string: "http://127.0.0.1:\(port)")! }
