@@ -65,6 +65,7 @@ A native menubar app hosts the pill. It runs entirely on your Mac.
 ```bash
 npm run build
 npm run cos -- menubar install   # builds ~/Applications/Chief of Staff.app, opens it, starts at login
+npm run package                  # a self-contained .app + .dmg to hand to someone: docs/DISTRIBUTION.md
 ```
 
 - **Double-tap Control** anywhere: the pill appears and listens. (Fn is left alone for Wispr Flow. Control used
