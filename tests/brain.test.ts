@@ -190,7 +190,7 @@ describe("runIntent (scripted provider)", () => {
     };
     const r = await runIntent({
       config: cfg(), intent: "ask", message: "which post should I read first?", today: TODAY, calendarProvider: noneProvider, llm,
-      actions: { screen, access: () => ({ terminal: "ask", agents: "ask", links: "auto", screen: "auto" }) },
+      actions: { screen, access: () => ({ terminal: "ask", agents: "ask", links: "auto", screen: "auto", browser: "ask" }) },
     });
     const second = requests[1].messages;
     expect(second.map((m) => m.role)).toEqual(["user", "assistant", "tool", "user"]);
@@ -201,7 +201,7 @@ describe("runIntent (scripted provider)", () => {
     const off = scripted([reply({ stop: "tool_use", toolCalls: [{ id: "s2", name: "look_at_screen", input: {} }] }), reply({ text: "ok" })]);
     const blocked = await runIntent({
       config: cfg(), intent: "ask", message: "look", today: TODAY, calendarProvider: noneProvider, llm: off.llm,
-      actions: { screen, access: () => ({ terminal: "ask", agents: "ask", links: "auto", screen: "off" }) },
+      actions: { screen, access: () => ({ terminal: "ask", agents: "ask", links: "auto", screen: "off", browser: "ask" }) },
     });
     expect(blocked.toolCalls[0]).toMatchObject({ isError: true, result: expect.stringMatching(/Looking at the screen is off/) });
   });

@@ -37,6 +37,7 @@ import { addDays, todayISO } from "../util/dates.js";
 import { reloadHomeEnv } from "../util/env.js";
 import type { Access } from "../actions/access.js";
 import type { AgentGrid } from "../actions/agentgrid.js";
+import type { AssistantBrowser } from "../actions/browser.js";
 import { macOpen, openOrQueue, type Runner } from "../actions/open.js";
 import { confirmView, isPending, take, type ConfirmView } from "../actions/pending.js";
 import { performPending } from "../actions/perform.js";
@@ -78,6 +79,8 @@ export interface UiOptions {
   /** How commands run, where Agent Grid is, what's allowed, and where favorites come from (tests). */
   shell?: Shell;
   agentGrid?: AgentGrid;
+  /** The assistant's own browser (tests). */
+  browser?: AssistantBrowser;
   access?: () => Access;
   bookmarks?: () => Promise<BookmarkRead>;
   screen?: ScreenCapturer;
@@ -101,6 +104,12 @@ const DOING: Record<string, string> = {
   get_agent_output: "Reading what the agent did…",
   look_at_screen: "Looking at your screen…",
   message_agent: "Messaging the agent…",
+  browser_open: "Opening it in my browser…",
+  browser_read: "Reading the page…",
+  browser_click: "Clicking…",
+  browser_type: "Typing…",
+  browser_select: "Choosing…",
+  browser_back: "Going back…",
   open: "Opening…",
   add_shortcut: "Saving a shortcut…",
   add_reminder: "Setting a reminder…",
@@ -261,7 +270,7 @@ export function createUiServer(o: UiOptions): Server {
       return "this model";
     }
   };
-  const deps = { run: openRunner, shell: o.shell, agentGrid: o.agentGrid };
+  const deps = { run: openRunner, shell: o.shell, agentGrid: o.agentGrid, browser: o.browser };
   let pillQueue: Promise<unknown> = Promise.resolve();
   let summarizing = false;
 
@@ -390,7 +399,7 @@ export function createUiServer(o: UiOptions): Server {
         recall: renderRecall(conversations, { today: today(), excludeId: convo.id }),
         images: shot ? [{ mediaType: shot.mediaType, data: shot.data }] : undefined,
         actions: {
-          run: openRunner, slate: boards, conversations, shell: o.shell, agentGrid: o.agentGrid, access: o.access,
+          run: openRunner, slate: boards, conversations, shell: o.shell, agentGrid: o.agentGrid, access: o.access, browser: o.browser,
           awaiting: awaiting(convo), recentlyDone: recentlyDone(convo), bookmarks, screen,
         },
         onTool: (name) => emit({ type: "status", text: DOING[name] ?? "Updating your memory…" }),

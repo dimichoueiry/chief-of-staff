@@ -180,7 +180,7 @@ describe("ui server (offline)", () => {
     expect(opened.at(-1)!.at(-1)).toBe("https://campuswire.com/c/G53D5855E/feed");
     opened.splice(1);
 
-    saveAccess({ links: "ask", screen: "auto" }); // COS_HOME is a temp folder in these tests
+    saveAccess({ links: "ask", screen: "auto", browser: "ask" }); // COS_HOME is a temp folder in these tests
     const link = await (await post({ text: "open https://example.com/page" })).json();
     expect(link.kind).toBe("confirm");
     expect(opened).toHaveLength(1);
@@ -332,7 +332,7 @@ describe("ui server (scripted model)", () => {
       backgroundSummaries: false,
       openRunner: async () => {},
       slateLoader: async () => ({ boards: [], live: true }),
-      access: () => ({ terminal: "ask", agents: "ask", links: "auto", screen: "auto" }),
+      access: () => ({ terminal: "ask", agents: "ask", links: "auto", screen: "auto", browser: "ask" }),
       screen: {
         capture: async () => {
           if (!screenAllowed) throw new ScreenPermissionError();
