@@ -626,6 +626,15 @@ export function createUiServer(o: UiOptions): Server {
         if (!c) return json(res, 404, { error: "That chat isn't saved anymore." });
         return json(res, 200, { id: c.id, title: displayTitle(c), named: Boolean(c.title) });
       }
+      case "POST /api/conversation/delete": {
+        // It leaves the list, memory and search. Deleting the chat in progress starts a new one in its place.
+        const b = await body(req);
+        const id = String(b.id ?? "");
+        const wasCurrent = conversations.current().id === id;
+        if (!conversations.delete(id)) return json(res, 404, { error: "That chat isn't saved anymore." });
+        const c = wasCurrent ? conversations.startNew() : conversations.current();
+        return json(res, 200, { ok: true, deleted: id, current: shownConversation(c) });
+      }
       case "POST /api/actions/confirm": {
         const b = await body(req);
         const p = take(String(b.id ?? ""));

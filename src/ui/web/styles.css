@@ -118,9 +118,17 @@ html[data-chat="hidden"] .answer { display: none; }
 .chat-meta { font: 11px var(--mono); color: var(--muted); }
 .chat-row.current .chat-meta { color: var(--accent); }
 .chat-preview { font-size: 12.5px; color: #aab0bb; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.chat-rename { flex: none; margin: 8px 8px 0 0; background: none; border: 0; color: var(--muted); font-size: 13px; cursor: pointer; opacity: 0; border-radius: 6px; padding: 2px 6px; }
-.chat-row:hover .chat-rename, .chat-rename:focus { opacity: 1; }
-.chat-rename:hover { color: var(--text); background: #343947; }
+.chat-action { flex: none; margin-top: 8px; background: none; border: 0; color: var(--muted); font-size: 13px; line-height: 1; cursor: pointer; opacity: 0; border-radius: 6px; padding: 3px 6px; display: inline-flex; align-items: center; }
+.chat-action:last-child { margin-right: 8px; }
+.chat-row:hover .chat-action, .chat-action:focus-visible { opacity: 1; }
+.chat-action:hover { color: var(--text); background: #343947; }
+.chat-delete:hover { color: #e08c7f; background: #2e2020; }
+.chat-row.confirming, .chat-row.confirming:hover { background: #2a2020; }
+.chat-confirm { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 7px 8px 7px 10px; }
+.chat-confirm-text { flex: 1; min-width: 0; }
+.chat-confirm .chat-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-confirm-buttons { flex: none; display: flex; gap: 6px; }
+.chat-confirm .chip:focus-visible, .chat-action:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
 .chat-row .chat-name-input { margin: 6px 8px; }
 .chats-note { color: var(--muted); font-size: 12.5px; padding: 6px 10px; }
 .pill .show-chat { position: relative; font: 12px var(--mono); color: var(--accent); background: #231f18; border: 1px solid #5a4630; border-radius: 999px; padding: 4px 9px; cursor: pointer; white-space: nowrap; }

@@ -453,11 +453,77 @@ function renderChats() {
       el("div", { class: "chat-meta" }, meta),
       c.preview ? el("div", { class: "chat-preview" }, c.preview) : "");
     const row = el("li", { class: `chat-row${c.current ? " current" : ""}` }, open);
-    row.append(el("button", { class: "chat-rename", type: "button", title: "Rename", "aria-label": `Rename ${c.title}`, onclick: () => renameChat(row, c) }, "✎"));
+    row.append(
+      el("button", { class: "chat-action chat-rename", type: "button", title: "Rename", "aria-label": `Rename ${c.title}`, onclick: () => renameChat(row, c) }, "✎"),
+      el("button", { class: "chat-action chat-delete", type: "button", title: "Delete", "aria-label": `Delete ${c.title}`, onclick: () => confirmDelete(row, c) }, trashIcon()),
+    );
     list.append(row);
   }
   const unreadable = $("chats").dataset.unreadable;
   if (Number(unreadable)) list.append(el("li", { class: "chats-note" }, `${unreadable} saved chat${unreadable === "1" ? "" : "s"} couldn't be read.`));
+}
+
+/** A small outline bin, drawn in the text color so it dims and lights like the pencil beside it. */
+function trashIcon() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("width", "13");
+  svg.setAttribute("height", "13");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M2.5 4h11M6.5 4V2.5h3V4M4 4l.7 9.5h6.6L12 4M6.8 6.5v4.5M9.2 6.5v4.5");
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-width", "1.3");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  svg.append(path);
+  return svg;
+}
+
+/** Ask in the row itself before deleting: Keep is focused, and Esc keeps it. */
+function confirmDelete(row, c) {
+  const back = () => {
+    renderChats();
+    $("chats-filter").focus();
+  };
+  const keep = el("button", { class: "chip", type: "button", onclick: back }, "Keep");
+  const remove = el("button", { class: "chip chip-kill", type: "button", onclick: () => deleteChat(c, [keep, remove]) }, "Delete");
+  const box = el("div", { class: "chat-confirm", role: "alertdialog", "aria-label": `Delete ${c.title}?` },
+    el("div", { class: "chat-confirm-text" },
+      el("div", { class: "chat-name" }, `Delete “${c.title}”?`),
+      el("div", { class: "chat-meta" }, "It leaves your chats and what the assistant remembers.")),
+    el("div", { class: "chat-confirm-buttons" }, keep, remove));
+  box.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    e.stopPropagation(); // Esc keeps the chat, it doesn't close the list or dismiss the pill
+    back();
+  });
+  row.classList.add("confirming");
+  row.replaceChildren(box);
+  keep.focus();
+}
+
+async function deleteChat(c, buttons) {
+  if (busy) return flash("Wait for the reply to finish, then delete.");
+  for (const b of buttons) b.disabled = true;
+  let r;
+  try {
+    r = await post("/api/conversation/delete", { id: c.id });
+  } catch {
+    r = { error: "Couldn't reach the app, so nothing was deleted. Try again." };
+  }
+  const gone = !r.error || r.error === "That chat isn't saved anymore.";
+  if (!gone) {
+    renderChats();
+    return flash(r.error);
+  }
+  chats = chats.filter((x) => x.id !== c.id);
+  // Deleting the chat in progress leaves a new, empty one behind the list.
+  if (r.current) r.current.id === conversationId ? showChatInfo(r.current) : renderThread(r.current);
+  renderChats();
+  $("chats-filter").focus();
+  flash(r.error ? "That chat was already deleted." : `Deleted “${c.title}”`);
 }
 
 function renameChat(row, c) {

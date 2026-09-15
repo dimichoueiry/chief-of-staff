@@ -7,7 +7,7 @@
  * Long-term memory stays in selfhub.
  */
 import { randomBytes } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { todayISO } from "../util/dates.js";
 import { cosHome } from "../util/home.js";
@@ -81,6 +81,9 @@ export function conversationsDir(): string {
   return join(cosHome(), "conversations");
 }
 
+/** Deleted chats are kept aside this long, so a mistake can be undone, then removed for good. */
+export const KEEP_DELETED_DAYS = 30;
+
 export class Conversations {
   constructor(
     readonly dir: string = conversationsDir(),
@@ -109,6 +112,46 @@ export class Conversations {
   private choose(id: string): void {
     mkdirSync(this.dir, { recursive: true });
     writeFileSync(this.pointerFile, JSON.stringify({ id, at: this.now().toISOString() }), { mode: 0o600 });
+  }
+
+  /** Where deleted chats wait out KEEP_DELETED_DAYS: a folder, so they're never listed, remembered or searched. */
+  private get deletedDir(): string {
+    return join(this.dir, "deleted");
+  }
+
+  /**
+   * Delete a saved chat. It leaves the list, the assistant's memory and search at once. The file is
+   * moved aside rather than erased, and removed for good after KEEP_DELETED_DAYS. If it was the chat
+   * picked last, nothing is picked. False when there's no such chat (or the id isn't valid).
+   */
+  delete(id: string): boolean {
+    if (!this.get(id)) return false;
+    mkdirSync(this.deletedDir, { recursive: true, mode: 0o700 });
+    const aside = join(this.deletedDir, `${id}.json`);
+    renameSync(this.file(id), aside);
+    const now = this.now();
+    utimesSync(aside, now, now); // when it was deleted, for the clear-out
+    if (this.chosen()?.id === id) rmSync(this.pointerFile, { force: true });
+    this.clearDeleted();
+    return true;
+  }
+
+  /** Whether a chat was deleted (and is still set aside). */
+  isDeleted(id: string): boolean {
+    return /^[\w-]+$/.test(id) && existsSync(join(this.deletedDir, `${id}.json`));
+  }
+
+  /** Remove chats deleted more than KEEP_DELETED_DAYS ago. */
+  private clearDeleted(): void {
+    const cutoff = this.now().getTime() - KEEP_DELETED_DAYS * 86_400_000;
+    try {
+      for (const name of readdirSync(this.deletedDir)) {
+        const file = join(this.deletedDir, name);
+        if (statSync(file).mtimeMs < cutoff) rmSync(file, { force: true });
+      }
+    } catch {
+      /* nothing set aside */
+    }
   }
 
   /** One saved conversation by id, or null (unknown, damaged, or not a valid id). */
@@ -192,6 +235,8 @@ export class Conversations {
   }
 
   private save(c: Conversation): void {
+    // A reply or a summary finishing after the chat was deleted must not bring it back.
+    if (this.isDeleted(c.id) && !existsSync(this.file(c.id))) return;
     mkdirSync(this.dir, { recursive: true });
     const tmp = `${this.file(c.id)}.tmp`;
     writeFileSync(tmp, JSON.stringify(c, null, 2), { mode: 0o600 });

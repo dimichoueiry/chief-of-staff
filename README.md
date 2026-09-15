@@ -117,6 +117,9 @@ filed, and what it opened (even the instant "open …" requests that never touch
   different chats for different things. Click one to pick it up where it left off; ✎ renames it. Typing
   filters by name, and Enter searches everything said in every chat. When the card is closed, **▴ chats**
   on the pill opens the list.
+- The bin beside ✎ deletes a chat. It asks in the row first (Keep is the default, Esc keeps it). A deleted chat
+  leaves the list, the assistant's memory and search at once; deleting the one you're in starts a new chat.
+  The file is set aside in `~/.cos/conversations/deleted` for 30 days (move it back to restore it), then removed.
 - Chats name themselves: the model gives each a 2–5 word name from its first three messages ("Module 6
   review"). A name you give is never replaced.
 - By voice: "new chat", "show my chats", "go back to the module 6 chat", "switch to the chat about

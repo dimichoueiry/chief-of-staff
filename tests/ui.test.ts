@@ -255,6 +255,25 @@ describe("ui server (offline)", () => {
     expect((await none.json()).error).toBe('No chat matches "kubernetes".');
     expect((await post({ id: "../../secrets" }, "/api/conversation/open")).status).toBe(404);
     expect((await post({ id: "nope", title: "x" }, "/api/conversation/rename")).status).toBe(404);
+
+    // Deleting a chat you're not in leaves you where you are; it's gone from the list and from asking by voice.
+    const gone = await (await post({ id: fresh.id }, "/api/conversation/delete")).json();
+    expect(gone).toMatchObject({ ok: true, deleted: fresh.id, current: { id: first.conversation, title: "Errands" } });
+    const afterOne = await (await fetch(`${base}/api/conversations`)).json();
+    expect(afterOne.chats.map((c: { title: string }) => c.title)).toEqual(["Errands"]);
+    expect((await post({ query: "the dean one" }, "/api/conversation/open")).status).toBe(404);
+
+    // Deleting the chat you're in puts a new, empty one in its place.
+    const inPlace = await (await post({ id: first.conversation }, "/api/conversation/delete")).json();
+    expect(inPlace.current.id).not.toBe(first.conversation);
+    expect(inPlace.current).toMatchObject({ title: null, turns: [], others: 0 });
+    expect((await (await fetch(`${base}/api/conversation`)).json()).id).toBe(inPlace.current.id);
+    expect((await (await fetch(`${base}/api/conversations`)).json()).chats).toEqual([]);
+
+    const twice = await post({ id: first.conversation }, "/api/conversation/delete");
+    expect([twice.status, (await twice.json()).error]).toEqual([404, "That chat isn't saved anymore."]);
+    expect((await post({ id: "../../secrets" }, "/api/conversation/delete")).status).toBe(404);
+    expect((await post({}, "/api/conversation/delete")).status).toBe(404);
   });
 
   it("passes the pill's cue requests to the voice and reports which cues played", async () => {

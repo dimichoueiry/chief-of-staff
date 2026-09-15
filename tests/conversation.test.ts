@@ -2,7 +2,8 @@ import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Conversations, displayTitle, historyMessages, messageCount, visibleTurns, type Conversation } from "../src/brain/conversation.js";
+import { existsSync } from "node:fs";
+import { Conversations, KEEP_DELETED_DAYS, displayTitle, historyMessages, messageCount, visibleTurns, type Conversation } from "../src/brain/conversation.js";
 
 describe("conversation store", () => {
   let dir: string;
@@ -95,6 +96,43 @@ describe("conversation store", () => {
     expect(displayTitle(store().get(c.id)!)).toBe("Recurring error");
     clock = new Date("2026-09-14T10:01:00Z");
     expect(displayTitle(store().startNew())).toBe("New chat");
+  });
+
+  it("deletes a chat safely: gone from the list at once, set aside, never brought back by a late reply, cleared after 30 days", async () => {
+    const s = store();
+    const keep = s.current();
+    s.append(keep, { role: "user", text: "plan the week" }, { role: "assistant", text: "Here's the plan." });
+    clock = new Date("2026-09-14T10:05:00Z");
+    const doomed = s.startNew();
+    s.append(doomed, { role: "user", text: "my bank password hint" }, { role: "assistant", text: "Noted." });
+    expect(s.current().id).toBe(doomed.id);
+
+    expect(s.delete(doomed.id)).toBe(true);
+    expect(s.get(doomed.id)).toBeNull();
+    expect(s.list().conversations.map((c) => c.id)).toEqual([keep.id]);
+    expect(s.count()).toBe(1);
+    expect(s.isDeleted(doomed.id)).toBe(true);
+    expect(existsSync(join(dir, "deleted", `${doomed.id}.json`))).toBe(true); // set aside, not erased
+    expect(s.current().id).toBe(keep.id); // the picked chat is gone, so the last active one carries on
+
+    // A reply that was still being written, a rename or a summary landing afterwards doesn't bring it back.
+    s.append(doomed, { role: "assistant", text: "late reply" });
+    s.update(doomed);
+    expect(s.rename(doomed.id, "x")).toBeNull();
+    expect(s.get(doomed.id)).toBeNull();
+    expect((await readdir(dir)).filter((n) => n.endsWith(".json"))).toEqual([`${keep.id}.json`]);
+
+    expect(s.delete(doomed.id)).toBe(false); // already deleted
+    expect(s.delete("../conversations/x")).toBe(false);
+    expect(s.delete("no-such-chat")).toBe(false);
+
+    // Deleting something else a month later clears out what was deleted before.
+    clock = new Date(clock.getTime() + (KEEP_DELETED_DAYS + 1) * 86_400_000);
+    const another = s.startNew();
+    s.append(another, { role: "user", text: "hello" });
+    expect(s.delete(another.id)).toBe(true);
+    expect(s.isDeleted(doomed.id)).toBe(false);
+    expect(s.isDeleted(another.id)).toBe(true);
   });
 
   it("forgets the old summary when an ended chat is picked up again", () => {
