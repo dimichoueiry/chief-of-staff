@@ -71,6 +71,17 @@ describe("what a command may do", () => {
     }
   });
 
+  it("never clicks or types on the screen by position, and points to the browser instead", () => {
+    for (const c of [
+      `osascript -e 'tell application "Microsoft Edge" to activate' -e 'tell application "System Events" to click at {450,390}'`,
+      `osascript -e 'tell application "System Events" to keystroke "hello"'`,
+      `osascript -e 'tell application "System Events" to key code 36'`,
+      "cliclick c:100,200",
+    ]) expect([c, level(c)]).toEqual([c, "blocked"]);
+    expect(classifyCommand(`osascript -e 'tell application "System Events" to click at {1,2}'`).reason).toContain("browser_open, then browser_click");
+    expect(level(`osascript -e 'display notification "done"'`)).toBe("risky");
+  });
+
   it("decides by mode: safe runs, changes ask (or run in auto), risky always asks, blocked never runs", () => {
     expect(["safe", "change", "risky", "blocked"].map((l) => decide(l as never, "ask"))).toEqual(["run", "confirm", "confirm", "refuse"]);
     expect(["safe", "change", "risky", "blocked"].map((l) => decide(l as never, "auto"))).toEqual(["run", "run", "confirm", "refuse"]);

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Access } from "../src/actions/access.js";
 import {
-  AssistantBrowser, allowSite, baseDomain, consequentialClick, findElement, forgetSite, formatPage, parsePage, readSites, siteAllowed, siteOf, type BrowserDriver,
+  AssistantBrowser, allowSite, baseDomain, consequentialClick, findElement, forgetSite, formatPage, parsePage, readSites, siteAllowed, siteOf, type BrowserDriver, type Page,
 } from "../src/actions/browser.js";
 import { confirmView } from "../src/actions/pending.js";
 import { ToolRuntime } from "../src/brain/tools.js";
@@ -87,10 +87,31 @@ describe("reading pages", () => {
 
     const cut = formatPage(page, { maxChars: 100 });
     expect(cut).toContain("(Cut: showing 2 of 8 lines. Use browser_read with find to look for something further down.)");
-    expect(formatPage(page, { find: "due send" })).toContain('2 of the page\'s 8 lines mention "due send":');
+    expect(formatPage(page, { find: "due send" })).toContain('2 of the page\'s 8 lines mention "due send", closest matches first:');
     expect(formatPage(page, { find: "kubernetes" })).toContain("None of the page's 8 lines mention \"kubernetes\"");
     expect(formatPage({ url: "about:blank", title: "", outline: "" })).toContain("no readable content yet");
   });
+
+  it("finds a title said word by word: closest match first, common words ignored, curly quotes matched", () => {
+    const filler = Array.from({ length: 300 }, (_, i) => `- link "The ${i} things you can do with the AI of the future" [ref=e${i + 10}]`);
+    const results: Page = {
+      url: "https://www.youtube.com/results?search_query=x",
+      title: "YouTube",
+      outline: [
+        '- link "Shopify CEO: Most Businesses Are Using AI Wrong" [ref=e2]',
+        ...filler,
+        '- link "Shopify’s AI Can Tell the Founder He’s Wrong | Tobi Lütke 1 hour, 4 minutes" [ref=e500]',
+      ].join("\n"),
+    };
+    const found = formatPage(results, { find: "Shopify AI can tell the founder he's wrong" }).split("\n");
+    expect(found[3]).toMatch(/closest matches first:$/);
+    expect(found[4]).toContain("[ref=e500]");
+    expect(found[5]).toContain("[ref=e2]");
+    expect(formatPage(results, { find: "the" })).toContain("lines mention \"the\""); // only common words: use them
+    const withAddress: Page = { ...results, outline: `- link "Home" [ref=e1]:\n  - /url: /results?search_query=shopify+ai+founder+tell+wrong\n${results.outline}` };
+    expect(formatPage(withAddress, { find: "Shopify AI can tell the founder he's wrong" })).not.toContain("/url:");
+  });
+
 });
 
 /** A browser with a few pages: records what it was asked to do. */
@@ -166,7 +187,7 @@ describe("the browser as tools", () => {
 
   it("asks once before a new site, then reads, clicks around and withholds pages that leave the list", async () => {
     const fake = fakeBrowser();
-    const browser = new AssistantBrowser(fake.driver, join(home, "browser.json"));
+    const browser = new AssistantBrowser(fake.driver, join(home, "browser.json"), { stepMs: 0, maxMs: 0 });
     const first = runtime(browser);
     const asked = await first.execute("browser_open", { url: "https://canvas.illinois.edu/" });
     expect(asked.result).toMatch(/^Not opened: canvas\.illinois\.edu isn't on your browser's site list yet/);
@@ -183,7 +204,7 @@ describe("the browser as tools", () => {
 
     const assignments = await next.execute("browser_click", { ref: "e2", element: "Assignments link" });
     expect(assignments.result).toContain("- listitem [ref=e1]: MP3 due Friday");
-    expect((await next.execute("browser_read", { find: "quiz" })).result).toContain("1 of the page's 2 lines mention \"quiz\":\n- listitem [ref=e2]: Quiz 4 due Monday");
+    expect((await next.execute("browser_read", { find: "quiz" })).result).toContain("1 of the page's 2 lines mention \"quiz\", closest matches first:\n- listitem [ref=e2]: Quiz 4 due Monday");
     expect((await next.execute("browser_back", {})).result).toContain("Page: Dashboard");
 
     const away = await next.execute("browser_click", { ref: "e3", element: "Help link" });
@@ -195,7 +216,7 @@ describe("the browser as tools", () => {
 
   it("waits for an OK before sending, never types passwords, and never acts on a page that changed", async () => {
     const fake = fakeBrowser();
-    const browser = new AssistantBrowser(fake.driver, join(home, "browser.json"));
+    const browser = new AssistantBrowser(fake.driver, join(home, "browser.json"), { stepMs: 0, maxMs: 0 });
     browser.allow("canvas.illinois.edu");
     const tools = runtime(browser);
     await tools.execute("browser_open", { url: "https://canvas.illinois.edu/" });
@@ -240,5 +261,51 @@ describe("the browser as tools", () => {
     expect(auto.done).toEqual([{ kind: "browser-act", detail: "Type into “Message to TA” on https://canvas.illinois.edu/ and press Enter:\nhi" }]);
 
     expect((await runtime(browser, "off").execute("browser_read", {})).result).toMatch(/turned off/);
+  });
+});
+
+describe("reading a page that fills in after it loads", () => {
+  const snapshot = (lines: number) =>
+    `### Page\n- Page URL: https://www.youtube.com/results?search_query=x\n- Page Title: x - YouTube\n### Snapshot\n\`\`\`yaml\n- banner [ref=e1]\n${Array.from({ length: lines }, (_, i) => `- link "Video ${i} about Shopify and AI" [ref=e${i + 2}]`).join("\n")}\n\`\`\``;
+
+  it("waits while the page is still growing, then reads it whole", async () => {
+    const home = await mkdtemp(join(tmpdir(), "cos-browser-"));
+    const sizes = [0, 0, 40, 60, 60]; // an empty frame, then results arrive
+    const reads: number[] = [];
+    const driver = {
+      async call(tool: string) {
+        if (tool !== "browser_snapshot") return "";
+        const lines = sizes[Math.min(reads.length, sizes.length - 1)];
+        reads.push(lines);
+        return snapshot(lines);
+      },
+      async close() {},
+    };
+    const browser = new AssistantBrowser(driver, join(home, "browser.json"), { stepMs: 5, maxMs: 1000 });
+    browser.allow("youtube.com");
+    const page = await browser.open("https://www.youtube.com/results?search_query=x");
+    expect(page).toContain('link "Video 59 about Shopify and AI" [ref=e61]');
+    expect(reads).toEqual([0, 0, 40, 60, 60]); // kept waiting through the empty frame, stopped once it stopped growing
+
+    // A page that's complete at once is read one extra time, and never waits past the limit.
+    reads.length = 0;
+    sizes.splice(0, sizes.length, 30);
+    await browser.open("https://www.youtube.com/");
+    expect(reads).toEqual([30, 30]);
+    let lines = 0;
+    const endless = { async call(tool: string) { return tool === "browser_snapshot" ? snapshot((lines += 20)) : ""; }, async close() {} };
+    const feed = new AssistantBrowser(endless, join(home, "browser.json"), { stepMs: 5, maxMs: 50 });
+    feed.allow("youtube.com");
+    const started = Date.now();
+    await feed.open("https://www.youtube.com/");
+    expect(Date.now() - started).toBeLessThan(500);
+
+    // A small page that stays small waits no longer than thinMs.
+    sizes.splice(0, sizes.length, 0);
+    reads.length = 0;
+    const small = new AssistantBrowser(driver, join(home, "browser.json"), { stepMs: 5, maxMs: 1000, thinMs: 20 });
+    await small.open("https://www.youtube.com/");
+    expect(reads.length).toBeLessThanOrEqual(6);
+    await rm(home, { recursive: true, force: true });
   });
 });

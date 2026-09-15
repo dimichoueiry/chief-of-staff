@@ -124,7 +124,8 @@ export const TOOLS: Record<string, ToolSpec> = {
     description:
       "Open something on the user's Mac: Slate or a Slate board by name (\"slate\", \"slate board UI/UX\"), one of their shortcuts by name, " +
       "a project's folder (optionally in an app such as Cursor or Terminal), an installed app, one of their browser favorites by name " +
-      "(\"Campuswire from my UIUC favorites\", opened in the browser it's saved in), a web search (\"search for …\"), or a website (opens straight away).",
+      "(\"Campuswire from my UIUC favorites\", opened in the browser it's saved in), a web search (\"search for …\"), or a website (opens straight away). " +
+      "Only for showing: to search a site, pick a result, click, play or read what a page says, use browser_open.",
     parameters: {
       type: "object",
       properties: {
@@ -257,8 +258,9 @@ export const TOOLS: Record<string, ToolSpec> = {
   browser_open: {
     name: "browser_open",
     description:
-      "Open a web page in your own browser (a separate Chrome window with its own sign-ins, not theirs) to read it or do something on it for them: " +
-      "what's due on a course site, an order's status, something behind a sign-in, a form to fill in. Returns the page as an outline: its text, links, buttons and fields, each with a [ref=…]. " +
+      "Open a web page in your own browser (a separate Chrome window with its own sign-ins, not theirs; they may call it Playwright) to read it or do something on it for them: " +
+      "search a site and open a result (a YouTube video, an article), what's due on a course site, an order's status, a form to fill in. " +
+      "Returns the page as an outline once it has loaded: its text, links, buttons and fields, each with a [ref=…] for browser_click and browser_type. " +
       "A site not on your browser's list waits for their OK once. To just show them a page in their own browser, use open instead.",
     parameters: { type: "object", properties: { url: s("The full address, e.g. https://canvas.illinois.edu/courses") }, required: ["url"] },
   },

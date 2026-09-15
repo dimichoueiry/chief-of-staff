@@ -215,6 +215,10 @@ const BLOCKED: [RegExp, string][] = [
   [/:\s*\(\s*\)\s*\{[^}]*:\s*\|\s*:/, "it's a fork bomb"],
   [/(^|[\s;&|])(shutdown|reboot|halt)(\s|$)/, "it shuts down or restarts the Mac"],
   [/\b(csrutil|nvram|spctl\s+--master-disable)\b/, "it changes the Mac's security settings"],
+  [
+    /\bSystem Events\b[\s\S]*\b(click\s+at|keystroke|key\s+code)\b|(^|[\s;&|])cliclick(\s|$)/i,
+    "it clicks or types on their screen by position, which misses and lands on whatever is in front. For a web page, use your own browser: browser_open, then browser_click",
+  ],
 ];
 
 const RISKY: [RegExp, string][] = [

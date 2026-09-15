@@ -159,6 +159,21 @@ export function parsePage(text: string): Page {
 export const PAGE_CHARS = 24_000;
 
 /** A page for the model: what and where it is, then its outline, cut loudly if long, or only the lines that match `find`. */
+/** Words too common to tell lines apart: on a results page "the" is on every line. */
+const COMMON_WORDS = new Set(["a", "an", "and", "are", "as", "at", "be", "by", "can", "for", "from", "he", "her", "his", "i", "in", "is", "it", "its", "me", "my", "of", "on", "or", "our", "she", "that", "the", "their", "them", "they", "this", "to", "was", "we", "what", "with", "you", "your"]);
+
+/** Lower case, with curly quotes made straight, so "he's" finds YouTube's "He’s". */
+function plain(text: string): string {
+  return text.toLowerCase().replace(/[’‘]/g, "'").replace(/[“”]/g, '"');
+}
+
+/** The words to look for: the telling ones, or all of them if none are. */
+function findWords(find: string): string[] {
+  const words = [...new Set(plain(find).split(/[^\p{L}\p{N}'$#@.+-]+/u).map((w) => w.replace(/^'+|'+$/g, "")).filter(Boolean))];
+  const telling = words.filter((w) => !COMMON_WORDS.has(w.replace(/'s$/, "")));
+  return telling.length ? telling : words;
+}
+
 export function formatPage(page: Page, o: { find?: string; maxChars?: number } = {}): string {
   const max = o.maxChars ?? PAGE_CHARS;
   const lines = page.outline.split("\n").filter((l) => l.trim());
@@ -169,11 +184,17 @@ export function formatPage(page: Page, o: { find?: string; maxChars?: number } =
   ];
   let body: string[];
   let note = "";
-  const words = (o.find ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+  const words = findWords(o.find ?? "");
   if (words.length) {
-    body = lines.filter((l) => words.some((w) => l.toLowerCase().includes(w)));
+    // Lines with more of the words come first (a title searched for word by word lands on top), then page order.
+    body = lines
+      // A link's address line repeats the search in its query string, so only the link's own line counts.
+      .map((l, i) => ({ l, i, hits: /^\s*- \/url:/.test(l) ? 0 : words.filter((w) => plain(l).includes(w)).length }))
+      .filter((m) => m.hits > 0)
+      .sort((a, b) => b.hits - a.hits || a.i - b.i)
+      .map((m) => m.l);
     note = body.length
-      ? `${body.length} of the page's ${lines.length} lines mention "${o.find}":`
+      ? `${body.length} of the page's ${lines.length} lines mention "${o.find}", closest matches first:`
       : `None of the page's ${lines.length} lines mention "${o.find}". Read it without find to see everything.`;
   } else body = lines;
 
@@ -275,6 +296,19 @@ export function mcpDriver(o: { channel?: string; headless?: boolean; home?: stri
   return driver;
 }
 
+/**
+ * How long to wait for a page to finish filling in: read again every stepMs while it grows, for up to
+ * maxMs, and while it's still nearly empty (an app's bare frame), for up to thinMs.
+ */
+export interface Settle {
+  stepMs: number;
+  maxMs: number;
+  thinMs?: number;
+}
+
+/** A page outline this short is a frame still loading, not a page. */
+const THIN_PAGE = 1200;
+
 /** The browser as the tools use it: pages checked against the site list, actions only on elements from the last read. */
 export class AssistantBrowser {
   private last: Page | null = null;
@@ -282,6 +316,7 @@ export class AssistantBrowser {
   constructor(
     private readonly driver: BrowserDriver = mcpDriver(),
     readonly sitesFile: string = browserFile(),
+    private readonly settle: Settle = { stepMs: 500, maxMs: 3000, thinMs: 2000 },
   ) {}
 
   sites(): string[] {
@@ -313,10 +348,29 @@ export class AssistantBrowser {
     return formatPage(page, { find });
   }
 
+  /**
+   * The page once it has filled in. Many sites (YouTube, most web apps) load an empty frame and add
+   * their content a moment later: read at once, a YouTube search showed only its header.
+   */
+  private async settled(): Promise<string> {
+    let text = await this.read();
+    if (this.settle.stepMs <= 0) return text;
+    for (let waited = this.settle.stepMs; waited <= this.settle.maxMs; waited += this.settle.stepMs) {
+      await new Promise((r) => setTimeout(r, this.settle.stepMs));
+      const again = await this.read();
+      // Still arriving in bulk; thumbnails and counters trickling in don't hold it up.
+      const growing = again.length > text.length * 1.1 + 200;
+      text = again;
+      if (growing || (text.length < THIN_PAGE && waited < (this.settle.thinMs ?? this.settle.maxMs))) continue;
+      break;
+    }
+    return text;
+  }
+
   async open(url: string): Promise<string> {
     if (!this.allowed(url)) throw new Error(`${siteOf(url) ?? url} isn't on the browser's site list`);
     await this.driver.call("browser_navigate", { url });
-    return this.read();
+    return this.settled();
   }
 
   /** An element from the page as last read, or why it can't be used. */
@@ -360,23 +414,23 @@ export class AssistantBrowser {
 
   async click(el: Element): Promise<string> {
     await this.driver.call("browser_click", { element: el.name || el.role, target: el.ref });
-    return this.read();
+    return this.settled();
   }
 
   async type(el: Element, text: string, submit: boolean): Promise<string> {
     if (await this.isPassword(el)) throw new Error("Refused: that's a password field. They sign in themselves, in the assistant's browser window.");
     await this.driver.call("browser_type", { element: el.name || el.role, target: el.ref, text, submit });
-    return this.read();
+    return this.settled();
   }
 
   async select(el: Element, values: string[]): Promise<string> {
     await this.driver.call("browser_select_option", { element: el.name || el.role, target: el.ref, values });
-    return this.read();
+    return this.settled();
   }
 
   async back(): Promise<string> {
     await this.driver.call("browser_navigate_back", {});
-    return this.read();
+    return this.settled();
   }
 
   close(): Promise<void> {
