@@ -31,7 +31,7 @@ import * as launchd from "../scheduler/launchd.js";
 import { eventsInRange, formatAgenda } from "../sensors/calendar.js";
 import { pickStt } from "../voice/stt.js";
 import {
-  DEFAULT_VOICE, OPENAI_VOICES, activeTts, isKnownVoice, readVoiceSettings, saveVoiceSettings, speak, voiceSettingsFile,
+  DEFAULT_VOICE, LISTEN_PAUSE, OPENAI_VOICES, activeTts, isKnownVoice, readVoiceSettings, saveVoiceSettings, speak, voiceSettingsFile,
   type TtsProvider,
 } from "../voice/tts.js";
 import { applyActivity, scanActivity } from "../sensors/git.js";
@@ -833,6 +833,7 @@ const voiceCmd = program
     if (engine === "say" && s.provider === "auto") console.log(dim("  Add OPENAI_API_KEY to .env for the natural voice."));
     console.log(`  provider  ${s.provider}${s.provider === "auto" ? dim("  (OpenAI when a key is set, otherwise the Mac voice)") : ""}`);
     console.log(`  speed     ${s.speed}`);
+    console.log(`  pause     ${s.listenPause}s of quiet ends what you say ${dim("(cos voice pause <seconds>)")}`);
     console.log(`  style     ${dim(s.instructions)}`);
     console.log("");
     console.log(`${bold("Voices")}  ${OPENAI_VOICES.map((v) => (v === s.voice ? `[${v}]` : v)).join("  ")}`);
@@ -878,6 +879,17 @@ voiceCmd
     if (!(speed >= 0.25 && speed <= 4)) fail("speed must be between 0.25 and 4");
     saveVoiceSettings({ speed });
     console.log(`Speed → ${speed}`);
+  });
+
+voiceCmd
+  .command("pause")
+  .argument("<seconds>", `${LISTEN_PAUSE.min} to ${LISTEN_PAUSE.max}; default ${DEFAULT_VOICE.listenPause}`)
+  .description("how long a pause ends what you're saying when you talk to the menubar app")
+  .action((n: string) => {
+    const seconds = Number(n);
+    if (!(seconds >= LISTEN_PAUSE.min && seconds <= LISTEN_PAUSE.max)) fail(`pause must be between ${LISTEN_PAUSE.min} and ${LISTEN_PAUSE.max} seconds`);
+    saveVoiceSettings({ listenPause: seconds });
+    console.log(`Pause → ${seconds}s. Applies the next time you talk; it waits 1.5s longer when you trail off ("and…", "um").`);
   });
 
 voiceCmd

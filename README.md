@@ -67,8 +67,11 @@ npm run build
 npm run cos -- menubar install   # builds ~/Applications/Chief of Staff.app, opens it, starts at login
 ```
 
-- **Double-tap Control** anywhere: the pill appears and listens. A short pause ends what you're saying
-  (or double-tap again). (Fn is left alone for Wispr Flow. Control used in a shortcut, like ⌃C, never triggers it.)
+- **Double-tap Control** anywhere: the pill appears and listens. (Fn is left alone for Wispr Flow. Control used
+  in a shortcut, like ⌃C, never triggers it.) What you say ends after 2.5 seconds of real quiet: the microphone
+  level decides, not the recogniser, so thinking pauses mid-sentence don't cut you off. It waits 1.5 s longer
+  when you trail off ("and…", "so um"), and a talk can run two minutes. Double-tap again to send right away.
+  `cos voice pause 3.5` changes the pause (1 to 10 seconds).
 - **Hands-free follow-ups.** After a spoken reply the mic opens again on its own ("Your turn…"), so you
   can just keep talking. It closes after 8 quiet seconds, on Esc, or when you say "thanks" or "that's all"
   (which also hides the pill). Double-tapping Control while it talks cuts it off and listens. Replies to

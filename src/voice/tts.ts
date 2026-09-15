@@ -34,7 +34,11 @@ export interface VoiceSettings {
   speed: number;
   /** macOS voice for the fallback, e.g. "Samantha". Empty uses the system voice. */
   sayVoice: string;
+  /** Seconds of quiet that end what you're saying in the menubar app (1 to 10). */
+  listenPause: number;
 }
+
+export const LISTEN_PAUSE = { min: 1, max: 10 } as const;
 
 export const DEFAULT_VOICE: VoiceSettings = {
   provider: "auto",
@@ -45,6 +49,7 @@ export const DEFAULT_VOICE: VoiceSettings = {
     "Natural conversational pace, clear and friendly, confident but never theatrical. Pause briefly between items.",
   speed: 1,
   sayVoice: "",
+  listenPause: 2.5,
 };
 
 export function voiceSettingsFile(): string {
@@ -69,6 +74,7 @@ export function readVoiceSettings(env: NodeJS.ProcessEnv = process.env, file: st
   const merged = { ...DEFAULT_VOICE, ...fromEnv, ...saved };
   if (!["auto", "openai", "say"].includes(merged.provider)) merged.provider = "auto";
   merged.speed = Math.min(4, Math.max(0.25, Number(merged.speed) || 1));
+  merged.listenPause = Math.min(LISTEN_PAUSE.max, Math.max(LISTEN_PAUSE.min, Number(merged.listenPause) || DEFAULT_VOICE.listenPause));
   return merged;
 }
 
