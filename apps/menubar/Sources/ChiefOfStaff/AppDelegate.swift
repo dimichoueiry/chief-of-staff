@@ -8,7 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private let speech = SpeechListener()
   private let focusMenu = NSMenu()
   private let modelMenu = NSMenu()
-  private var fnItem: NSMenuItem!
+  private var talkKeyItem: NSMenuItem!
   private var view = "pill"
   private var pageState = "idle"
   private var ready = false
@@ -30,7 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       if self.pageState == "idle" && !self.speech.listening { self.panel.hide() }
     }
 
-    hotkeys.onFnDoubleTap = { [weak self] in self?.summon(listen: true) }
+    hotkeys.onDoubleTap = { [weak self] in self?.summon(listen: true) }
     hotkeys.onShortcut = { [weak self] in self?.summon(listen: false) }
     hotkeys.start()
     let defaults = UserDefaults.standard
@@ -72,7 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let menu = NSMenu()
     menu.delegate = self
     add(menu, "Today's brief", #selector(showBrief), key: "b")
-    add(menu, "Talk   (fn fn)", #selector(talk))
+    add(menu, "Talk   (⌃ ⌃)", #selector(talk))
     add(menu, "Ask or capture…   (⌥Space)", #selector(type))
     let focus = NSMenuItem(title: "Focus a project", action: nil, keyEquivalent: "")
     focus.submenu = focusMenu
@@ -84,7 +84,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     menu.addItem(.separator())
     add(menu, "Rebuild the brief", #selector(rebuildBrief))
     add(menu, "Open in browser", #selector(openInBrowser))
-    fnItem = add(menu, "Enable double-tap Fn…", #selector(enableFn))
+    talkKeyItem = add(menu, "Enable double-tap Control…", #selector(enableTalkKey))
     menu.addItem(.separator())
     add(menu, "Quit Chief of Staff", #selector(quit), key: "q")
     statusItem.menu = menu
@@ -101,8 +101,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   func menuWillOpen(_ menu: NSMenu) {
     guard menu !== focusMenu, menu !== modelMenu else { return }
     let trusted = HotkeyMonitor.accessibilityTrusted(prompt: false)
-    fnItem.title = trusted ? "Double-tap Fn: on" : "Enable double-tap Fn (Accessibility)…"
-    fnItem.state = trusted ? .on : .off
+    talkKeyItem.title = trusted ? "Double-tap Control to talk: on" : "Enable double-tap Control (Accessibility)…"
+    talkKeyItem.state = trusted ? .on : .off
     refreshFocusMenu()
     refreshModelMenu()
   }
@@ -226,9 +226,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   @objc private func openInBrowser() { NSWorkspace.shared.open(server.config.baseURL) }
 
-  @objc private func enableFn() {
+  @objc private func enableTalkKey() {
     if HotkeyMonitor.accessibilityTrusted(prompt: true) {
-      alert("Double-tap Fn is on.", "If Fn also opens the emoji picker or dictation, set System Settings › Keyboard › “Press 🌐 key to” to “Do Nothing”.")
+      alert("Double-tap Control is on.", "Tap Control twice, quickly, from any app to talk. Control used in a shortcut (⌃C, ⌃-click) never triggers it.")
     }
   }
 

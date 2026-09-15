@@ -2,7 +2,7 @@
 
 The assistant is voice-first and lives on the desktop. One entry point in every
 state: a pill at the bottom-centre of the screen, summoned from any app by
-double-tapping Fn. Everything else (the brief, capture, decisions) opens from it.
+double-tapping Control (Fn belongs to Wispr Flow). Everything else (the brief, capture, decisions) opens from it.
 
 ## Visual language
 
@@ -25,8 +25,8 @@ Dark glass surfaces, warm amber accent, off-white text. Tokens used by every sur
 
 | State | Look | Trigger |
 |---|---|---|
-| Idle | quiet dark pill, muted mic, "Ask anything…", `fn fn` chip | default |
-| Listening | amber glow, live waveform, words appear as you speak, red dot | double-tap Fn |
+| Idle | quiet dark pill, muted mic, "Ask anything…", `⌃ ⌃` chip | default |
+| Listening | amber glow, live waveform, words appear as you speak, red dot | double-tap Control |
 | Thinking | soft shimmer, three dots | after you stop speaking |
 | Speaking | green waveform, "Reading it to you…", stop control | answer ready |
 
@@ -39,7 +39,7 @@ Esc or a tap anywhere dismisses. The pill floats above every app; you never swit
    and a size chip. *Schedule*: today's events with free blocks highlighted and the
    planned item written into them. *Needs a decision*: stale projects with
    Keep / Park / Kill buttons. Reminders. A follow-up input at the bottom.
-2. **Voice flow**. Double-tap Fn → speak → the transcript appears above the pill →
+2. **Voice flow**. Double-tap Control → speak → the transcript appears above the pill →
    the answer is spoken and shown as a card with actions ("Add to today").
 3. **Capture**. Type into the pill instead of talking; the Scribe files the
    sentence and confirms where it went.
@@ -62,7 +62,7 @@ Esc or a tap anywhere dismisses. The pill floats above every app; you never swit
 - `apps/menubar` is the native shell (Swift, AppKit + WebKit). A borderless,
   non-activating panel anchored bottom-centre hosts the page with `?shell=1`; the page
   drops its backdrop and reports its height so the window grows upward. The shell owns
-  what a page cannot: the global double-tap Fn monitor, the ⌥Space hotkey, on-device
+  what a page cannot: the global double-tap Control monitor, the ⌥Space hotkey, on-device
   speech recognition (streamed into the pill through `window.cosShell`), the menubar
   menu, and starting the local server.
 

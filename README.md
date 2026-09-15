@@ -66,15 +66,15 @@ npm run build
 npm run cos -- menubar install   # builds ~/Applications/Chief of Staff.app, opens it, starts at login
 ```
 
-- **Double-tap Fn** anywhere: the pill appears and listens. Double-tap again when you're done talking.
+- **Double-tap Control** anywhere: the pill appears and listens. Double-tap again when you're done talking.
+  (Fn is left alone for Wispr Flow. Control used in a shortcut, like ⌃C, never triggers it.)
 - **⌥Space** anywhere: the pill appears for typing.
 - **Esc** or clicking elsewhere dismisses it.
 - The ✦ menubar icon opens today's brief, focus on a project, the model picker, read aloud, and rebuild.
   If macOS hides the icon beside the notch, press ⌥Space and click the ✦ inside the pill: same menu.
 
-First run asks for three permissions: Accessibility (to see the Fn key), Microphone and
-Speech Recognition (to listen, on-device). If double-tapping Fn also opens the emoji picker
-or dictation, set System Settings › Keyboard › "Press 🌐 key to" to "Do Nothing".
+First run asks for three permissions: Accessibility (to see the Control key from any app),
+Microphone and Speech Recognition (to listen, on-device).
 Rebuilding the app changes its signature, so macOS may ask for these again.
 
 `cos menubar open` relaunches it; `cos menubar uninstall` removes the app and the login item.
@@ -169,5 +169,5 @@ examples/     a sample selfhub for demos and tests
 | Scheduler: launchd agents (07:00 brief, 12:00 silence check, 18:00 wrap nudge) | done; `npm run build && cos scheduler install` |
 | UI: the pill + brief panel served locally, browser speech recognition | done; `cos ui` |
 | Voice: `say` for speech, whisper.cpp for listening, typed fallback | done; `cos say brief`, `cos talk` |
-| Native menubar shell: floating pill, double-tap Fn, ⌥Space, native on-device listening | done; `cos menubar install` |
+| Native menubar shell: floating pill, double-tap Control, ⌥Space, native on-device listening | done; `cos menubar install` |
 | Wake word, phone notifications, autonomy epic | not yet |

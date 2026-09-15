@@ -2,17 +2,23 @@ import AppKit
 import Carbon.HIToolbox
 
 /// Two ways to summon the pill from any app:
-/// - double-tap Fn → listen. Watching keys globally needs Accessibility permission.
+/// - double-tap Control (left or right) → listen. Watching keys globally needs Accessibility permission.
 /// - ⌥Space → type. Registered through Carbon; works with no permission at all.
+///
+/// A "tap" is Control pressed and released on its own, quickly. Control used as a
+/// modifier (⌃C, ⌃-click, ⌃⇧…) never counts, so normal shortcuts don't summon the pill.
 final class HotkeyMonitor {
-  var onFnDoubleTap: () -> Void = {}
+  var onDoubleTap: () -> Void = {}
   var onShortcut: () -> Void = {}
 
-  /// Max gap between the two presses, and max length of a press that still counts as a tap.
+  /// Max gap between the two taps, and max length of a press that still counts as a tap.
   var doubleTapWindow: TimeInterval = 0.4
-  var maxTapLength: TimeInterval = 0.35
+  var maxTapLength: TimeInterval = 0.3
 
-  private var fnDown = false
+  private static let controlKeys: Set<UInt16> = [UInt16(kVK_Control), UInt16(kVK_RightControl)]
+
+  private var down = false
+  private var usedAsModifier = false
   private var pressedAt: TimeInterval = 0
   private var lastTapAt: TimeInterval = 0
   private var monitors: [Any] = []
@@ -35,7 +41,7 @@ final class HotkeyMonitor {
         guard HotkeyMonitor.accessibilityTrusted(prompt: false) else { return }
         timer.invalidate()
         self?.installKeyMonitors()
-        Log.write("accessibility granted; fn monitor reinstalled")
+        Log.write("accessibility granted; control monitor reinstalled")
       }
     }
   }
@@ -50,10 +56,18 @@ final class HotkeyMonitor {
   private func installKeyMonitors() {
     removeKeyMonitors()
     let flags: (NSEvent) -> Void = { [weak self] e in self?.handleFlags(e) }
-    let keys: (NSEvent) -> Void = { [weak self] _ in self?.lastTapAt = 0 } // fn+arrow etc. is not a tap
+    // Any key or click while Control is down makes it a modifier, not a tap; any key between taps cancels.
+    let other: (NSEvent) -> Void = { [weak self] _ in
+      guard let self else { return }
+      if self.down { self.usedAsModifier = true }
+      self.lastTapAt = 0
+    }
+    let mice: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown, .otherMouseDown]
     if let m = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: flags) { monitors.append(m) }
-    if let m = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: keys) { monitors.append(m) }
+    if let m = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown], handler: other) { monitors.append(m) }
+    if let m = NSEvent.addGlobalMonitorForEvents(matching: mice, handler: other) { monitors.append(m) }
     if let m = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged, handler: { e in flags(e); return e }) { monitors.append(m) }
+    if let m = NSEvent.addLocalMonitorForEvents(matching: [.keyDown], handler: { e in other(e); return e }) { monitors.append(m) }
   }
 
   private func removeKeyMonitors() {
@@ -62,21 +76,31 @@ final class HotkeyMonitor {
   }
 
   private func handleFlags(_ e: NSEvent) {
-    guard e.keyCode == UInt16(kVK_Function) else {
-      lastTapAt = 0 // another modifier in between breaks the double tap
+    let now = ProcessInfo.processInfo.systemUptime
+    guard HotkeyMonitor.controlKeys.contains(e.keyCode) else {
+      // Another modifier (⇧ ⌥ ⌘ fn) changed: a combo, not a tap.
+      if down { usedAsModifier = true }
+      lastTapAt = 0
       return
     }
-    let now = ProcessInfo.processInfo.systemUptime
-    let down = e.modifierFlags.contains(.function)
-    if down && !fnDown {
-      fnDown = true
+    let isDown = e.modifierFlags.contains(.control)
+    // Only Control may be held: ⌃ with ⌘/⌥/⇧ already down is a combo.
+    let others: NSEvent.ModifierFlags = [.command, .option, .shift, .function]
+    if isDown && !down {
+      down = true
       pressedAt = now
-    } else if !down && fnDown {
-      fnDown = false
-      guard now - pressedAt <= maxTapLength else { lastTapAt = 0; return } // a hold, not a tap
+      usedAsModifier = !e.modifierFlags.intersection(others).isEmpty
+    } else if !isDown && down {
+      down = false
+      let wasTap = !usedAsModifier && now - pressedAt <= maxTapLength
+      usedAsModifier = false
+      guard wasTap else {
+        lastTapAt = 0
+        return
+      }
       if lastTapAt > 0 && now - lastTapAt <= doubleTapWindow {
         lastTapAt = 0
-        onFnDoubleTap()
+        onDoubleTap()
       } else {
         lastTapAt = now
       }

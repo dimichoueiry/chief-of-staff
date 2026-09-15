@@ -553,7 +553,7 @@ models
 
 // ---------- the native shell ----------
 
-const menubar = program.command("menubar").description("the native macOS shell: menubar icon, floating pill, double-tap Fn, native listening");
+const menubar = program.command("menubar").description("the native macOS shell: menubar icon, floating pill, double-tap Control, native listening");
 
 menubar
   .command("build")
@@ -576,7 +576,7 @@ menubar
   .action(async () => {
     try {
       await openMenubar();
-      console.log("Chief of Staff is in your menubar. Double-tap Fn (or ⌥Space) anywhere to talk to it.");
+      console.log("Chief of Staff is running. Double-tap Control anywhere to talk, or ⌥Space to type.");
     } catch (err) {
       fail((err as Error).message);
     }
