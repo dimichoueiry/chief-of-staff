@@ -43,7 +43,7 @@ import { deployRuntime } from "./deploy.js";
 import { openOrQueue, performOpen } from "../actions/open.js";
 import { ACCESS_MODES, accessFile, isAccessMode, readAccess, saveAccess, type AccessMode } from "../actions/access.js";
 import { allowSite, baseDomain, browserHome, forgetSite, readSites } from "../actions/browser.js";
-import { AgentGrid, formatSessions } from "../actions/agentgrid.js";
+import { AgentGrid, formatSessions, tilde } from "../actions/agentgrid.js";
 import { findFolders, formatFolderSearch } from "../actions/folders.js";
 import { Shortcuts } from "../actions/shortcuts.js";
 import { findBoards, slateBaseUrl, slateBoardUrl, slateBoards } from "../actions/slate.js";
@@ -304,9 +304,17 @@ for (const what of ["terminal", "agents", "links", "screen", "browser"] as const
 program
   .command("agents")
   .description("your Agent Grid sessions, as the assistant sees them")
-  .action(async () => {
+  .option("--follow", "stay on and print status changes as Agent Grid reports them")
+  .action(async (o: { follow?: boolean }) => {
     try {
-      console.log(formatSessions(await new AgentGrid().sessions()));
+      const grid = new AgentGrid();
+      console.log(formatSessions(await grid.sessions()));
+      if (!o.follow) return;
+      console.log(dim("Following status changes (Ctrl+C to stop)…"));
+      for await (const e of grid.events()) {
+        console.log(`${e.at ?? ""}  ${e.title || e.sessionId.slice(0, 8)} (${e.engine ?? "claude"} in ${tilde(e.cwd) || e.project || "?"}): ${e.from} → ${e.to}${e.finished ? "  finished" : ""}`);
+      }
+      console.log("Agent Grid closed the stream.");
     } catch (err) {
       fail((err as Error).message);
     }

@@ -29,6 +29,66 @@ export interface AgentSession {
 
 export class AgentGridError extends Error {}
 
+/** One status change from Agent Grid's event stream (GET /api/events). */
+export interface AgentEvent {
+  id: string;
+  type: string;
+  sessionId: string;
+  title: string;
+  engine?: string;
+  cwd?: string;
+  project?: string;
+  from: string;
+  to: string;
+  /** A working session settled: its turn ended. */
+  finished?: boolean;
+  at?: string;
+}
+
+/** Why a request never got an answer, as a sentence. */
+function unreachable(err: unknown): AgentGridError {
+  const why = (err as { cause?: { code?: string } }).cause?.code ?? (err as Error).name;
+  return new AgentGridError(
+    why === "ECONNREFUSED"
+      ? "Agent Grid isn't running. Start it with `python3 -m agentgrid --web` from ~/AgentGrid."
+      : `Couldn't reach Agent Grid (${why}).`,
+  );
+}
+
+const REJECTED = "Agent Grid rejected the key: it was probably restarted. Restart it once more so it shares the new one, or check ~/.agentgrid/web.json.";
+
+/** Server-sent events, one message at a time, from text chunks cut anywhere. */
+export class SseParser {
+  private buffer = "";
+  private data: string[] = [];
+  private id?: string;
+  private event?: string;
+
+  push(chunk: string): Array<{ id?: string; event?: string; data: string }> {
+    this.buffer += chunk;
+    const out: Array<{ id?: string; event?: string; data: string }> = [];
+    let nl: number;
+    while ((nl = this.buffer.indexOf("\n")) >= 0) {
+      const line = this.buffer.slice(0, nl).replace(/\r$/, "");
+      this.buffer = this.buffer.slice(nl + 1);
+      if (line === "") {
+        if (this.data.length) out.push({ id: this.id, event: this.event, data: this.data.join("\n") });
+        this.data = [];
+        this.event = undefined;
+        continue;
+      }
+      if (line.startsWith(":")) continue; // a comment: Agent Grid's heartbeat
+      const colon = line.indexOf(":");
+      const field = colon < 0 ? line : line.slice(0, colon);
+      const value = (colon < 0 ? "" : line.slice(colon + 1)).replace(/^ /, "");
+      if (field === "data") this.data.push(value);
+      else if (field === "id") this.id = value; // stays set for the messages after it, as the spec says
+      else if (field === "event") this.event = value;
+    }
+    return out;
+  }
+}
+
 export function connectionFile(): string {
   return join(homedir(), ".agentgrid", "web.json");
 }
@@ -85,15 +145,10 @@ export class AgentGrid {
         signal: AbortSignal.timeout(timeoutMs),
       });
     } catch (err) {
-      const why = (err as { cause?: { code?: string } }).cause?.code ?? (err as Error).name;
-      throw new AgentGridError(
-        why === "ECONNREFUSED"
-          ? "Agent Grid isn't running. Start it with `python3 -m agentgrid --web` from ~/AgentGrid."
-          : `Couldn't reach Agent Grid (${why}).`,
-      );
+      throw unreachable(err);
     }
     const data = (await res.json().catch(() => ({}))) as T & { error?: string };
-    if (res.status === 403) throw new AgentGridError("Agent Grid rejected the key: it was probably restarted. Restart it once more so it shares the new one, or check ~/.agentgrid/web.json.");
+    if (res.status === 403) throw new AgentGridError(REJECTED);
     if (!res.ok) throw new AgentGridError(data.error ?? `Agent Grid answered ${res.status}.`);
     return data;
   }
@@ -137,6 +192,63 @@ export class AgentGrid {
 
   async message(sessionId: string, message: string): Promise<void> {
     await this.call("/api/chat", { sessionId, message });
+  }
+
+  /**
+   * Status changes as Agent Grid notices them (GET /api/events). Ends quietly when `signal` aborts,
+   * and throws when the stream is refused or drops; reconnect with the last id seen and Agent Grid
+   * replays what was missed. Silence longer than `idleMs` (its heartbeat is every 15 s) counts as a drop.
+   */
+  async *events(o: { lastEventId?: string; signal?: AbortSignal; idleMs?: number; onOpen?: () => void } = {}): AsyncGenerator<AgentEvent> {
+    const { base, token } = this.connect();
+    const control = new AbortController();
+    const abort = () => control.abort();
+    o.signal?.addEventListener("abort", abort, { once: true });
+    let quiet: NodeJS.Timeout | undefined;
+    const alive = () => {
+      clearTimeout(quiet);
+      quiet = setTimeout(abort, o.idleMs ?? 45_000);
+    };
+    try {
+      alive();
+      let res: Response;
+      try {
+        res = await this.fetcher(`${base}/api/events`, {
+          headers: { "X-Agentgrid-Token": token, accept: "text/event-stream", ...(o.lastEventId ? { "Last-Event-ID": o.lastEventId } : {}) },
+          signal: control.signal,
+        });
+      } catch (err) {
+        if (o.signal?.aborted) return;
+        throw unreachable(err);
+      }
+      if (res.status === 403) throw new AgentGridError(REJECTED);
+      if (res.status === 404) throw new AgentGridError("This Agent Grid has no event stream (GET /api/events): update it from ~/AgentGrid and restart it.");
+      if (!res.ok || !res.body) throw new AgentGridError(`Agent Grid answered ${res.status} to the event stream.`);
+      o.onOpen?.();
+      const parser = new SseParser();
+      const decoder = new TextDecoder();
+      try {
+        for await (const chunk of res.body as AsyncIterable<Uint8Array>) {
+          alive();
+          for (const m of parser.push(decoder.decode(chunk, { stream: true }))) {
+            let event: AgentEvent;
+            try {
+              event = JSON.parse(m.data) as AgentEvent;
+            } catch {
+              continue;
+            }
+            yield { ...event, id: m.id ?? event.id };
+          }
+        }
+      } catch (err) {
+        if (o.signal?.aborted) return;
+        throw new AgentGridError(control.signal.aborted ? "The event stream went quiet: Agent Grid may have stopped." : `The event stream dropped (${(err as Error).message}).`);
+      }
+    } finally {
+      clearTimeout(quiet);
+      o.signal?.removeEventListener("abort", abort);
+      control.abort();
+    }
   }
 }
 
