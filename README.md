@@ -20,7 +20,7 @@ Three memory stores, all plain markdown in a local git repo you own (`~/selfhub`
 | Commitments ledger | every project: why, status, cadence, next action, last touched | `goals/projects.md` |
 | Journal | two lines a day: what happened, what's next | `journal/YYYY-MM-DD.md` |
 
-One Claude tool-use loop reads those stores plus your calendar and git activity,
+One tool-use loop, running on whichever model you choose, reads those stores plus your calendar and git activity,
 and answers through a small set of intents. The "specialists" are prompt templates,
 not services. Every write to memory is a git commit, so you can see and undo
 anything it did.
@@ -33,7 +33,7 @@ Interface design: [`docs/DESIGN.md`](docs/DESIGN.md).
 
 ```bash
 npm install
-cp .env.example .env        # add ANTHROPIC_API_KEY
+cp .env.example .env        # add a key: Anthropic, OpenAI or OpenRouter
 npm run cos -- init         # scaffold the ledger + journal in ~/selfhub (asks first)
 npm run cos -- brief        # the morning brief
 ```
@@ -79,24 +79,45 @@ Rebuilding the app changes its signature, so macOS may ask for these again.
 `cos menubar open` relaunches it; `cos menubar uninstall` removes the app and the login item.
 Logs live in `~/.cos/logs`.
 
-## Keys
+## Models and providers
 
-One key, and only for the model features:
+The brain is model-agnostic. Add a key for any provider you use, then pick models whenever
+you like. Nothing else needs a key: calendar, speech, and memory are all local.
 
-| Key | Needed for | Without it |
+| Provider | Key in `.env` | Model names look like |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | `ask`, `focus`, model-written brief, smart capture | the rule-based brief, decisions, reminders and simple capture still work |
+| Anthropic (Claude) | `ANTHROPIC_API_KEY` | `anthropic:claude-opus-5`, `anthropic:claude-haiku-4-5` |
+| OpenAI | `OPENAI_API_KEY` | `openai:gpt-5.4`, `openai:gpt-5.2` |
+| OpenRouter | `OPENROUTER_API_KEY` | `openrouter:openai/gpt-5.2`, `openrouter:~anthropic/claude-sonnet-latest`, `openrouter:openrouter/auto` |
+| Any OpenAI-compatible server (Ollama, LM Studio, …) | `COS_COMPATIBLE_BASE_URL` | `compatible:llama3.2` |
 
-Everything else is local and keyless: calendar through macOS EventKit, speech out through
-`say`, speech in through Apple's on-device recogniser, memory in git.
+Pick a model three ways:
+
+```bash
+cos models                                         # what's configured and what each intent uses
+cos models use openai:gpt-5.4                      # default for everything (saved)
+cos models use anthropic:claude-haiku-4-5 --for capture   # a cheap model just for filing notes
+cos --model openrouter:openai/gpt-5.2 ask "what should I do today?"   # one command only
+cos models test openrouter:openrouter/auto         # check a key and model name work
+```
+
+The menubar's **Model** menu switches the default with one click; it applies to the next request.
+
+Which model runs, highest priority first: the `--model` flag, a per-intent choice, the saved
+default, `COS_MODEL` in `.env`, then the first provider that has a key. Choices are saved in
+`~/.cos/models.json`; add your own entries under `"presets"` to show them in the menu.
+
+Without any key, the rule-based brief, decisions, reminders and simple capture still work.
+If a model fails while building the brief, you get the rule-based brief with the reason.
 
 ## Configuration
 
 Everything is an environment variable (see `.env.example`):
 
-- `ANTHROPIC_API_KEY` — required for model calls
+- one or more provider keys — see Models and providers
 - `COS_SELFHUB` — memory repo path, default `~/selfhub`
-- `COS_MODEL` — default `claude-opus-5`
+- `COS_MODEL` — fallback model as `provider:model`; `cos models use` overrides it
+- `COS_EFFORT` — `low`, `medium` (default) or `high` reasoning depth, where the model supports it
 - `COS_PROJECT_ROOTS` — folders scanned for git activity, default `~/Desktop`
 - `COS_NAME` — your first name for greetings
 
@@ -106,7 +127,7 @@ Everything is an environment variable (see `.env.example`):
 src/
   core/       ledger, journal, notes, reminders, git, context   (the memory contract)
   sensors/    calendar (read-only, via macOS), git activity
-  brain/      the single Claude tool-use loop, tools, prompt templates
+  brain/      the tool-use loop, tools, prompt templates, and llm/ provider adapters
   logic/      cadence, resurfacing, day plan (pure functions, fully tested)
   output/     render a brief for terminal | notification | speech
   cli/        cos
@@ -132,8 +153,9 @@ examples/     a sample selfhub for demos and tests
 | Memory contract: ledger, journal, reminders, notes, git-commit-on-write | done, tested |
 | Context assembler with cadence / silence / parked-review flags | done, tested |
 | Sensors: calendar via EventKit or icalBuddy, git activity → last touched | done, tested (EventKit needs one-time Calendar permission) |
-| Brief: rule-based (offline) and model (structured output) | done, tested; model path needs `ANTHROPIC_API_KEY` |
-| Brain: one tool-use loop, prompt templates, write tools | done, tested with a scripted model |
+| Brief: rule-based (offline) and model (structured output, lenient fallback) | done, tested; model path needs any provider key |
+| Brain: one tool-use loop, prompt templates, write tools | done, tested with a scripted provider |
+| Model-agnostic: Anthropic, OpenAI, OpenRouter, OpenAI-compatible; per-intent choice, `cos models`, menubar Model menu | done, adapters tested against recorded shapes; no live call made yet |
 | CLI: brief, ask, focus, capture, wrap, silence-check, decide, remind, done, note, projects, calendar, context, init | done |
 | Scheduler: launchd agents (07:00 brief, 12:00 silence check, 18:00 wrap nudge) | done; `npm run build && cos scheduler install` |
 | UI: the pill + brief panel served locally, browser speech recognition | done; `cos ui` |

@@ -81,7 +81,7 @@ so lastTouched is maintained automatically, not by hand.
 - System prompt: the Chief-of-Staff persona + `buildContext(intent)`.
 - Tools (function calling): all ledger functions + both sensors.
 - The model decides which tool(s) to call and which prompt template applies.
-- Use the Claude Agent SDK's tool-use loop, or a manual Messages API tool loop.
+- Model-agnostic: the loop talks to a neutral provider contract (`brain/llm/`). Adapters: Anthropic SDK for Claude; the OpenAI SDK for OpenAI, OpenRouter and any OpenAI-compatible server. Model chosen per intent as `provider:model`.
 
 ### brain/prompts/*.md
 Six markdown instruction files, loaded per intent. They ARE the "specialists":
