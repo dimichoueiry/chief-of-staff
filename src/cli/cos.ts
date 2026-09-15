@@ -48,6 +48,7 @@ import { findFolders, formatFolderSearch } from "../actions/folders.js";
 import { Shortcuts } from "../actions/shortcuts.js";
 import { findBoards, slateBaseUrl, slateBoardUrl, slateBoards } from "../actions/slate.js";
 import { buildMenubar, installLoginItem, openMenubar, restartMenubar, uninstallMenubar } from "./menubar.js";
+import { packageApp } from "./package.js";
 import { ask, confirm } from "./prompt.js";
 
 loadDotenv();
@@ -908,6 +909,26 @@ menubar
       const r = await deployRuntime(projectRoot(), (l) => console.log(dim(l)));
       await restartMenubar();
       console.log(`Restarted Chief of Staff with the latest code (${r.dir}).`);
+    } catch (err) {
+      fail((err as Error).message);
+    }
+  });
+
+menubar
+  .command("package")
+  .description("a self-contained .app and .dmg to hand to someone: carries Node, the runtime and the helpers (docs/DISTRIBUTION.md)")
+  .option("--out <dir>", "where the .app and .dmg go", ".build/package")
+  .option("--no-dmg", "only the .app")
+  .option("--identity <name>", 'sign with a "Developer ID Application" identity instead of the local certificate')
+  .action(async (o: { out: string; dmg: boolean; identity?: string }) => {
+    const root = resolve(new URL("../..", import.meta.url).pathname);
+    try {
+      const r = await packageApp({ repoRoot: root, node: process.execPath, out: resolve(root, o.out), dmg: o.dmg, identity: o.identity, log: (l) => console.log(dim(l)) });
+      console.log(`Packaged ${r.app}`);
+      if (r.dmg) console.log(`Disk image ${r.dmg}`);
+      console.log(`Signed with ${r.signedWith}.`);
+      console.log(dim(`Check it:   codesign --verify --deep --strict --verbose=2 "${r.app}" && spctl --assess --type execute "${r.app}"`));
+      if (!o.identity) console.log(dim("spctl rejects a build without a Developer ID: that's expected. Whoever installs it right-clicks › Open once."));
     } catch (err) {
       fail((err as Error).message);
     }

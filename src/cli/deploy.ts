@@ -53,19 +53,14 @@ export interface DeployResult {
   env: "copied" | "unchanged" | "none";
 }
 
-export async function deployRuntime(repoRoot: string, log: (line: string) => void = () => {}): Promise<DeployResult> {
+/** Everything the CLI needs at runtime (dist, package.json, production packages), copied into `dest`. */
+export async function copyRuntime(repoRoot: string, dest: string): Promise<number> {
   if (!(await exists(join(repoRoot, "dist", "cli", "cos.js")))) {
     throw new Error(`Build the CLI first: npm run build   (missing ${join(repoRoot, "dist", "cli", "cos.js")})`);
   }
-  const dir = runtimeDir();
-  const next = `${dir}.next`;
-  const old = `${dir}.old`;
-  await rm(next, { recursive: true, force: true });
-  await mkdir(next, { recursive: true });
-
-  log(`copying the runtime to ${dir}`);
-  await cp(join(repoRoot, "dist"), join(next, "dist"), { recursive: true });
-  await copyFile(join(repoRoot, "package.json"), join(next, "package.json"));
+  await mkdir(dest, { recursive: true });
+  await cp(join(repoRoot, "dist"), join(dest, "dist"), { recursive: true });
+  await copyFile(join(repoRoot, "package.json"), join(dest, "package.json"));
 
   const { stdout } = await exec("npm", ["ls", "--omit=dev", "--all", "--parseable"], { cwd: repoRoot, maxBuffer: 16 * 1024 * 1024 }).catch(
     // npm ls exits non-zero on harmless peer warnings; the output is still usable.
@@ -73,9 +68,19 @@ export async function deployRuntime(repoRoot: string, log: (line: string) => voi
   );
   const packages = topLevelPackages(stdout, repoRoot);
   for (const pkg of packages) {
-    await mkdir(join(next, dirname(pkg)), { recursive: true });
-    await cp(join(repoRoot, pkg), join(next, pkg), { recursive: true, dereference: true });
+    await mkdir(join(dest, dirname(pkg)), { recursive: true });
+    await cp(join(repoRoot, pkg), join(dest, pkg), { recursive: true, dereference: true });
   }
+  return packages.length;
+}
+
+export async function deployRuntime(repoRoot: string, log: (line: string) => void = () => {}): Promise<DeployResult> {
+  const dir = runtimeDir();
+  const next = `${dir}.next`;
+  const old = `${dir}.old`;
+  await rm(next, { recursive: true, force: true });
+  log(`copying the runtime to ${dir}`);
+  const packages = await copyRuntime(repoRoot, next);
 
   // Swap in place so a running server never sees a half-copied folder.
   await rm(old, { recursive: true, force: true });
@@ -86,5 +91,5 @@ export async function deployRuntime(repoRoot: string, log: (line: string) => voi
   // Keys: the project's .env is the one you edit; keep the app's copy in step with it.
   const env = syncProjectEnv(repoRoot);
   if (env === "copied") log(`copied .env to ${homeEnvFile()}`);
-  return { dir, entry: runtimeEntry(dir), packages: packages.length, env };
+  return { dir, entry: runtimeEntry(dir), packages, env };
 }

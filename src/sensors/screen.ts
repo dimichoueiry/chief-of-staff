@@ -53,7 +53,8 @@ export function helperBin(): string {
   return join(cosHome(), "bin", "cos-screen");
 }
 
-async function ensureHelper(bin = helperBin()): Promise<string> {
+/** Compile the Swift helper if it is missing or older than its source. */
+export async function ensureScreenHelper(bin = helperBin()): Promise<string> {
   const [src, built] = await Promise.all([stat(HELPER_SRC), stat(bin).catch(() => null)]);
   if (built && built.mtimeMs >= src.mtimeMs) return bin;
   await mkdir(dirname(bin), { recursive: true });
@@ -62,7 +63,7 @@ async function ensureHelper(bin = helperBin()): Promise<string> {
 }
 
 async function run(args: string[]): Promise<Record<string, unknown>> {
-  const bin = await ensureHelper();
+  const bin = await ensureScreenHelper();
   try {
     const { stdout } = await exec(bin, args, { timeout: 20_000, maxBuffer: 1024 * 1024 });
     return JSON.parse(stdout.trim().split("\n").at(-1) ?? "{}");
