@@ -13,6 +13,7 @@ import { Reminders } from "../src/core/reminders.js";
 import { decide } from "../src/logic/decide.js";
 import { resolveDate, scribe } from "../src/logic/scribe.js";
 import { saveAccess } from "../src/actions/access.js";
+import { ScreenPermissionError } from "../src/sensors/screen.js";
 import { createUiServer } from "../src/ui/server.js";
 import { makeTmpSelfhub } from "./helpers/tmp-selfhub.js";
 
@@ -179,7 +180,7 @@ describe("ui server (offline)", () => {
     expect(opened.at(-1)!.at(-1)).toBe("https://campuswire.com/c/G53D5855E/feed");
     opened.splice(1);
 
-    saveAccess({ links: "ask" }); // COS_HOME is a temp folder in these tests
+    saveAccess({ links: "ask", screen: "auto" }); // COS_HOME is a temp folder in these tests
     const link = await (await post({ text: "open https://example.com/page" })).json();
     expect(link.kind).toBe("confirm");
     expect(opened).toHaveLength(1);
@@ -255,6 +256,8 @@ describe("ui server (scripted model)", () => {
   let queue: ChatResponse[];
   let requests: ChatRequest[];
   let ran: string[];
+  let screenAllowed: boolean;
+  let requested: number;
 
   const reply = (o: Partial<ChatResponse>): ChatResponse => ({ text: "", toolCalls: [], stop: "end", model: "scripted", ...o });
   const post = (b: unknown, path = "/api/pill") => fetch(`${base}${path}`, { method: "POST", body: JSON.stringify(b) });
@@ -263,6 +266,8 @@ describe("ui server (scripted model)", () => {
     queue = [];
     requests = [];
     ran = [];
+    screenAllowed = true;
+    requested = 0;
     ({ dir, cleanup } = await makeTmpSelfhub());
     await cp(resolve("examples/selfhub-sample"), dir, { recursive: true });
     process.env.COS_CALENDAR = "none";
@@ -286,7 +291,18 @@ describe("ui server (scripted model)", () => {
       backgroundSummaries: false,
       openRunner: async () => {},
       slateLoader: async () => ({ boards: [], live: true }),
-      access: () => ({ terminal: "ask", agents: "ask", links: "auto" }),
+      access: () => ({ terminal: "ask", agents: "ask", links: "auto", screen: "auto" }),
+      screen: {
+        capture: async () => {
+          if (!screenAllowed) throw new ScreenPermissionError();
+          return { data: "U0NSRUVO", mediaType: "image/jpeg", width: 1600, height: 1039, app: "Microsoft Edge", window: "Campuswire" };
+        },
+        permission: async () => screenAllowed,
+        request: async () => {
+          requested++;
+          return false;
+        },
+      },
       shell: async (command) => {
         ran.push(command);
         return { exitCode: 0, timedOut: false, output: command.startsWith("brew") ? "ffmpeg 7.1 installed" : "ok" };
@@ -471,6 +487,31 @@ describe("ui server (scripted model)", () => {
     expect(ran).toEqual(["brew install ffmpeg", "npm run build"]);
     const convo = await (await fetch(`${base}/api/conversation`)).json();
     expect(convo.turns.at(-1)).toMatchObject({ role: "assistant", actionsDone: [{ kind: "command", detail: "$ npm run build\nin ~" }] });
+  });
+
+  it("looks at the screen when asked, by voice, and explains the permission when macOS says no", async () => {
+    const say = async (text: string) => (await post({ text })).json();
+    queue.push(reply({ text: "That's the Campuswire feed in Edge; the pinned post is the homework 3 deadline." }));
+    const seen = await say("what am I looking at?");
+    expect(seen).toMatchObject({ kind: "answer", screen: { app: "Microsoft Edge", window: "Campuswire" } });
+    const sent = requests.at(-1)!.messages.at(-1)!;
+    expect(sent).toMatchObject({ role: "user", images: [{ mediaType: "image/jpeg", data: "U0NSRUVO" }] });
+    expect(sent.role === "user" && sent.content).toMatch(/^\(A screenshot of their screen, taken just now \(1600×1039\); in front: Microsoft Edge \(“Campuswire”\)/);
+    const convo = await (await fetch(`${base}/api/conversation`)).json();
+    expect(convo.turns.at(-2)).toMatchObject({ role: "user", text: "what am I looking at?", screen: { app: "Microsoft Edge" } });
+    expect(JSON.stringify(convo)).not.toContain("U0NSRUVO"); // the image is never kept
+
+    // A follow-up doesn't re-send an old image: history carries only words.
+    queue.push(reply({ text: "Homework 3 is due Friday." }));
+    await say("when is it due?");
+    expect(JSON.stringify(requests.at(-1)!.messages)).not.toContain("U0NSRUVO");
+
+    screenAllowed = false;
+    const before = requests.length;
+    const blocked = await say("look at this");
+    expect(blocked.text).toMatch(/^I can't see your screen yet\. Turn on Chief of Staff in System Settings › Privacy & Security › Screen & System Audio Recording/);
+    expect(requested).toBe(1);
+    expect(requests.length).toBe(before); // no model call without the screenshot
   });
 
   it("keeps a failed reply in the conversation so 'try again' has something to refer to", async () => {

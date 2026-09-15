@@ -25,8 +25,15 @@ export interface ToolResult {
   isError?: boolean;
 }
 
+/** An image to show the model, e.g. a screenshot. */
+export interface ImageInput {
+  mediaType: "image/jpeg" | "image/png";
+  /** Base64, no data: prefix. */
+  data: string;
+}
+
 export type ChatMessage =
-  | { role: "user"; content: string }
+  | { role: "user"; content: string; images?: ImageInput[] }
   /** providerData carries what the same provider needs replayed next turn (thinking blocks, reasoning details). */
   | { role: "assistant"; text: string; toolCalls: ToolCall[]; providerData?: unknown }
   | { role: "tool"; results: ToolResult[] };

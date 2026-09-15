@@ -47,7 +47,18 @@ function toMessages(req: ChatRequest, opts: CompatOptions): MessageParam[] {
   // One system message, stable part first, so prefix caching still applies.
   const out: MessageParam[] = [{ role: "system", content: `${req.instructions}\n\n${req.context}` }];
   for (const m of req.messages) {
-    if (m.role === "user") out.push({ role: "user", content: m.content });
+    if (m.role === "user") {
+      if (!m.images?.length) out.push({ role: "user", content: m.content });
+      else {
+        out.push({
+          role: "user",
+          content: [
+            { type: "text", text: m.content },
+            ...m.images.map((img) => ({ type: "image_url" as const, image_url: { url: `data:${img.mediaType};base64,${img.data}` } })),
+          ],
+        });
+      }
+    }
     else if (m.role === "tool") {
       for (const r of m.results) out.push({ role: "tool", tool_call_id: r.id, content: r.content });
     } else {

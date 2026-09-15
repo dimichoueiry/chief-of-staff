@@ -4,6 +4,7 @@ import { cp } from "node:fs/promises";
 const assets = [
   ["src/brain/prompts", "dist/brain/prompts"],
   ["src/sensors/eventkit", "dist/sensors/eventkit"],
+  ["src/sensors/screen", "dist/sensors/screen"],
   ["src/ui/web", "dist/ui/web"],
 ];
 for (const [from, to] of assets) {

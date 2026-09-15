@@ -307,6 +307,12 @@ function confirmButtons(items, said = "") {
   return box;
 }
 
+/** A small note under what they said: the screen went with it. */
+function markLooked(node, screen) {
+  if (node.querySelector(".looked")) return;
+  node.append(el("span", { class: "looked" }, `looked at your screen${screen.app ? ` · ${screen.app}` : ""}`));
+}
+
 /** Put a reply (or the text streaming in so far) into an assistant turn. */
 function fillTurn(node, turn) {
   node.dataset.kind = turn.kind || "answer";
@@ -320,7 +326,10 @@ function fillTurn(node, turn) {
 
 function addTurn(turn) {
   let node;
-  if (turn.role === "user") node = el("div", { class: "turn user" }, turn.text);
+  if (turn.role === "user") {
+    node = el("div", { class: "turn user" }, turn.text);
+    if (turn.screen) markLooked(node, turn.screen);
+  }
   else if (turn.role === "event") node = el("div", { class: "turn event" }, turn.text);
   else {
     node = el("div", { class: "turn assistant" });
@@ -415,6 +424,10 @@ async function send(body, thinking, fromVoice = false) {
   if (r.error && !r.text) r = { kind: "error", text: r.error };
   if (!pending) begin(r.conversation, r.user);
   fillTurn(pending, r);
+  if (r.screen) {
+    const users = thread.querySelectorAll(".turn.user");
+    if (users.length) markLooked(users[users.length - 1], r.screen);
+  }
   lastReply = r.text || "";
   $("answer-model").textContent = r.model && r.model !== "rules" ? `· ${r.model}` : "";
   scrollThread();

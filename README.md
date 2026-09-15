@@ -184,6 +184,20 @@ Web pages open straight away, including ones the model looks up or builds the ad
 from your home folder, and never scripts or installers. `COS_SLATE_URL` points at a different Slate
 address if needed.
 
+## Looking at your screen
+
+Say "look at this", "what am I looking at?", "can you see my screen?" or "what does this say?" and
+it takes one screenshot of the display you're on, sends it with your words, and answers about what's
+visible. When you point at something without those words ("which button do I press?"), the model can
+take one itself (`look_at_screen`). Follow-ups keep working by voice like any other reply.
+
+- The pill and its cards are left out of the capture; it's shrunk to about 1600px.
+- Screenshots are never saved: the image goes to the model with that one message and is deleted.
+  The conversation only records that you shared your screen.
+- Needs a model that takes images (gpt-5.4-mini, Claude Sonnet/Opus via OpenRouter do).
+- macOS permission: **Screen & System Audio Recording** for Chief of Staff. The first "look at this"
+  shows the prompt; `cos screen` says whether it's on. `cos access screen off` turns looking off.
+
 ## Terminal and coding agents
 
 The assistant can use your terminal and your Agent Grid agents, so "what are the last commits in

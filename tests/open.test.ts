@@ -164,7 +164,7 @@ describe("shortcuts store and the open tool", () => {
   it("lets the model open trusted things, queue web addresses, and save shortcuts safely", async () => {
     const { run, calls } = recorder();
     const rt = new ToolRuntime(loadConfig({ COS_SELFHUB: dir, COS_PROJECT_ROOTS: "/nonexistent" }), "2026-09-17", undefined, {
-      run, slate: loader, access: () => ({ terminal: "ask", agents: "ask", links: "ask" }),
+      run, slate: loader, access: () => ({ terminal: "ask", agents: "ask", links: "ask", screen: "auto" }),
       bookmarks: async () => ({ bookmarks: [], blocked: [], browsers: [] }),
     });
     expect((await rt.execute("open", { target: "slate board build blueprint" })).result).toBe("Opened Slate board “Chief of Staff — Build Blueprint (for the coding agent)”.");

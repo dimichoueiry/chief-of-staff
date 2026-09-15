@@ -8,7 +8,8 @@ import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { Config } from "../config.js";
-import type { ToolSpec } from "./llm/types.js";
+import type { ImageInput, ToolSpec } from "./llm/types.js";
+import { describeShot, helperCapturer, type ScreenCapturer } from "../sensors/screen.js";
 import { Conversations } from "./conversation.js";
 import { searchConversations } from "./recall.js";
 import type { Intent } from "../core/context.js";
@@ -200,6 +201,14 @@ export const TOOLS: Record<string, ToolSpec> = {
       required: ["decision"],
     },
   },
+  look_at_screen: {
+    name: "look_at_screen",
+    description:
+      "Take a screenshot of what they're looking at (the display under the pointer, without this assistant's own windows) and see it. " +
+      "Use it when they refer to something on screen that you can't see yet: \"this\", \"here\", \"which button\", \"what does it say\", an error they're stuck on. " +
+      "Take a new one when they may have moved on; an earlier screenshot is not kept.",
+    parameters: { type: "object", properties: {} },
+  },
   find_bookmarks: {
     name: "find_bookmarks",
     description: "Search the user's browser favorites and bookmarks (Edge, Chrome, Brave, Arc) by name or folder, e.g. \"campuswire\" or \"UIUC\". To open one, use open with its name.",
@@ -269,7 +278,7 @@ export function toolsFor(intent: Intent): ToolSpec[] {
     "silence-check": [],
     ask: ALL,
     capture: [...WRITES, "get_project", "get_calendar", "find_folder"],
-    focus: ["get_project", "upsert_project", "get_git_log", "get_calendar", "open", "get_conversations", "find_folder", "run_command", "get_agents", "start_agent", "get_agent_output", "confirm_pending"],
+    focus: ["get_project", "upsert_project", "get_git_log", "get_calendar", "open", "get_conversations", "find_folder", "run_command", "get_agents", "start_agent", "get_agent_output", "confirm_pending", "look_at_screen"],
     wrap: ["get_project", "append_journal", "touch_project", "upsert_project", "get_git_log", "get_conversations"],
   };
   return names[intent].map((n) => TOOLS[n]);
@@ -284,6 +293,8 @@ export interface ToolCall {
   input: Record<string, unknown>;
   result: string;
   isError: boolean;
+  /** Images the tool produced (a screenshot), shown to the model right after the result and never stored. */
+  images?: ImageInput[];
 }
 
 /** Executes tool calls against the real stores for one selfhub. */
@@ -316,6 +327,7 @@ export class ToolRuntime {
       /** Actions carried out recently in this conversation, so they aren't queued again. */
       recentlyDone?: { kind: string; detail: string }[];
       bookmarks?: () => Promise<BookmarkRead>;
+      screen?: ScreenCapturer;
     } = {},
   ) {
     this.shortcuts = new Shortcuts(config.selfhubDir);
@@ -325,16 +337,21 @@ export class ToolRuntime {
     this.reminders = new Reminders(config.selfhubDir);
   }
 
+  /** Images the tool being run produced; taken by execute(). */
+  private images: ImageInput[] = [];
+
   async execute(name: string, input: Record<string, unknown>): Promise<ToolCall> {
     let result: string;
     let isError = false;
+    this.images = [];
     try {
       result = await this.dispatch(name, input);
     } catch (err) {
       result = `Error: ${(err as Error).message}`;
       isError = true;
     }
-    const call = { name, input, result, isError };
+    const call: ToolCall = { name, input, result, isError, ...(this.images.length ? { images: this.images } : {}) };
+    this.images = [];
     this.calls.push(call);
     return call;
   }
@@ -525,6 +542,12 @@ export class ToolRuntime {
           }
         }
         return lines.join("\n");
+      }
+      case "look_at_screen": {
+        if ((this.actions.access ?? readAccess)().screen === "off") throw new Error("Looking at the screen is off. They can turn it on with `cos access screen auto`.");
+        const shot = await (this.actions.screen ?? helperCapturer).capture();
+        this.images = [{ mediaType: shot.mediaType, data: shot.data }];
+        return `${describeShot(shot)} The image follows.`;
       }
       case "find_bookmarks": {
         const query = this.str(input, "query", true);

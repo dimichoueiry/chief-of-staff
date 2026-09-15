@@ -17,7 +17,16 @@ export function supportsRefusalFallback(model: string): boolean {
 
 function toMessages(messages: ChatMessage[]): Anthropic.Beta.BetaMessageParam[] {
   return messages.map((m): Anthropic.Beta.BetaMessageParam => {
-    if (m.role === "user") return { role: "user", content: m.content };
+    if (m.role === "user") {
+      if (!m.images?.length) return { role: "user", content: m.content };
+      return {
+        role: "user",
+        content: [
+          ...m.images.map((img) => ({ type: "image" as const, source: { type: "base64" as const, media_type: img.mediaType, data: img.data } })),
+          { type: "text" as const, text: m.content },
+        ],
+      };
+    }
     if (m.role === "tool") {
       return {
         role: "user",

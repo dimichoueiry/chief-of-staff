@@ -17,9 +17,11 @@ export interface Access {
   agents: AccessMode;
   /** Web pages the model finds or builds an address for: auto opens them, ask waits for an OK, off never opens them. */
   links: AccessMode;
+  /** Looking at the screen when asked ("look at this"): auto looks, off never does. */
+  screen: AccessMode;
 }
 
-export const DEFAULT_ACCESS: Access = { terminal: "ask", agents: "ask", links: "auto" };
+export const DEFAULT_ACCESS: Access = { terminal: "ask", agents: "ask", links: "auto", screen: "auto" };
 
 export function accessFile(): string {
   return join(cosHome(), "access.json");
@@ -40,6 +42,7 @@ export function readAccess(file: string = accessFile()): Access {
     terminal: saved.terminal && isAccessMode(saved.terminal) ? saved.terminal : DEFAULT_ACCESS.terminal,
     agents: saved.agents && isAccessMode(saved.agents) ? saved.agents : DEFAULT_ACCESS.agents,
     links: saved.links && isAccessMode(saved.links) ? saved.links : DEFAULT_ACCESS.links,
+    screen: saved.screen && isAccessMode(saved.screen) ? saved.screen : DEFAULT_ACCESS.screen,
   };
 }
 

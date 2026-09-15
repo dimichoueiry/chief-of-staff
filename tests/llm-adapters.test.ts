@@ -200,3 +200,30 @@ describe("lenient brief JSON", () => {
     expect(b.nudges).toEqual(["n"]);
   });
 });
+
+describe("images", () => {
+  const withImage = baseRequest({ messages: [{ role: "user", content: "what am I looking at?", images: [{ mediaType: "image/jpeg", data: "QUJD" }] }] });
+
+  it("sends a screenshot to Claude as an image block before the text", () => {
+    expect(buildAnthropicParams(withImage).messages[0]).toEqual({
+      role: "user",
+      content: [
+        { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "QUJD" } },
+        { type: "text", text: "what am I looking at?" },
+      ],
+    });
+  });
+
+  it("sends a screenshot to OpenAI and OpenRouter as a data URL part", () => {
+    const opts: CompatOptions = { id: "openrouter", reasoning: "openrouter", maxTokensParam: "max_tokens", structuredOutputs: true, replayReasoningDetails: true };
+    const p = buildCompatParams({ ...withImage, model: "openai/gpt-5.4-mini" }, opts);
+    expect(p.messages[1]).toEqual({
+      role: "user",
+      content: [
+        { type: "text", text: "what am I looking at?" },
+        { type: "image_url", image_url: { url: "data:image/jpeg;base64,QUJD" } },
+      ],
+    });
+    expect(buildCompatParams(baseRequest({ model: "gpt-5.4" }), opts).messages[1]).toEqual({ role: "user", content: "file this" });
+  });
+});

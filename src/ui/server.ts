@@ -32,6 +32,7 @@ import { activityRoots, applyActivity, scanActivity } from "../sensors/git.js";
 import { readAccess } from "../actions/access.js";
 import { findBookmarks, formatBookmarks, readBookmarks, type BookmarkRead } from "../actions/bookmarks.js";
 import { readConsent } from "../actions/consent.js";
+import { LOOK_REQUEST, SCREEN_PERMISSION_HELP, ScreenPermissionError, describeShot, helperCapturer, type ScreenCapturer, type Screenshot } from "../sensors/screen.js";
 import { addDays, todayISO } from "../util/dates.js";
 import { reloadHomeEnv } from "../util/env.js";
 import type { Access } from "../actions/access.js";
@@ -79,6 +80,7 @@ export interface UiOptions {
   agentGrid?: AgentGrid;
   access?: () => Access;
   bookmarks?: () => Promise<BookmarkRead>;
+  screen?: ScreenCapturer;
 }
 
 /** How long a finished action counts as "just done", so the same one isn't queued again. */
@@ -95,6 +97,7 @@ const DOING: Record<string, string> = {
   get_agents: "Checking your agents…",
   start_agent: "Starting an agent…",
   get_agent_output: "Reading what the agent did…",
+  look_at_screen: "Looking at your screen…",
   message_agent: "Messaging the agent…",
   open: "Opening…",
   add_shortcut: "Saving a shortcut…",
@@ -116,6 +119,15 @@ interface PillReply {
   where?: string;
   project?: string;
   steps?: ChatMessage[];
+  /** A screenshot went with the message. */
+  screen?: { app: string; window: string };
+}
+
+/** The model can't take images: say which setting fixes it rather than a raw provider error. */
+function explainImageError(err: unknown, model: string): string | null {
+  const msg = String((err as Error).message ?? err);
+  if (!/image|vision|multimodal|image_url|modalit/i.test(msg)) return null;
+  return `The model in use (${model}) can't look at images. Pick one that can, like openrouter:openai/gpt-5.4-mini or openrouter:anthropic/claude-sonnet-5, from the Model menu.`;
 }
 
 /** "open slate", "pull up my gmail", "launch cursor", "search for …": handled without a model. */
@@ -220,6 +232,16 @@ export function createUiServer(o: UiOptions): Server {
   const boards = o.slateLoader ?? (() => slateBoards());
   const bookmarks = o.bookmarks ?? (() => readBookmarks());
   const access = () => (o.access ?? readAccess)();
+  const screen = o.screen ?? helperCapturer;
+  const modelInUse = (intent: ModelIntent) => {
+    if (o.llm) return formatSpec(o.llm.spec);
+    try {
+      const r = resolveModel(intent, { flag: o.modelFlag });
+      return r ? formatSpec(r.spec) : "this model";
+    } catch {
+      return "this model";
+    }
+  };
   const deps = { run: openRunner, shell: o.shell, agentGrid: o.agentGrid };
   let pillQueue: Promise<unknown> = Promise.resolve();
   let summarizing = false;
@@ -271,7 +293,7 @@ export function createUiServer(o: UiOptions): Server {
     }
     conversations.append(
       convo,
-      { role: "user", text: said },
+      { role: "user", text: said, ...(reply.screen ? { screen: reply.screen } : {}) },
       {
         role: "assistant", text: reply.text, model: reply.model, kind: reply.kind,
         steps: reply.steps?.length ? reply.steps : undefined,
@@ -323,20 +345,45 @@ export function createUiServer(o: UiOptions): Server {
   }
 
   async function respond(text: string, mode: string, focusOn: string | undefined, convo: Conversation, emit: Emit, modelText = text): Promise<PillReply> {
-    const model = (intent: ModelIntent, project?: string) =>
-      runIntent({
+    // "look at this": the screenshot goes with the message, before anything else is tried.
+    let shot: Screenshot | null = null;
+    let seen: PillReply["screen"];
+    if (!focusOn && mode !== "capture" && LOOK_REQUEST.test(text) && access().screen !== "off") {
+      if (!ready("ask")) return { kind: "answer", text: `Looking at your screen ${NO_MODEL.charAt(0).toLowerCase()}${NO_MODEL.slice(1)}`, model: "rules" };
+      emit({ type: "status", text: "Looking at your screen…" });
+      try {
+        shot = await screen.capture();
+        seen = { app: shot.app, window: shot.window };
+        modelText = `(${describeShot(shot)})\n\n${modelText}`;
+      } catch (err) {
+        if (err instanceof ScreenPermissionError) {
+          await screen.request().catch(() => false); // shows macOS's prompt, once
+          return { kind: "answer", text: SCREEN_PERMISSION_HELP, model: "rules" };
+        }
+        modelText = `(You tried to take a screenshot because they asked you to look, but it failed: ${(err as Error).message}. Tell them.)\n\n${modelText}`;
+      }
+    }
+    const model = async (intent: ModelIntent, project?: string) => {
+      try {
+        return await runIntent({
         config, intent, project, message: modelText, today: today(), modelFlag: o.modelFlag, llm: o.llm,
         history: historyMessages(convo),
         recall: renderRecall(conversations, { today: today(), excludeId: convo.id }),
+        images: shot ? [{ mediaType: shot.mediaType, data: shot.data }] : undefined,
         actions: {
           run: openRunner, slate: boards, conversations, shell: o.shell, agentGrid: o.agentGrid, access: o.access,
-          awaiting: awaiting(convo), recentlyDone: recentlyDone(convo), bookmarks,
+          awaiting: awaiting(convo), recentlyDone: recentlyDone(convo), bookmarks, screen,
         },
         onTool: (name) => emit({ type: "status", text: DOING[name] ?? "Updating your memory…" }),
         onText: (delta) => emit({ type: "text", delta }),
-      });
+        });
+      } catch (err) {
+        throw new Error(explainImageError(err, modelInUse(intent)) ?? (err as Error).message);
+      }
+    };
     const fromModel = (kind: PillReply["kind"], r: Awaited<ReturnType<typeof runIntent>>, extra: Partial<PillReply> = {}): PillReply => ({
-      kind, text: r.text, model: r.model, changes: changes(r.toolCalls), confirm: r.pending.map(confirmView), done: r.done, steps: r.steps, ...extra,
+      kind, text: r.text, model: r.model, changes: changes(r.toolCalls), confirm: r.pending.map(confirmView), done: r.done, steps: r.steps,
+      ...(seen ? { screen: seen } : {}), ...extra,
     });
 
     if (focusOn) {
@@ -350,7 +397,7 @@ export function createUiServer(o: UiOptions): Server {
       };
     }
 
-    const forModel = ready("ask") && ((PLAIN_SEARCH.test(text) && !WEB_SEARCH.test(text)) || REFERS_BACK.test(text));
+    const forModel = Boolean(shot) || (ready("ask") && ((PLAIN_SEARCH.test(text) && !WEB_SEARCH.test(text)) || REFERS_BACK.test(text)));
     if (mode !== "capture" && OPEN_SHAPE.test(text) && !forModel) {
       const opened = await openOrQueue(
         {
@@ -409,6 +456,10 @@ export function createUiServer(o: UiOptions): Server {
         const r = await eventsInRange(from, to);
         return json(res, r.error ? 422 : 200, { from, to, provider: r.provider, error: r.error ?? null, events: r.events });
       }
+      case "GET /api/screen":
+        return json(res, 200, { permission: await screen.permission(), access: access().screen });
+      case "POST /api/screen/request":
+        return json(res, 200, { permission: await screen.request() });
       case "GET /api/bookmarks": {
         const q = (url.searchParams.get("q") ?? "").trim();
         const read = await bookmarks();

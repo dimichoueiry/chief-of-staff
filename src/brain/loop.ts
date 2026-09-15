@@ -13,7 +13,7 @@ import {
   NoModelError, createProvider, explainNotReady, formatSpec, resolveModel,
   type ModelIntent, type ModelSpec,
 } from "./llm/registry.js";
-import { EFFORTS, type ChatMessage, type Effort, type LLMProvider } from "./llm/types.js";
+import { EFFORTS, type ChatMessage, type Effort, type ImageInput, type LLMProvider } from "./llm/types.js";
 import { PERSONA } from "./persona.js";
 import { DEFAULT_MESSAGES, loadPrompt } from "./prompts.js";
 import { BRIEF_SCHEMA, type Brief } from "./schema.js";
@@ -36,6 +36,8 @@ export interface RunOptions {
   onTool?: (name: string, input: Record<string, unknown>) => void;
   /** Earlier messages in this conversation, oldest first (see conversation.ts). */
   history?: ChatMessage[];
+  /** Images sent with the message, e.g. a screenshot taken because they said "look at this". */
+  images?: ImageInput[];
   /** Summaries of earlier conversations, added to memory (see recall.ts). */
   recall?: string;
   effort?: Effort;
@@ -99,7 +101,7 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
   const userMessage = (opts.message ?? "").trim() || DEFAULT_MESSAGES[intent];
   if (!userMessage) throw new Error(`Intent "${intent}" needs a message.`);
   const history = intent === "brief" ? [] : (opts.history ?? []);
-  const messages: ChatMessage[] = [...history, { role: "user", content: userMessage }];
+  const messages: ChatMessage[] = [...history, { role: "user", content: userMessage, ...(opts.images?.length ? { images: opts.images } : {}) }];
   const firstNew = messages.length;
 
   let turns = 0;
@@ -130,12 +132,16 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
 
     messages.push({ role: "assistant", text: res.text, toolCalls: res.toolCalls, providerData: res.providerData });
     const results = [];
+    const images: ImageInput[] = [];
     for (const call of res.toolCalls) {
       opts.onTool?.(call.name, call.input);
       const done = await runtime.execute(call.name, call.input);
       results.push({ id: call.id, content: done.result, isError: done.isError || undefined });
+      images.push(...(done.images ?? []));
     }
     messages.push({ role: "tool", results });
+    // Tool results can't carry images on every provider, so a screenshot follows as its own message. It isn't kept in the record.
+    if (images.length) messages.push({ role: "user", content: "(The screenshot you just took.)", images });
   }
   if (!last) throw new Error("The model returned nothing.");
 

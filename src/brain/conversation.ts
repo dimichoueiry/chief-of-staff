@@ -29,6 +29,8 @@ export interface Turn {
   confirm?: ConfirmView[];
   /** event: an action that was carried out, so the same one isn't queued again. */
   done?: { kind: string; detail: string };
+  /** user: a screenshot went with this message (the image itself is never kept). */
+  screen?: { app: string; window: string };
   /** assistant: actions this reply carried out itself (with their OK, or allowed on their own). */
   actionsDone?: { kind: string; detail: string }[];
 }

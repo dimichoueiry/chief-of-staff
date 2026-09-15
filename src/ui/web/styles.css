@@ -103,6 +103,7 @@ body {
 .turn { max-width: 100%; }
 .turn.user { align-self: flex-end; max-width: 85%; background: #2a2e38; border: 1px solid #3a3f4b; border-radius: 14px 14px 4px 14px; padding: 6px 12px; color: #c9ced8; font-size: 14px; white-space: pre-wrap; }
 .turn.event { align-self: center; color: var(--muted); font-size: 12px; }
+.turn.user .looked { display: block; margin-top: 2px; color: var(--accent); font-size: 11px; }
 .turn.assistant { color: #dfe3ea; }
 .turn.assistant[data-kind="error"] { color: var(--rose); }
 .turn.assistant[data-kind="action"] .body, .turn.assistant[data-kind="capture"] .body { color: var(--success); }

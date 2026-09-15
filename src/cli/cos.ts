@@ -279,13 +279,14 @@ const accessCmd = program
     };
     console.log(`${bold("terminal")}  ${a.terminal}  ${dim(explain[a.terminal])}`);
     console.log(`${bold("agents")}    ${a.agents}  ${dim(a.agents === "ask" ? "can list and read agents; starting or messaging one waits for your OK" : explain[a.agents])}`);
+    console.log(`${bold("screen")}    ${a.screen}  ${dim(a.screen === "off" ? "never looks at your screen" : "looks when you say \"look at this\" or point at something on screen")}`);
     console.log(`${bold("links")}     ${a.links}  ${dim(a.links === "auto" ? "web pages it finds or builds open straight away" : a.links === "ask" ? "web pages it finds or builds wait for your OK" : "it never opens web pages it came up with")}`);
     console.log(dim("An OK can be spoken: \"yeah, send it\" or \"no\" works as well as the button."));
     console.log(dim(`Change: cos access terminal auto | cos access agents ask   (saved in ${accessFile()})`));
     console.log(dim(`Every command it runs is logged in ~/.cos/logs/terminal.log`));
   });
 
-for (const what of ["terminal", "agents", "links"] as const) {
+for (const what of ["terminal", "agents", "links", "screen"] as const) {
   accessCmd
     .command(what)
     .argument("<mode>", ACCESS_MODES.join(" | "))
@@ -305,6 +306,24 @@ program
       console.log(formatSessions(await new AgentGrid().sessions()));
     } catch (err) {
       fail((err as Error).message);
+    }
+  });
+
+// ---------- screen ----------
+
+program
+  .command("screen")
+  .argument("[action]", "request: show macOS's permission prompt for the app")
+  .description("whether the app may look at your screen (Screen & System Audio Recording)")
+  .action(async (action?: string) => {
+    const port = process.env.COS_UI_PORT ?? "4747";
+    const url = `http://127.0.0.1:${port}/api/screen${action === "request" ? "/request" : ""}`;
+    try {
+      const r = (await (await fetch(url, { method: action === "request" ? "POST" : "GET" })).json()) as { permission: boolean; access?: string };
+      console.log(r.permission ? "The app can see your screen." : "The app can't see your screen yet: turn on Chief of Staff in System Settings › Privacy & Security › Screen & System Audio Recording.");
+      if (r.access === "off") console.log(dim("Looking is turned off here: cos access screen auto"));
+    } catch {
+      fail("The menubar app isn't running (cos menubar open). Permission belongs to the app, so it has to answer.");
     }
   });
 

@@ -101,7 +101,7 @@ describe("ToolRuntime", () => {
   it("gives the brief no tools and each intent only its own", () => {
     expect(toolsFor("brief")).toEqual([]);
     expect(toolsFor("capture").map((t) => t.name)).not.toContain("get_git_log");
-    expect(toolsFor("focus").map((t) => t.name)).toEqual(["get_project", "upsert_project", "get_git_log", "get_calendar", "open", "get_conversations", "find_folder", "run_command", "get_agents", "start_agent", "get_agent_output", "confirm_pending"]);
+    expect(toolsFor("focus").map((t) => t.name)).toEqual(["get_project", "upsert_project", "get_git_log", "get_calendar", "open", "get_conversations", "find_folder", "run_command", "get_agents", "start_agent", "get_agent_output", "confirm_pending", "look_at_screen"]);
     expect(toolsFor("capture").map((t) => t.name)).not.toContain("run_command");
     expect(toolsFor("capture").map((t) => t.name)).toContain("find_folder");
     expect(toolsFor("ask").map((t) => t.name)).toContain("get_conversations");
@@ -176,6 +176,34 @@ describe("runIntent (scripted provider)", () => {
     const withRecall = scripted([reply({ text: "Yes." })]);
     await runIntent({ config: cfg(), intent: "ask", message: "did we pick a tier?", today: TODAY, calendarProvider: noneProvider, llm: withRecall.llm, recall: "# Earlier conversations (last 7 days, newest first)\n- picked the pro tier" });
     expect(withRecall.requests[0].context).toMatch(/# Memory[\s\S]*# Earlier conversations \(last 7 days, newest first\)\n- picked the pro tier$/);
+  });
+
+  it("shows a tool's screenshot to the model as its own message, and never keeps the image in the record", async () => {
+    const { llm, requests } = scripted([
+      reply({ stop: "tool_use", toolCalls: [{ id: "s1", name: "look_at_screen", input: {} }] }),
+      reply({ text: "You're on the Campuswire feed; the top post is about homework 3." }),
+    ]);
+    const screen = {
+      capture: async () => ({ data: "QUJD", mediaType: "image/jpeg" as const, width: 1600, height: 1039, app: "Microsoft Edge", window: "Campuswire" }),
+      permission: async () => true,
+      request: async () => true,
+    };
+    const r = await runIntent({
+      config: cfg(), intent: "ask", message: "which post should I read first?", today: TODAY, calendarProvider: noneProvider, llm,
+      actions: { screen, access: () => ({ terminal: "ask", agents: "ask", links: "auto", screen: "auto" }) },
+    });
+    const second = requests[1].messages;
+    expect(second.map((m) => m.role)).toEqual(["user", "assistant", "tool", "user"]);
+    expect(second[2]).toMatchObject({ role: "tool", results: [{ content: expect.stringMatching(/^A screenshot of their screen, taken just now \(1600×1039\); in front: Microsoft Edge \(“Campuswire”\)/) }] });
+    expect(second[3]).toEqual({ role: "user", content: "(The screenshot you just took.)", images: [{ mediaType: "image/jpeg", data: "QUJD" }] });
+    expect(JSON.stringify(r.steps)).not.toContain("QUJD");
+
+    const off = scripted([reply({ stop: "tool_use", toolCalls: [{ id: "s2", name: "look_at_screen", input: {} }] }), reply({ text: "ok" })]);
+    const blocked = await runIntent({
+      config: cfg(), intent: "ask", message: "look", today: TODAY, calendarProvider: noneProvider, llm: off.llm,
+      actions: { screen, access: () => ({ terminal: "ask", agents: "ask", links: "auto", screen: "off" }) },
+    });
+    expect(blocked.toolCalls[0]).toMatchObject({ isError: true, result: expect.stringMatching(/Looking at the screen is off/) });
   });
 
   it("asks for a JSON brief with no tools and normalises a prose-wrapped answer", async () => {
