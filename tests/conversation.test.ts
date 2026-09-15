@@ -2,7 +2,7 @@ import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Conversations, historyMessages, visibleTurns, type Conversation } from "../src/brain/conversation.js";
+import { Conversations, displayTitle, historyMessages, messageCount, visibleTurns, type Conversation } from "../src/brain/conversation.js";
 
 describe("conversation store", () => {
   let dir: string;
@@ -44,6 +44,69 @@ describe("conversation store", () => {
     await writeFile(join(dir, "9999-broken.json"), "{ not json");
     expect(store().current().id).toBe(fresh.id);
     expect((await readdir(dir)).filter((n) => n.endsWith(".json"))).toHaveLength(3);
+  });
+
+  it("switches between saved chats: a picked one carries on until it goes quiet, then the next message starts fresh", () => {
+    const s = store();
+    const review = s.current();
+    s.append(review, { role: "user", text: "review module 6" }, { role: "assistant", text: "Here's the review." });
+    clock = new Date("2026-09-14T10:05:00Z");
+    const favorites = s.startNew();
+    s.append(favorites, { role: "user", text: "open campuswire" }, { role: "assistant", text: "Opened." });
+
+    clock = new Date("2026-09-14T12:00:00Z"); // both quiet for over the hour
+    expect(s.open(review.id)?.id).toBe(review.id);
+    expect(s.current().id).toBe(review.id); // picking it counts as activity
+    s.append(s.current(), { role: "user", text: "and the quiz?" }, { role: "assistant", text: "Add one." });
+    expect(store().get(review.id)?.turns.map((t) => t.text)).toEqual(["review module 6", "Here's the review.", "and the quiz?", "Add one."]);
+    expect(store().get(favorites.id)?.turns).toHaveLength(2);
+
+    clock = new Date("2026-09-14T12:30:00Z");
+    expect(store().current().id).toBe(review.id); // the choice is saved, not held in memory
+    clock = new Date("2026-09-14T13:31:00Z");
+    const fresh = store().current();
+    expect([review.id, favorites.id]).not.toContain(fresh.id);
+    store().append(fresh, { role: "user", text: "hi" });
+    expect(store().current().id).toBe(fresh.id); // the new one, not the old pick
+
+    expect(store().open("../../etc/passwd")).toBeNull();
+    expect(store().open("2026-no-such-chat")).toBeNull();
+  });
+
+  it("names chats, and keeps a name given while a reply was still being written", () => {
+    const s = store();
+    const c = s.current();
+    s.append(c, { role: "user", text: "can you please look at my screen and tell me what this error is about, it keeps coming back" });
+    expect(displayTitle(store().get(c.id)!)).toBe("can you please look at my screen and tell me what this error…");
+    // Named in the background, then renamed, while `c` (read before) is still being answered.
+    store().patch(c.id, (x) => {
+      x.autoTitle = "Recurring error";
+      x.autoTitleMessages = 1;
+    });
+    s.append(c, { role: "assistant", text: "It's a permissions error." });
+    expect(displayTitle(store().get(c.id)!)).toBe("Recurring error");
+    store().rename(c.id, "  Permissions   bug ");
+    s.append(c, { role: "user", text: "thanks" });
+    const saved = store().get(c.id)!;
+    expect(displayTitle(saved)).toBe("Permissions bug");
+    expect(saved.turns.map((t) => t.role)).toEqual(["user", "assistant", "user"]);
+    expect(messageCount(saved)).toBe(2);
+    store().rename(c.id, "");
+    expect(displayTitle(store().get(c.id)!)).toBe("Recurring error");
+    clock = new Date("2026-09-14T10:01:00Z");
+    expect(displayTitle(store().startNew())).toBe("New chat");
+  });
+
+  it("forgets the old summary when an ended chat is picked up again", () => {
+    const s = store();
+    const c = s.current();
+    s.append(c, { role: "user", text: "hi" });
+    s.patch(c.id, (x) => (x.summary = { text: "They said hi.", model: "rules", at: "" }));
+    clock = new Date("2026-09-15T10:00:00Z");
+    s.open(c.id);
+    s.append(s.current(), { role: "user", text: "back again" });
+    expect(store().get(c.id)?.summary).toBeUndefined();
+    expect(store().get(c.id)?.turns).toHaveLength(2);
   });
 
   it("shows turns to the page without the tool steps", () => {

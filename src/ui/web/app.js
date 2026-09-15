@@ -278,6 +278,10 @@ const thread = $("thread");
 // Hiding the chat keeps it out of the way until you bring it back; it's remembered across summons.
 const HIDE_CHAT = /^(?:please\s+)?(?:hide|close|collapse|minimi[sz]e|put away)\s+(?:the\s+|this\s+)?(?:chat|conversation|thread)[.!]*$/i;
 const SHOW_CHAT = /^(?:please\s+)?(?:show|open|bring back|expand)\s+(?:the\s+|me the\s+)?(?:chat|conversation|thread)[.!]*$/i;
+// Chats by voice: "new chat", "show my chats", "go back to the module 6 chat", "switch to the chat about Campuswire".
+const NEW_CHAT = /^(?:please\s+)?(?:(?:start|open|begin|make|create|go to)\s+(?:a\s+|the\s+)?)?(?:new|fresh)\s+(?:chat|conversation|thread)[.!]*$/i;
+const LIST_CHATS = /^(?:please\s+)?(?:show|open|list|see)\s+(?:me\s+)?(?:my\s+|the\s+|all\s+)?(?:(?:old|past|previous|other|earlier|saved)\s+)?(?:(?:my\s+)?chats|conversations|threads|chat history|conversation history)[.!?]*$/i;
+const SWITCH_CHAT = /^(?:please\s+)?(?:(?:go|switch|jump|move|get)\s+(?:back\s+)?to|back to|open|continue|resume|pull up|bring up)\s+(?:the\s+|my\s+|our\s+)?(?:(?:chat|conversation|thread)\s+(?:about|on|for|called|named|where)\s+(.+?)|(.+?)\s+(?:chat|conversation|thread))[.!?]*$/i;
 let chatHidden = localStorage.getItem("cos.chatHidden") === "1";
 
 function setChatHidden(hidden) {
@@ -289,11 +293,27 @@ function setChatHidden(hidden) {
   if (!hidden) scrollThread();
 }
 
-/** The pill's "chat" button: only while the chat is hidden and there is something in it. */
+/**
+ * The pill's chat button: "chat" while the chat is hidden and has something in it; "chats" when
+ * this chat is still empty but there are others to go back to (the card isn't showing, so it's the way in).
+ */
 function updateShowChat() {
-  $("show-chat").hidden = !(chatHidden && thread.children.length);
+  const btn = $("show-chat");
+  const empty = !thread.children.length;
+  if (chatHidden && !empty) {
+    btn.hidden = false;
+    btn.textContent = "▴ chat";
+    btn.dataset.action = "show";
+  } else if (empty && otherChats && !listOpen) {
+    btn.hidden = false;
+    btn.textContent = "▴ chats";
+    btn.dataset.action = "list";
+    btn.classList.remove("unread");
+  } else btn.hidden = true;
 }
 let conversationId = null;
+let otherChats = false;
+let listOpen = false;
 let busy = false;
 let lastReply = "";
 
@@ -362,14 +382,22 @@ function addTurn(turn) {
   return node;
 }
 
+/** The chat's name in the header, and whether there are other chats to go back to. */
+function showChatInfo(c) {
+  currentTitle = c.title || "Chief of staff";
+  $("answer-title").textContent = listOpen ? "Your chats" : currentTitle;
+  if (typeof c.others === "number") otherChats = c.others > 0;
+  updateShowChat();
+}
+
 function renderThread(c) {
   conversationId = c.id;
   thread.replaceChildren();
   lastReply = "";
   $("answer-model").textContent = "";
   for (const t of c.turns) addTurn(t);
-  $("answer").hidden = !c.turns.length;
-  updateShowChat();
+  $("answer").hidden = !c.turns.length && !listOpen;
+  showChatInfo(c);
 }
 
 /** Show the conversation in progress; after a quiet spell the server has started a new one. */
@@ -377,7 +405,9 @@ async function syncConversation() {
   if (busy) return;
   try {
     const c = await get("/api/conversation");
-    if (!busy && c.id !== conversationId) renderThread(c);
+    if (busy) return;
+    if (c.id !== conversationId) renderThread(c);
+    else showChatInfo(c);
   } catch {
     /* the server is restarting; try again next time */
   }
@@ -385,8 +415,132 @@ async function syncConversation() {
 
 async function newConversation() {
   if (busy) return;
+  closeChats();
   renderThread(await post("/api/conversation/new", {}));
   input.focus();
+}
+
+// ---------- the list of chats ----------
+let chats = [];
+
+function when(iso) {
+  const d = new Date(iso);
+  const days = Math.round((new Date().setHours(0, 0, 0, 0) - new Date(iso).setHours(0, 0, 0, 0)) / 86_400_000);
+  if (days === 0) return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  if (days === 1) return "yesterday";
+  if (days < 7) return d.toLocaleDateString(undefined, { weekday: "short" });
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/** Every saved chat, most recent first, narrowed by what's typed in the filter (name and preview). */
+function renderChats() {
+  const list = $("chats-list");
+  const q = $("chats-filter").value.trim().toLowerCase();
+  const shown = q ? chats.filter((c) => `${c.title}\n${c.preview}`.toLowerCase().includes(q)) : chats;
+  list.replaceChildren();
+  if (!chats.length) list.append(el("li", { class: "chats-note" }, "No saved chats yet. Everything you say here is kept."));
+  else if (!shown.length) list.append(el("li", { class: "chats-note" }, "No chat name matches. Press Enter to search everything said."));
+  for (const c of shown) {
+    const meta = `${when(c.updatedAt)} · ${c.messages} message${c.messages === 1 ? "" : "s"}${c.current ? " · this chat" : ""}`;
+    const open = el("button", { class: "chat-open", type: "button", onclick: () => switchTo({ id: c.id }) },
+      el("div", { class: "chat-name" }, c.title),
+      el("div", { class: "chat-meta" }, meta),
+      c.preview ? el("div", { class: "chat-preview" }, c.preview) : "");
+    const row = el("li", { class: `chat-row${c.current ? " current" : ""}` }, open);
+    row.append(el("button", { class: "chat-rename", type: "button", title: "Rename", "aria-label": `Rename ${c.title}`, onclick: () => renameChat(row, c) }, "✎"));
+    list.append(row);
+  }
+  const unreadable = $("chats").dataset.unreadable;
+  if (Number(unreadable)) list.append(el("li", { class: "chats-note" }, `${unreadable} saved chat${unreadable === "1" ? "" : "s"} couldn't be read.`));
+}
+
+function renameChat(row, c) {
+  const field = el("input", { class: "chat-name-input", type: "text", value: c.title, "aria-label": "Chat name" });
+  const done = async (save) => {
+    if (!field.isConnected) return;
+    if (save && field.value.trim() !== c.title) {
+      const r = await post("/api/conversation/rename", { id: c.id, title: field.value });
+      if (r.title) {
+        c.title = r.title;
+        if (c.id === conversationId && !listOpen) $("answer-title").textContent = r.title;
+      }
+    }
+    renderChats();
+  };
+  field.addEventListener("keydown", (e) => {
+    e.stopPropagation(); // Esc cancels the rename, it doesn't dismiss the pill
+    if (e.key === "Enter") done(true);
+    if (e.key === "Escape") done(false);
+  });
+  field.addEventListener("blur", () => done(true));
+  row.replaceChildren(field);
+  field.focus();
+  field.select();
+}
+
+async function openChats(focusFilter = true) {
+  if (busy) return;
+  listOpen = true;
+  $("answer").dataset.list = "on";
+  $("chats").hidden = false;
+  $("answer").hidden = false;
+  $("answer-title").textContent = "Your chats";
+  if (chatHidden) setChatHidden(false);
+  updateShowChat();
+  try {
+    const r = await get("/api/conversations");
+    chats = r.chats || [];
+    $("chats").dataset.unreadable = String(r.unreadable || 0);
+  } catch {
+    chats = [];
+  }
+  $("chats-filter").value = "";
+  renderChats();
+  if (focusFilter) $("chats-filter").focus();
+}
+
+function closeChats() {
+  if (!listOpen) return;
+  listOpen = false;
+  $("answer").dataset.list = "off";
+  $("chats").hidden = true;
+  $("answer").hidden = !thread.children.length;
+  $("answer-title").textContent = currentTitle;
+  updateShowChat();
+}
+
+let currentTitle = "Chief of staff";
+
+/** Pick up a chat by id, or by a few words ("module 6", "the last one"). Null when none matches. */
+async function switchTo(which) {
+  if (busy) return null;
+  let r;
+  try {
+    r = await post("/api/conversation/open", which);
+  } catch {
+    return null;
+  }
+  if (r.error) {
+    if (which.id) setState("idle", r.error);
+    return null;
+  }
+  closeChats();
+  renderThread(r);
+  input.focus();
+  return r;
+}
+
+/** A short note in the pill that clears itself. */
+function flash(text) {
+  setState("idle", text);
+  setTimeout(() => {
+    if (pill.dataset.state === "idle" && status.textContent === text) status.textContent = "";
+  }, 4000);
+}
+
+/** After a reply, the chat may get its name in the background: show it when it lands. */
+function refreshTitleSoon() {
+  for (const ms of [4000, 12000]) setTimeout(syncConversation, ms);
 }
 
 /** POST and read newline-delimited JSON events as they arrive; returns the final result. */
@@ -454,6 +608,8 @@ async function send(body, thinking, fromVoice = false) {
   scrollThread();
   if (chatHidden && r.text) $("show-chat").classList.add("unread");
   if (r.changes) markStale();
+  if (r.title && r.conversation === conversationId) showChatInfo({ title: r.title });
+  refreshTitleSoon();
   busy = false;
   setState("idle");
   // Spoken questions get spoken replies, then the mic reopens for the answer.
@@ -473,6 +629,31 @@ async function submit(text, fromVoice = false) {
     setState("idle");
     return;
   }
+  if (NEW_CHAT.test(t)) {
+    input.value = "";
+    await newConversation();
+    flash("New chat");
+    if (fromVoice && (await speakText("New chat."))) listenForReply();
+    return;
+  }
+  if (LIST_CHATS.test(t)) {
+    input.value = "";
+    await openChats(!fromVoice);
+    setState("idle");
+    return;
+  }
+  const asked = SWITCH_CHAT.exec(t);
+  if (asked) {
+    const r = await switchTo({ query: asked[1] || asked[2] });
+    if (r) {
+      input.value = "";
+      flash(`Back in “${r.title || "that chat"}”`);
+      if (fromVoice && (await speakText(`Back in ${r.title || "that chat"}.`))) listenForReply();
+      return;
+    }
+    // No chat matches: it may mean something else ("open the Slack chat"), so ask as usual.
+  }
+  if (listOpen) closeChats();
   // A typed question needs its answer on screen; a spoken one is heard, so the chat can stay hidden.
   if (!fromVoice && chatHidden) setChatHidden(false);
   if (fromVoice && DONE_TALKING.test(t)) {
@@ -607,8 +788,25 @@ $("btn-refresh").addEventListener("click", () => loadBrief(true));
 $("btn-speak").addEventListener("click", () => speakText($("panel").dataset.speech || ""));
 $("answer-speak").addEventListener("click", () => speakText(lastReply));
 $("new-chat").addEventListener("click", newConversation);
+$("chats-btn").addEventListener("click", () => (listOpen ? closeChats() : openChats()));
+$("answer-title").addEventListener("click", () => (listOpen ? closeChats() : openChats()));
+$("chats-filter").addEventListener("input", renderChats);
+$("chats-filter").addEventListener("keydown", async (e) => {
+  if (e.key === "Escape") {
+    e.stopPropagation();
+    closeChats();
+    input.focus();
+  }
+  if (e.key !== "Enter") return;
+  const q = $("chats-filter").value.trim();
+  if (!q) return;
+  // Enter searches everything said in every chat, not just the names shown.
+  if (!(await switchTo({ query: q }))) {
+    $("chats-list").prepend(el("li", { class: "chats-note" }, `Nothing said in any chat matches “${q}”.`));
+  }
+});
 $("hide-chat").addEventListener("click", () => setChatHidden(true));
-$("show-chat").addEventListener("click", () => setChatHidden(false));
+$("show-chat").addEventListener("click", () => ($("show-chat").dataset.action === "list" ? openChats() : setChatHidden(false)));
 setChatHidden(chatHidden);
 $("mode").addEventListener("click", () => {
   inputMode = inputMode === "auto" ? "ask" : inputMode === "ask" ? "capture" : "auto";
@@ -625,6 +823,10 @@ document.addEventListener("keydown", (e) => {
   if (e.metaKey && e.key.toLowerCase() === "n") {
     e.preventDefault();
     newConversation();
+  }
+  if (e.metaKey && e.key.toLowerCase() === "y") {
+    e.preventDefault();
+    listOpen ? closeChats() : openChats();
   }
   if (e.key === "Escape") {
     window.cosShell.dismiss();

@@ -2,8 +2,9 @@
  * Short-term memory: the conversation in progress. Every exchange in the pill
  * is saved under ~/.cos/conversations and replayed to the model with the next
  * message, so follow-ups ("and tomorrow?", "open the second one", "yes, save
- * that") make sense. A conversation ends when you start a new one or after a
- * quiet spell; long-term memory stays in selfhub.
+ * that") make sense. A conversation ends when you start a new one, switch to
+ * another, or after a quiet spell; any saved one can be picked up again.
+ * Long-term memory stays in selfhub.
  */
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -44,6 +45,27 @@ export interface Conversation {
   summary?: ConversationSummary;
   /** The last failed attempt to summarise, so a broken model isn't retried on every message. */
   summaryFailedAt?: string;
+  /** The name they gave it. */
+  title?: string;
+  /** A short name the model gave it from its first messages (see recall.ts), until they name it. */
+  autoTitle?: string;
+  /** How many of their messages the model had seen when it named it. */
+  autoTitleMessages?: number;
+  titleFailedAt?: string;
+}
+
+/** What the list of chats calls it: their name, the model's, or the start of what they first said. */
+export function displayTitle(c: Conversation): string {
+  if (c.title) return c.title;
+  if (c.autoTitle) return c.autoTitle;
+  const first = c.turns.find((t) => t.role === "user")?.text.replace(/\s+/g, " ").trim();
+  if (!first) return "New chat";
+  return first.length > 60 ? `${first.slice(0, 60).trimEnd()}…` : first;
+}
+
+/** Their messages in a conversation. */
+export function messageCount(c: Conversation): number {
+  return c.turns.filter((t) => t.role === "user").length;
 }
 
 export interface ConversationSummary {
@@ -68,6 +90,31 @@ export class Conversations {
 
   private file(id: string): string {
     return join(this.dir, `${id}.json`);
+  }
+
+  /** The conversation picked last (started, or switched to) and when; not a .json, so it's never listed. */
+  private get pointerFile(): string {
+    return join(this.dir, ".active");
+  }
+
+  private chosen(): { id: string; at: string } | null {
+    try {
+      const p = JSON.parse(readFileSync(this.pointerFile, "utf8")) as { id?: unknown; at?: unknown };
+      return typeof p.id === "string" && typeof p.at === "string" ? { id: p.id, at: p.at } : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private choose(id: string): void {
+    mkdirSync(this.dir, { recursive: true });
+    writeFileSync(this.pointerFile, JSON.stringify({ id, at: this.now().toISOString() }), { mode: 0o600 });
+  }
+
+  /** One saved conversation by id, or null (unknown, damaged, or not a valid id). */
+  get(id: string): Conversation | null {
+    if (!/^[\w-]+$/.test(id)) return null;
+    return this.read(`${id}.json`);
   }
 
   /** File names newest first: ids start with the start time. */
@@ -95,6 +142,11 @@ export class Conversations {
     return null;
   }
 
+  /** How many conversation files are saved (without reading them), empty ones included. */
+  count(): number {
+    return this.names().length;
+  }
+
   /** Every saved conversation, newest first. Damaged files are skipped and counted. */
   list(): { conversations: Conversation[]; unreadable: number } {
     const conversations: Conversation[] = [];
@@ -112,6 +164,27 @@ export class Conversations {
     this.save(c);
   }
 
+  /**
+   * Change a saved conversation as it is on disk now, not as it was read earlier: background
+   * work (summaries, titles) takes seconds, and new messages may have been saved meanwhile.
+   */
+  patch(id: string, change: (c: Conversation) => void): Conversation | null {
+    const c = this.get(id);
+    if (!c) return null;
+    change(c);
+    this.save(c);
+    return c;
+  }
+
+  /** Name a conversation; an empty name goes back to the automatic one. */
+  rename(id: string, title: string): Conversation | null {
+    const name = title.replace(/\s+/g, " ").trim().slice(0, 80);
+    return this.patch(id, (c) => {
+      if (name) c.title = name;
+      else delete c.title;
+    });
+  }
+
   private create(): Conversation {
     const at = this.now().toISOString();
     const id = `${at.replace(/[:.]/g, "-")}-${randomBytes(3).toString("hex")}`;
@@ -125,28 +198,59 @@ export class Conversations {
     renameSync(tmp, this.file(c.id));
   }
 
-  /** The conversation in progress, or a fresh one (not saved until something is said) if the last went quiet. */
+  /**
+   * The conversation in progress: whichever of the one picked last and the newest one was active
+   * most recently (switching to an old one counts as activity). A fresh one (not saved until
+   * something is said) if that went quiet.
+   */
   current(): Conversation {
-    const last = this.latest();
-    if (!last) return this.create();
-    const quietFor = this.now().getTime() - new Date(last.updatedAt).getTime();
+    const pick = this.chosen();
+    const picked = pick ? this.get(pick.id) : null;
+    const latest = this.latest();
+    const activeAt = (c: Conversation) => Math.max(new Date(c.updatedAt).getTime(), c.id === pick?.id ? new Date(pick.at).getTime() : 0);
+    const candidates = [picked, latest].filter((c): c is Conversation => c !== null);
+    if (!candidates.length) return this.create();
+    const last = candidates.reduce((a, b) => (activeAt(b) > activeAt(a) ? b : a));
+    const quietFor = this.now().getTime() - activeAt(last);
     return quietFor < this.idleMinutes * 60_000 ? last : this.create();
   }
 
   /** End the conversation in progress and begin a new one. */
   startNew(): Conversation {
     const last = this.latest();
-    if (last && !last.turns.length) return last;
+    if (last && !last.turns.length) {
+      this.choose(last.id);
+      return last;
+    }
     const c = this.create();
     this.save(c);
+    this.choose(c.id);
     return c;
   }
 
-  /** Add turns to a conversation and save it. */
+  /** Pick up a saved conversation where it left off. Null if there's no such conversation. */
+  open(id: string): Conversation | null {
+    const c = this.get(id);
+    if (c) this.choose(c.id);
+    return c;
+  }
+
+  /** Add turns to a conversation and save it, on top of whatever is saved for it now. */
   append(c: Conversation, ...turns: Omit<Turn, "at">[]): Conversation {
     const at = this.now().toISOString();
+    const saved = this.get(c.id);
+    if (saved) {
+      // A name given since it was read (renamed, or named in the background) is kept.
+      for (const key of ["title", "autoTitle", "autoTitleMessages", "titleFailedAt"] as const) {
+        if (saved[key] === undefined) delete c[key];
+        else (c as unknown as Record<string, unknown>)[key] = saved[key];
+      }
+    }
     c.turns.push(...turns.map((t) => ({ ...t, at })));
     c.updatedAt = at;
+    // Picked up again after it ended: the old summary no longer covers it, so it's written again when it ends.
+    delete c.summary;
+    delete c.summaryFailedAt;
     this.save(c);
     return c;
   }

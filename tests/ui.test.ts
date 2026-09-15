@@ -223,7 +223,38 @@ describe("ui server (offline)", () => {
     const fresh = await (await post({}, "/api/conversation/new")).json();
     expect(fresh.id).not.toBe(first.conversation);
     expect(fresh.turns).toEqual([]);
+    expect(fresh).toMatchObject({ title: null, others: 1 });
     expect((await (await fetch(`${base}/api/conversation`)).json()).id).toBe(fresh.id);
+
+    // Different chats for different things: list them, go back to one, and it carries on there.
+    const dean = await (await post({ text: "remind me monday to email the dean" })).json();
+    expect(dean.conversation).toBe(fresh.id);
+    const listed = await (await fetch(`${base}/api/conversations`)).json();
+    expect(listed.chats.map((c: { title: string; messages: number; current: boolean }) => [c.title, c.messages, c.current])).toEqual([
+      ["remind me monday to email the dean", 1, true],
+      ["open slate", 2, false],
+    ]);
+    expect(listed.chats[1].preview).toBe("Reminder set for 2026-09-18: call the bank");
+
+    const back = await (await post({ id: first.conversation }, "/api/conversation/open")).json();
+    expect(back).toMatchObject({ id: first.conversation, title: "open slate", others: 1 });
+    expect(back.turns).toHaveLength(4);
+    const more = await (await post({ text: "open slate" })).json();
+    expect(more.conversation).toBe(first.conversation);
+
+    const renamed = await (await post({ id: first.conversation, title: "Errands" }, "/api/conversation/rename")).json();
+    expect(renamed).toEqual({ id: first.conversation, title: "Errands", named: true });
+    const byWords = await (await post({ query: "the dean one" }, "/api/conversation/open")).json();
+    expect(byWords.id).toBe(fresh.id);
+    expect((await (await fetch(`${base}/api/conversation`)).json()).id).toBe(fresh.id);
+    const byName = await (await post({ query: "errands" }, "/api/conversation/open")).json();
+    expect(byName).toMatchObject({ id: first.conversation, title: "Errands" });
+
+    const none = await post({ query: "kubernetes" }, "/api/conversation/open");
+    expect(none.status).toBe(404);
+    expect((await none.json()).error).toBe('No chat matches "kubernetes".');
+    expect((await post({ id: "../../secrets" }, "/api/conversation/open")).status).toBe(404);
+    expect((await post({ id: "nope", title: "x" }, "/api/conversation/rename")).status).toBe(404);
   });
 
   it("lets the menubar use any model: tries it first, keeps it in the list, changes nothing when it fails", async () => {

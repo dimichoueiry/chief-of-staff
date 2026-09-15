@@ -6,7 +6,7 @@
  */
 import type { ModelSpec } from "./llm/registry.js";
 import type { LLMProvider } from "./llm/types.js";
-import { Conversations, localStamp, type Conversation, type Turn } from "./conversation.js";
+import { Conversations, displayTitle, localStamp, type Conversation, type Turn } from "./conversation.js";
 import { formatSpec } from "./llm/registry.js";
 import { ACTIONS, WRITES } from "./tools.js";
 import { addDays, todayISO } from "../util/dates.js";
@@ -182,6 +182,45 @@ export function searchConversations(store: Conversations, o: SearchOptions = {})
   ].join("\n");
 }
 
+/** A line under a chat's name in the list: the model's summary, or the last reply. Shortened for display only, with "…". */
+export function chatPreview(c: Conversation): string {
+  const plain = (s: string) => clip(oneLine(s.replace(/\*\*|__|`/g, "").replace(/^\s*(?:[-*]|\d+\.)\s+/gm, "")), 160);
+  if (c.summary && c.summary.model !== "rules") return plain(c.summary.text);
+  const last = [...c.turns].reverse().find((t) => t.role === "assistant" && t.kind !== "error");
+  return plain(last?.text ?? ""); // a rules summary only repeats what was said
+}
+
+const CHAT_WORDS = new Set(["chat", "chats", "conversation", "conversations", "thread", "called", "named", "where", "from", "our"]);
+const PREVIOUS = /^(?:(?:the|my|our)\s+)?(?:last|previous|other|earlier|old)(?:\s+(?:one|chat|conversation|thread))?$/i;
+const NUMBER_WORDS: Record<string, string> = { one: "1", two: "2", three: "3", four: "4", five: "5", six: "6", seven: "7", eight: "8", nine: "9", ten: "10" };
+const numerals = (s: string) => s.toLowerCase().replace(/\b(one|two|three|four|five|six|seven|eight|nine|ten)\b/g, (w) => NUMBER_WORDS[w]);
+
+/**
+ * The saved chat someone means by a few words ("module six", "the Campuswire one", "the last one"):
+ * every word has to appear in its name or anywhere in what was said; matches in the name rank first,
+ * then the most recently active. Searches every saved conversation in full. Null when none fits.
+ */
+export function findConversation(store: Conversations, query: string, o: { excludeId?: string } = {}): Conversation | null {
+  const chats = store.list().conversations.filter((c) => spoke(c) && c.id !== o.excludeId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  if (PREVIOUS.test(query.trim())) return chats[0] ?? null;
+  // "the Campuswire one": a trailing "one" means the chat, not the number.
+  const words = numerals(query.trim().replace(/(\S)\s+one$/i, "$1"))
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((w) => w && !STOP.has(w) && !CHAT_WORDS.has(w));
+  if (!words.length) return null;
+  // Words match from the start of a word: "campus" finds "Campuswire", "6" doesn't find "2026".
+  const patterns = words.map((w) => new RegExp(`(?<![\\p{L}\\p{N}])${w}`, "u"));
+  let best: { c: Conversation; inName: number } | null = null;
+  for (const c of chats) {
+    const name = numerals(displayTitle(c));
+    const said = numerals([c.summary?.text ?? "", ...c.turns.map((t) => t.text)].join("\n"));
+    if (!patterns.every((p) => p.test(name) || p.test(said))) continue;
+    const inName = patterns.filter((p) => p.test(name)).length;
+    if (!best || inName > best.inName) best = { c, inName }; // ties keep the more recent one
+  }
+  return best?.c ?? null;
+}
+
 /** One model call: a few lines that describe a finished conversation. */
 export async function summarizeConversation(c: Conversation, llm: { provider: LLMProvider; spec: ModelSpec }, now: Date = new Date()): Promise<Conversation["summary"]> {
   const t = transcript(c);
@@ -221,24 +260,87 @@ export async function summarizeEnded(
   let summarized = 0;
   let failed = 0;
   let modelCalls = 0;
+  // Saved onto the conversation as it is now, and only if nothing was said in it meanwhile (it can be picked up again).
+  const save = (c: Conversation, change: (fresh: Conversation) => void) =>
+    store.patch(c.id, (fresh) => {
+      if (fresh.updatedAt === c.updatedAt) change(fresh);
+    });
+
   for (const c of pending) {
     if (transcript(c).text.length < TRIVIAL_CHARS) {
-      c.summary = { text: digest(c), model: "rules", at: now.toISOString() };
-      store.update(c);
+      const summary = { text: digest(c), model: "rules", at: now.toISOString() };
+      save(c, (fresh) => (fresh.summary = summary));
       summarized++;
       continue;
     }
     if (!llm || modelCalls >= limit) continue;
     modelCalls++;
     try {
-      c.summary = await summarizeConversation(c, llm, now);
-      delete c.summaryFailedAt;
+      const summary = await summarizeConversation(c, llm, now);
+      save(c, (fresh) => {
+        fresh.summary = summary;
+        delete fresh.summaryFailedAt;
+      });
       summarized++;
     } catch {
-      c.summaryFailedAt = now.toISOString();
+      save(c, (fresh) => (fresh.summaryFailedAt = now.toISOString()));
       failed++;
     }
-    store.update(c);
   }
   return { summarized, failed, waiting: pending.length - summarized - failed };
+}
+
+const TITLE_PROMPT = `Name this conversation for the user's list of chats, so they can find it again: 2 to 5 words, like "Module 6 review" or "Campuswire favorites access". Name the main topic, not greetings or small talk. Plain text only: no quotes, no trailing period.`;
+
+/** Their first few messages are when a chat's topic becomes clear; after that the name stays. */
+const TITLE_UNTIL_MESSAGES = 3;
+
+/**
+ * Give chats a short name from what was said so far, while they're new: after
+ * their first, second and third message. A name they gave is never replaced.
+ */
+export async function nameConversations(
+  store: Conversations,
+  llm: { provider: LLMProvider; spec: ModelSpec } | null,
+  o: { limit?: number; days?: number; now?: Date } = {},
+): Promise<{ named: number; failed: number }> {
+  if (!llm) return { named: 0, failed: 0 };
+  const now = o.now ?? new Date();
+  const since = addDays(todayISO(now), -(o.days ?? 30));
+  const retryAfter = now.getTime() - 6 * 3_600_000;
+  const due = store.list().conversations.filter((c) => {
+    const said = c.turns.filter((t) => t.role === "user").length;
+    const seen = c.autoTitleMessages ?? 0;
+    return !c.title && said > seen && seen < TITLE_UNTIL_MESSAGES && span(c).to >= since && c.turns.some((t) => t.role === "assistant") &&
+      !(c.titleFailedAt && new Date(c.titleFailedAt).getTime() > retryAfter);
+  });
+  let named = 0;
+  let failed = 0;
+  for (const c of due.slice(0, o.limit ?? 3)) {
+    const said = c.turns.filter((t) => t.role === "user").length;
+    try {
+      const res = await llm.provider.chat({
+        model: llm.spec.model,
+        instructions: TITLE_PROMPT,
+        context: "The conversation follows as the user message.",
+        messages: [{ role: "user", content: transcript(c).text }],
+        tools: [],
+        effort: "low",
+        maxTokens: 400,
+      });
+      const title = clip(oneLine(res.text).replace(/^["“'`]+|["”'`.]+$/g, ""), 60);
+      if (!title) throw new Error("empty title");
+      store.patch(c.id, (fresh) => {
+        if (fresh.title) return;
+        fresh.autoTitle = title;
+        fresh.autoTitleMessages = said;
+        delete fresh.titleFailedAt;
+      });
+      named++;
+    } catch {
+      store.patch(c.id, (fresh) => (fresh.titleFailedAt = now.toISOString()));
+      failed++;
+    }
+  }
+  return { named, failed };
 }

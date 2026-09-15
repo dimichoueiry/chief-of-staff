@@ -112,6 +112,17 @@ filed, and what it opened (even the instant "open …" requests that never touch
   brings it back (you'll want to read the answer), a spoken one doesn't (you'll hear it).
 - **＋ new** (or ⌘N) starts a fresh conversation. After two quiet hours the next message starts one on its own
   (`COS_CONVERSATION_IDLE_MINUTES`).
+- **chats** (or ⌘Y, or clicking the chat's name) lists every saved chat, most recent first, so you can keep
+  different chats for different things. Click one to pick it up where it left off; ✎ renames it. Typing
+  filters by name, and Enter searches everything said in every chat. When the card is closed, **▴ chats**
+  on the pill opens the list.
+- Chats name themselves: the model gives each a 2–5 word name from its first three messages ("Module 6
+  review"). A name you give is never replaced.
+- By voice: "new chat", "show my chats", "go back to the module 6 chat", "switch to the chat about
+  Campuswire", "go back to the last chat". The name or anything said in the chat counts. If no chat
+  matches, it's asked like any other message.
+- Picking up an old chat counts as activity, so it doesn't start over right away. Its old summary is
+  dropped and rewritten when it ends again.
 - Conversations are saved in `~/.cos/conversations`, so restarting the app doesn't lose the thread.
   Only the most recent exchanges that fit a size budget are sent to the model.
 

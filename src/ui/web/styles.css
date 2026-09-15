@@ -92,13 +92,37 @@ body {
 .answer { width: min(560px, 100%); background: rgba(26, 29, 37, 0.96); border: 1px solid var(--line); border-radius: 16px; padding: 14px 18px 16px; box-shadow: 0 20px 60px rgba(0,0,0,.4); }
 .answer-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-weight: 600; }
 .answer-head .spark { color: var(--accent); }
-.answer-head #answer-title { white-space: nowrap; }
+.answer-head #answer-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: 45%; cursor: pointer; }
 .answer-head .model { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-weight: 400; font-size: 12px; font-family: var(--mono); }
 .answer-head .chip { white-space: nowrap; }
 .answer-head .chip.icon { padding: 3px 10px; font-size: 15px; line-height: 1.2; color: #d6dae2; }
 
 /* Hidden chat: the card goes away (the window shrinks with it); the pill keeps a way back. */
 html[data-chat="hidden"] .answer { display: none; }
+
+/* the list of chats, in place of the thread */
+.answer[data-list="on"] .thread, .answer[data-list="on"] #answer-speak, .answer[data-list="on"] .model { display: none; }
+.answer[data-list="on"] .answer-head { justify-content: flex-start; }
+.answer[data-list="on"] #answer-title { flex: 1; max-width: none; }
+.answer[data-list="on"] #chats-btn { background: var(--surface-active); color: var(--accent); border-color: #5a4630; }
+.chats { display: flex; flex-direction: column; gap: 8px; }
+.chats[hidden] { display: none; }
+.chats-filter, .chat-name-input { width: 100%; background: #1a1d24; border: 1px solid var(--line); border-radius: 8px; color: var(--text); font: inherit; font-size: 13px; padding: 6px 10px; outline: none; }
+.chats-filter:focus, .chat-name-input:focus { border-color: #5a4630; }
+.chats-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 50vh; overflow-y: auto; overscroll-behavior: contain; }
+.chat-row { display: flex; align-items: flex-start; gap: 4px; border-radius: 10px; }
+.chat-row:hover { background: #242833; }
+.chat-row.current { background: var(--surface-active); }
+.chat-open { flex: 1; min-width: 0; text-align: left; background: none; border: 0; color: inherit; font: inherit; padding: 7px 10px; cursor: pointer; }
+.chat-name { font-size: 14px; font-weight: 600; color: #e6e9ee; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-meta { font: 11px var(--mono); color: var(--muted); }
+.chat-row.current .chat-meta { color: var(--accent); }
+.chat-preview { font-size: 12.5px; color: #aab0bb; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-rename { flex: none; margin: 8px 8px 0 0; background: none; border: 0; color: var(--muted); font-size: 13px; cursor: pointer; opacity: 0; border-radius: 6px; padding: 2px 6px; }
+.chat-row:hover .chat-rename, .chat-rename:focus { opacity: 1; }
+.chat-rename:hover { color: var(--text); background: #343947; }
+.chat-row .chat-name-input { margin: 6px 8px; }
+.chats-note { color: var(--muted); font-size: 12.5px; padding: 6px 10px; }
 .pill .show-chat { position: relative; font: 12px var(--mono); color: var(--accent); background: #231f18; border: 1px solid #5a4630; border-radius: 999px; padding: 4px 9px; cursor: pointer; white-space: nowrap; }
 .pill .show-chat[hidden] { display: none; }
 .pill .show-chat.unread::after { content: ""; position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border-radius: 50%; background: var(--attention); }
@@ -181,6 +205,7 @@ html[data-shell="1"] .stage { min-height: 0; padding: 14px 22px 16px; gap: 12px;
 html[data-shell="1"] .panel { max-height: 620px; overflow-y: auto; box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45); }
 html[data-shell="1"] .answer { box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4); }
 html[data-shell="1"] .thread { max-height: 380px; }
+html[data-shell="1"] .chats-list { max-height: 340px; }
 html[data-shell="1"] .pill { position: static; transform: none; width: 100%; max-width: 640px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
 html[data-shell="1"] .pill kbd { display: none; }
 .pill .menu { display: none; }

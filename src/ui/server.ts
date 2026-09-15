@@ -10,12 +10,12 @@ import {
   MODEL_INTENTS, PROVIDERS, PROVIDER_ORDER, forgetModel, formatSpec, parseModelSpec, presets, providerConfigured,
   readModelSettings, rememberModel, resolveModel, setModel, testModel, type ModelIntent,
 } from "../brain/llm/registry.js";
-import { Conversations, conversationsDir, eventsSinceReply, historyMessages, visibleTurns, withEvents, type Conversation, type Turn } from "../brain/conversation.js";
+import { Conversations, conversationsDir, displayTitle, eventsSinceReply, historyMessages, messageCount, visibleTurns, withEvents, type Conversation, type Turn } from "../brain/conversation.js";
 import type { LLMProvider, ChatMessage } from "../brain/llm/types.js";
 import type { ModelSpec } from "../brain/llm/registry.js";
 import { providerFor, runIntent } from "../brain/loop.js";
 import { WRITES } from "../brain/tools.js";
-import { renderRecall, summarizeEnded } from "../brain/recall.js";
+import { chatPreview, findConversation, nameConversations, renderRecall, summarizeEnded } from "../brain/recall.js";
 import type { Brief } from "../brain/schema.js";
 import type { Config } from "../config.js";
 import { buildContext } from "../core/context.js";
@@ -264,10 +264,15 @@ export function createUiServer(o: UiOptions): Server {
   const deps = { run: openRunner, shell: o.shell, agentGrid: o.agentGrid };
   let pillQueue: Promise<unknown> = Promise.resolve();
   let summarizing = false;
+  let summarizeAgain = false;
 
-  /** Write summaries for conversations that just ended, without holding up the reply. */
+  /** Name new chats and write summaries for conversations that just ended, without holding up the reply. */
   function summarizeSoon(): void {
-    if (o.backgroundSummaries === false || summarizing) return;
+    if (o.backgroundSummaries === false) return;
+    if (summarizing) {
+      summarizeAgain = true; // a chat that just got its first reply shouldn't wait for the next message to be named
+      return;
+    }
     summarizing = true;
     let llm: { provider: LLMProvider; spec: ModelSpec } | null = null;
     try {
@@ -275,11 +280,23 @@ export function createUiServer(o: UiOptions): Server {
     } catch {
       /* no model: short conversations are still recorded from their own words */
     }
-    summarizeEnded(conversations, llm)
+    nameConversations(conversations, llm)
+      .catch((err) => console.error(`chat names: ${(err as Error).message}`))
+      .then(() => summarizeEnded(conversations, llm))
       .catch((err) => console.error(`conversation summaries: ${(err as Error).message}`))
       .finally(() => {
         summarizing = false;
+        if (summarizeAgain) {
+          summarizeAgain = false;
+          summarizeSoon();
+        }
       });
+  }
+
+  /** A conversation as the page shows it: its turns, its name once something was said, and whether there are others to go back to. */
+  function shownConversation(c: Conversation) {
+    const others = conversations.count() - (conversations.get(c.id) ? 1 : 0);
+    return { id: c.id, title: messageCount(c) ? displayTitle(c) : null, turns: visibleTurns(c), others };
   }
 
   /** One message in the pill: remembered with its reply, and answered with the conversation so far. */
@@ -322,7 +339,7 @@ export function createUiServer(o: UiOptions): Server {
     );
     summarizeSoon();
     const { steps: _steps, done: _done, ...shown } = reply;
-    return { status: 200, body: { ...shown, conversation: convo.id, user: said } };
+    return { status: 200, body: { ...shown, conversation: convo.id, title: displayTitle(convo), user: said } };
   }
 
   /** What the last reply left waiting that can still be done. */
@@ -564,12 +581,39 @@ export function createUiServer(o: UiOptions): Server {
       }
       case "GET /api/conversation": {
         const c = conversations.current();
-        return json(res, 200, { id: c.id, turns: visibleTurns(c) });
+        return json(res, 200, shownConversation(c));
       }
       case "POST /api/conversation/new": {
         const c = conversations.startNew();
         summarizeSoon();
-        return json(res, 200, { id: c.id, turns: visibleTurns(c) });
+        return json(res, 200, shownConversation(c));
+      }
+      case "GET /api/conversations": {
+        // Every saved chat they said something in, most recently active first: no cap, so none goes missing.
+        const current = conversations.current();
+        const { conversations: all, unreadable } = conversations.list();
+        const chats = all
+          .filter((c) => messageCount(c) > 0)
+          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+          .map((c) => ({ id: c.id, title: displayTitle(c), named: Boolean(c.title), startedAt: c.startedAt, updatedAt: c.updatedAt, messages: messageCount(c), preview: chatPreview(c), current: c.id === current.id }));
+        return json(res, 200, { current: current.id, chats, unreadable });
+      }
+      case "POST /api/conversation/open": {
+        // By id from the list, or by a few words ("the module 6 one") when asked by voice.
+        const b = await body(req);
+        const query = String(b.query ?? "").trim();
+        const current = conversations.current();
+        const found = b.id ? conversations.get(String(b.id)) : query ? findConversation(conversations, query, { excludeId: current.id }) : null;
+        if (!found) return json(res, 404, { error: query ? `No chat matches "${query}".` : "That chat isn't saved anymore." });
+        const c = conversations.open(found.id)!;
+        if (c.id !== current.id) summarizeSoon(); // the one they left has ended
+        return json(res, 200, shownConversation(c));
+      }
+      case "POST /api/conversation/rename": {
+        const b = await body(req);
+        const c = conversations.rename(String(b.id ?? ""), String(b.title ?? ""));
+        if (!c) return json(res, 404, { error: "That chat isn't saved anymore." });
+        return json(res, 200, { id: c.id, title: displayTitle(c), named: Boolean(c.title) });
       }
       case "POST /api/actions/confirm": {
         const b = await body(req);

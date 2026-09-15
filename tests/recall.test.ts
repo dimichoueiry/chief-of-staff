@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Conversations, type Conversation, type Turn } from "../src/brain/conversation.js";
 import type { ChatRequest, ChatResponse, LLMProvider } from "../src/brain/llm/types.js";
-import { digest, renderRecall, searchConversations, summarizeEnded, transcript } from "../src/brain/recall.js";
+import { digest, findConversation, nameConversations, renderRecall, searchConversations, summarizeEnded, transcript } from "../src/brain/recall.js";
 import { ToolRuntime } from "../src/brain/tools.js";
 import { loadConfig } from "../src/config.js";
 import { todayISO } from "../src/util/dates.js";
@@ -181,5 +181,88 @@ describe("recall across conversations", () => {
     clock = new Date(on("2026-09-14", 23));
     expect(await summarizeEnded(store, null, { now: clock })).toEqual({ summarized: 0, failed: 0, waiting: 1 });
     expect(todayISO(clock)).toBe("2026-09-14");
+  });
+
+  it("never saves a summary over a chat that was picked up again while it was being written", async () => {
+    const said = `let's plan the roadmap ${"details ".repeat(60)}`;
+    const ended = past("2026-09-10", [{ role: "user", text: said }, { role: "assistant", text: "Here's a plan." }]);
+    const provider: LLMProvider = {
+      id: "openai",
+      async chat() {
+        clock = new Date(on("2026-09-14", 10));
+        store.open(ended.id);
+        store.append(store.current(), { role: "user", text: "back to the roadmap" }); // said during the model call
+        return { text: "They planned the roadmap.", toolCalls: [], stop: "end", model: "x" };
+      },
+    };
+    clock = new Date(on("2026-09-14", 9));
+    await summarizeEnded(store, { provider, spec: { provider: "openai", model: "gpt-test" } }, { now: clock });
+    const saved = store.list().conversations.find((c) => c.id === ended.id)!;
+    expect(saved.summary).toBeUndefined();
+    expect(saved.turns.map((t) => t.text)).toEqual([said, "Here's a plan.", "back to the roadmap"]);
+  });
+
+  it("finds the chat someone means by a few words: by its name first, then anything said in it", () => {
+    const review = past("2026-09-10", [{ role: "user", text: "review module six for me" }, { role: "assistant", text: "It needs a recovery section." }]);
+    const favorites = past("2026-09-11", [{ role: "user", text: "open campuswire from my UIUC favorites" }, { role: "assistant", text: "Opened Campuswire." }]);
+    const cache = past("2026-09-12", [{ role: "user", text: "what did we decide about redis?" }, { role: "assistant", text: "Module 6 says Redis can go stale." }]);
+    store.rename(review.id, "Module 6 review");
+
+    expect(findConversation(store, "module 6")?.id).toBe(review.id); // in its name beats a newer chat that mentions it
+    expect(findConversation(store, "the module six one")?.id).toBe(review.id);
+    expect(findConversation(store, "campus")?.id).toBe(favorites.id); // from the start of a word
+    expect(findConversation(store, "wire")).toBeNull(); // never from inside one
+    expect(findConversation(store, "stale redis")?.id).toBe(cache.id); // anything said in it
+    expect(findConversation(store, "module 6 kubernetes")).toBeNull(); // every word has to be there
+    expect(findConversation(store, "the last one", { excludeId: cache.id })?.id).toBe(favorites.id);
+    expect(findConversation(store, "module 6", { excludeId: review.id })?.id).toBe(cache.id);
+    expect(findConversation(store, "chat")).toBeNull();
+  });
+
+  it("names new chats from their first messages, then leaves the name alone", async () => {
+    const requests: ChatRequest[] = [];
+    let replies: Array<ChatResponse | Error> = [];
+    const provider: LLMProvider = {
+      id: "openai",
+      async chat(req) {
+        requests.push(structuredClone(req));
+        const next = replies.shift();
+        if (!next || next instanceof Error) throw next ?? new Error("script exhausted");
+        return next;
+      },
+    };
+    const llm = { provider, spec: { provider: "openai" as const, model: "gpt-test" } };
+    const answer = (text: string): ChatResponse => ({ text, toolCalls: [], stop: "end", model: "x" });
+
+    const named = past("2026-09-10", [{ role: "user", text: "hi" }, { role: "assistant", text: "Hello." }]);
+    store.rename(named.id, "Mine");
+    const favorites = past("2026-09-11", [{ role: "user", text: "open campuswire" }, { role: "assistant", text: "Opened." }]);
+    clock = new Date(on("2026-09-14", 10));
+    const live = store.startNew();
+    store.append(live, { role: "user", text: "look at the module 6 quizzes" });
+    expect(await nameConversations(store, llm, { now: clock })).toEqual({ named: 0, failed: 1 }); // no reply yet: only the older one is due, and it fails
+    expect(requests).toHaveLength(1);
+
+    store.append(live, { role: "assistant", text: "Two quizzes are missing." });
+    replies = [answer('"Module 6 quizzes."')];
+    expect(await nameConversations(store, llm, { now: clock })).toEqual({ named: 1, failed: 0 }); // the failed one waits six hours
+    const byId = () => new Map(store.list().conversations.map((c) => [c.id, c]));
+    expect(byId().get(live.id)).toMatchObject({ autoTitle: "Module 6 quizzes", autoTitleMessages: 1 });
+    expect(byId().get(favorites.id)?.titleFailedAt).toBe(clock.toISOString());
+    expect(byId().get(named.id)?.autoTitle).toBeUndefined();
+    expect(requests[1]).toMatchObject({ tools: [], effort: "low" });
+    expect(requests[1].messages[0].role === "user" && requests[1].messages[0].content).toMatch(/Them: look at the module 6 quizzes\nYou: Two quizzes are missing\./);
+
+    expect(await nameConversations(store, llm, { now: clock })).toEqual({ named: 0, failed: 0 }); // nothing new said
+
+    store.append(live, { role: "user", text: "and the answers?" }, { role: "assistant", text: "Also missing." });
+    store.append(live, { role: "user", text: "write them" }, { role: "assistant", text: "Done." });
+    replies = [answer("Module 6 quiz answers")];
+    expect(await nameConversations(store, llm, { now: clock })).toEqual({ named: 1, failed: 0 });
+    expect(byId().get(live.id)).toMatchObject({ autoTitle: "Module 6 quiz answers", autoTitleMessages: 3 });
+    store.append(live, { role: "user", text: "thanks" }, { role: "assistant", text: "Anytime." });
+    expect(await nameConversations(store, llm, { now: clock })).toEqual({ named: 0, failed: 0 }); // named after three messages: it stays
+    expect(await nameConversations(store, null, { now: clock })).toEqual({ named: 0, failed: 0 });
+    expect(requests).toHaveLength(3);
   });
 });
