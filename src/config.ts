@@ -18,8 +18,17 @@ function expandHome(p: string): string {
   return p.startsWith("~") ? join(homedir(), p.slice(1)) : p;
 }
 
-/** Load KEY=VALUE lines from a .env file into process.env without overriding existing values. */
-export function loadDotenv(file: string = join(process.cwd(), ".env")): void {
+/**
+ * Load .env files into process.env without overriding anything already set.
+ * Order: the working directory's .env, then ~/.cos/.env (where the desktop app
+ * and the scheduler find your keys).
+ */
+export function loadDotenv(): void {
+  loadEnvFile(join(process.cwd(), ".env"));
+  loadEnvFile(join(process.env.COS_HOME || join(homedir(), ".cos"), ".env"));
+}
+
+export function loadEnvFile(file: string): void {
   let text: string;
   try {
     text = readFileSync(file, "utf8");

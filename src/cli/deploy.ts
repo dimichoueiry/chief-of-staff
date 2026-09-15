@@ -1,0 +1,103 @@
+/**
+ * Install a runnable copy of the CLI outside the repo, in ~/.cos/app.
+ *
+ * Why: macOS protects Desktop, Documents and Downloads per app. A background
+ * process started by the menubar app or by launchd that reads code from a repo
+ * in one of those folders blocks on a permission prompt it may never show, or
+ * is refused outright. The copy lives in a folder nobody needs permission for.
+ */
+import { execFile } from "node:child_process";
+import { access, chmod, copyFile, cp, mkdir, rename, rm, stat } from "node:fs/promises";
+import { basename, dirname, join, relative, sep } from "node:path";
+import { promisify } from "node:util";
+import { cosHome } from "../util/home.js";
+
+const exec = promisify(execFile);
+
+export function runtimeDir(): string {
+  return join(cosHome(), "app");
+}
+
+export function runtimeEntry(dir: string = runtimeDir()): string {
+  return join(dir, "dist", "cli", "cos.js");
+}
+
+/** Keys for the app and scheduler live here; the CLI reads it too. */
+export function homeEnvFile(): string {
+  return join(cosHome(), ".env");
+}
+
+async function exists(p: string): Promise<boolean> {
+  try {
+    await access(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Top-level package folders (node_modules/x or node_modules/@scope/x) needed at runtime. */
+export function topLevelPackages(parseable: string, repoRoot: string): string[] {
+  const out = new Set<string>();
+  for (const line of parseable.split(/\r?\n/)) {
+    const rel = relative(repoRoot, line.trim());
+    if (!rel.startsWith(`node_modules${sep}`)) continue;
+    const parts = rel.split(sep);
+    out.add(parts[1]?.startsWith("@") ? parts.slice(0, 3).join(sep) : parts.slice(0, 2).join(sep));
+  }
+  return [...out].sort();
+}
+
+export interface DeployResult {
+  dir: string;
+  entry: string;
+  packages: number;
+  env: "copied" | "unchanged" | "none";
+}
+
+export async function deployRuntime(repoRoot: string, log: (line: string) => void = () => {}): Promise<DeployResult> {
+  if (!(await exists(join(repoRoot, "dist", "cli", "cos.js")))) {
+    throw new Error(`Build the CLI first: npm run build   (missing ${join(repoRoot, "dist", "cli", "cos.js")})`);
+  }
+  const dir = runtimeDir();
+  const next = `${dir}.next`;
+  const old = `${dir}.old`;
+  await rm(next, { recursive: true, force: true });
+  await mkdir(next, { recursive: true });
+
+  log(`copying the runtime to ${dir}`);
+  await cp(join(repoRoot, "dist"), join(next, "dist"), { recursive: true });
+  await copyFile(join(repoRoot, "package.json"), join(next, "package.json"));
+
+  const { stdout } = await exec("npm", ["ls", "--omit=dev", "--all", "--parseable"], { cwd: repoRoot, maxBuffer: 16 * 1024 * 1024 }).catch(
+    // npm ls exits non-zero on harmless peer warnings; the output is still usable.
+    (err: { stdout?: string }) => ({ stdout: err.stdout ?? "" }),
+  );
+  const packages = topLevelPackages(stdout, repoRoot);
+  for (const pkg of packages) {
+    await mkdir(join(next, dirname(pkg)), { recursive: true });
+    await cp(join(repoRoot, pkg), join(next, pkg), { recursive: true, dereference: true });
+  }
+
+  // Swap in place so a running server never sees a half-copied folder.
+  await rm(old, { recursive: true, force: true });
+  if (await exists(dir)) await rename(dir, old);
+  await rename(next, dir);
+  await rm(old, { recursive: true, force: true });
+
+  // Keys: the repo's .env is the one you edit; keep the app's copy in step with it.
+  let env: DeployResult["env"] = "none";
+  const repoEnv = join(repoRoot, ".env");
+  if (await exists(repoEnv)) {
+    const target = homeEnvFile();
+    const [src, dst] = await Promise.all([stat(repoEnv), stat(target).catch(() => null)]);
+    if (!dst || src.mtimeMs > dst.mtimeMs) {
+      await mkdir(dirname(target), { recursive: true });
+      await copyFile(repoEnv, target);
+      await chmod(target, 0o600);
+      env = "copied";
+      log(`copied ${basename(repoEnv)} to ${target}`);
+    } else env = "unchanged";
+  }
+  return { dir, entry: runtimeEntry(dir), packages: packages.length, env };
+}

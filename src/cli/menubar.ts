@@ -9,6 +9,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { AGENTS_DIR, LOG_DIR } from "../scheduler/launchd.js";
+import { deployRuntime } from "./deploy.js";
 
 const exec = promisify(execFile);
 
@@ -37,9 +38,9 @@ async function exists(p: string): Promise<boolean> {
 export async function buildMenubar(o: BuildOptions): Promise<string> {
   const log = o.log ?? (() => {});
   const pkg = join(o.repoRoot, "apps", "menubar");
-  const entry = join(o.repoRoot, "dist", "cli", "cos.js");
-  if (!(await exists(entry))) throw new Error(`Build the CLI first: npm run build   (missing ${entry})`);
   if (process.platform !== "darwin") throw new Error("The menubar shell is macOS only.");
+  // The app runs this copy, never the repo, so it needs no Desktop-folder permission to start.
+  const runtime = await deployRuntime(o.repoRoot, log);
 
   log("swift build -c release …");
   await exec("swift", ["build", "-c", "release", "--package-path", pkg], { maxBuffer: 32 * 1024 * 1024 });
@@ -59,7 +60,8 @@ export async function buildMenubar(o: BuildOptions): Promise<string> {
   await exec("codesign", ["--force", "--deep", "--sign", "-", APP_PATH]);
 
   await mkdir(join(homedir(), ".cos"), { recursive: true });
-  await writeFile(SHELL_CONFIG, JSON.stringify({ node: o.node, repo: o.repoRoot, port: o.port }, null, 2) + "\n");
+  // "repo" is where the app finds dist/cli/cos.js and runs it from: the deployed copy.
+  await writeFile(SHELL_CONFIG, JSON.stringify({ node: o.node, repo: runtime.dir, port: o.port }, null, 2) + "\n");
   log(`wrote ${SHELL_CONFIG}`);
   return APP_PATH;
 }

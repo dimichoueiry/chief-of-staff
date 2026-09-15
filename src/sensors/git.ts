@@ -33,7 +33,14 @@ export async function scanActivity(roots: string[]): Promise<Activity[]> {
     const root = expandHome(rawRoot);
     if (!(await isDir(root))) continue;
     const candidates = [root];
-    for (const entry of await readdir(root, { withFileTypes: true })) {
+    let entries;
+    try {
+      entries = await readdir(root, { withFileTypes: true });
+    } catch {
+      // e.g. EPERM: macOS privacy protection on Desktop for a background process. Skip, don't crash the brief.
+      continue;
+    }
+    for (const entry of entries) {
       if (entry.isDirectory() && !entry.name.startsWith(".")) candidates.push(join(root, entry.name));
     }
     for (const dir of candidates) {

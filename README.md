@@ -80,6 +80,14 @@ Rebuilding the app changes its signature, so macOS may ask for these again.
 `cos menubar open` relaunches it; `cos menubar uninstall` removes the app and the login item.
 Logs live in `~/.cos/logs`.
 
+The app and the scheduler run a copy of the CLI from `~/.cos/app`, not from this repo. macOS
+won't let a background process read code in Desktop, Documents or Downloads without a
+permission prompt it may never show. After changing code, run
+`npm run build && npm run cos -- menubar build` to refresh the copy.
+
+Keys for the app and the scheduler live in `~/.cos/.env`. Each build copies this repo's
+`.env` there when the repo's copy is newer, or you can edit `~/.cos/.env` directly.
+
 ## Models and providers
 
 The brain is model-agnostic. Add a key for any provider you use, then pick models whenever

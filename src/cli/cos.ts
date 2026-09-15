@@ -23,7 +23,6 @@ import { decide, isChoice } from "../logic/decide.js";
 import { createUiServer } from "../ui/server.js";
 import { notify, saveBrief } from "../output/notify.js";
 import { bold, dim, renderBrief, renderBriefNotification, renderBriefSpeech, type Target } from "../output/render.js";
-import { access } from "node:fs/promises";
 import { resolve } from "node:path";
 import * as launchd from "../scheduler/launchd.js";
 import { formatEvent, todayEvents } from "../sensors/calendar.js";
@@ -31,6 +30,7 @@ import { pickStt } from "../voice/stt.js";
 import { speak } from "../voice/tts.js";
 import { applyActivity, scanActivity } from "../sensors/git.js";
 import { isISODate, todayISO } from "../util/dates.js";
+import { deployRuntime } from "./deploy.js";
 import { buildMenubar, installLoginItem, openMenubar, uninstallMenubar } from "./menubar.js";
 import { ask, confirm } from "./prompt.js";
 
@@ -420,13 +420,14 @@ scheduler
   .action(async (o: { morning: string; evening: string; silence: string }) => {
     if (process.platform !== "darwin") fail("The scheduler uses launchd and only runs on macOS.");
     const root = resolve(new URL("../..", import.meta.url).pathname);
-    const entry = resolve(root, "dist", "cli", "cos.js");
+    let runtime;
     try {
-      await access(entry);
-    } catch {
-      fail(`Build first so launchd has a stable entry point: npm run build   (expected ${entry})`);
+      // launchd cannot read a repo inside Desktop/Documents; run a copy from ~/.cos/app instead.
+      runtime = await deployRuntime(root, (l) => console.log(dim(l)));
+    } catch (err) {
+      fail((err as Error).message);
     }
-    const jobs = await launchd.install({ node: process.execPath, entry, cwd: root }, { morning: o.morning, evening: o.evening, silence: o.silence });
+    const jobs = await launchd.install({ node: process.execPath, entry: runtime.entry, cwd: runtime.dir }, { morning: o.morning, evening: o.evening, silence: o.silence });
     for (const j of jobs) console.log(`${j.at}  ${launchd.label(j)}  ${dim(j.description)}`);
     console.log(dim(`logs: ${launchd.LOG_DIR}`));
   });
