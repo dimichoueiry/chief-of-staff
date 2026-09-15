@@ -7,10 +7,13 @@
  * is refused outright. The copy lives in a folder nobody needs permission for.
  */
 import { execFile } from "node:child_process";
-import { access, chmod, copyFile, cp, mkdir, rename, rm, stat } from "node:fs/promises";
-import { basename, dirname, join, relative, sep } from "node:path";
+import { access, copyFile, cp, mkdir, rename, rm } from "node:fs/promises";
+import { dirname, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
+import { homeEnvFile, syncProjectEnv } from "../util/env.js";
 import { cosHome } from "../util/home.js";
+
+export { homeEnvFile };
 
 const exec = promisify(execFile);
 
@@ -20,11 +23,6 @@ export function runtimeDir(): string {
 
 export function runtimeEntry(dir: string = runtimeDir()): string {
   return join(dir, "dist", "cli", "cos.js");
-}
-
-/** Keys for the app and scheduler live here; the CLI reads it too. */
-export function homeEnvFile(): string {
-  return join(cosHome(), ".env");
 }
 
 async function exists(p: string): Promise<boolean> {
@@ -85,19 +83,8 @@ export async function deployRuntime(repoRoot: string, log: (line: string) => voi
   await rename(next, dir);
   await rm(old, { recursive: true, force: true });
 
-  // Keys: the repo's .env is the one you edit; keep the app's copy in step with it.
-  let env: DeployResult["env"] = "none";
-  const repoEnv = join(repoRoot, ".env");
-  if (await exists(repoEnv)) {
-    const target = homeEnvFile();
-    const [src, dst] = await Promise.all([stat(repoEnv), stat(target).catch(() => null)]);
-    if (!dst || src.mtimeMs > dst.mtimeMs) {
-      await mkdir(dirname(target), { recursive: true });
-      await copyFile(repoEnv, target);
-      await chmod(target, 0o600);
-      env = "copied";
-      log(`copied ${basename(repoEnv)} to ${target}`);
-    } else env = "unchanged";
-  }
+  // Keys: the project's .env is the one you edit; keep the app's copy in step with it.
+  const env = syncProjectEnv(repoRoot);
+  if (env === "copied") log(`copied .env to ${homeEnvFile()}`);
   return { dir, entry: runtimeEntry(dir), packages: packages.length, env };
 }

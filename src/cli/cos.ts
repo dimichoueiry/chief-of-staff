@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, relative } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
@@ -23,15 +24,16 @@ import { decide, isChoice } from "../logic/decide.js";
 import { createUiServer } from "../ui/server.js";
 import { notify, saveBrief } from "../output/notify.js";
 import { bold, dim, renderBrief, renderBriefNotification, renderBriefSpeech, type Target } from "../output/render.js";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import * as launchd from "../scheduler/launchd.js";
 import { formatEvent, todayEvents } from "../sensors/calendar.js";
 import { pickStt } from "../voice/stt.js";
 import { speak } from "../voice/tts.js";
 import { applyActivity, scanActivity } from "../sensors/git.js";
 import { isISODate, todayISO } from "../util/dates.js";
+import { homeEnvFile, parseEnv, syncProjectEnv } from "../util/env.js";
 import { deployRuntime } from "./deploy.js";
-import { buildMenubar, installLoginItem, openMenubar, uninstallMenubar } from "./menubar.js";
+import { buildMenubar, installLoginItem, openMenubar, restartMenubar, uninstallMenubar } from "./menubar.js";
 import { ask, confirm } from "./prompt.js";
 
 loadDotenv();
@@ -551,6 +553,37 @@ models
     }
   });
 
+// ---------- keys ----------
+
+const projectRoot = () => resolve(new URL("../..", import.meta.url).pathname);
+
+const envCmd = program
+  .command("env")
+  .description("where API keys are read from, and which providers have one")
+  .action(() => {
+    const file = homeEnvFile();
+    const values = existsSync(file) ? parseEnv(readFileSync(file, "utf8")) : new Map<string, string>();
+    console.log(`${bold("Keys file")}  ${file}${existsSync(file) ? "" : dim("  (not created yet)")}`);
+    for (const id of PROVIDER_ORDER) {
+      const p = PROVIDERS[id];
+      const inFile = p.keyEnv.find((k) => values.has(k));
+      const ready = providerConfigured(id);
+      const where = inFile ? `${inFile} set` : ready ? "set in your shell" : dim(`${p.keyEnv[0]} missing`);
+      console.log(`  ${ready ? "●" : dim("○")} ${p.label.padEnd(48)} ${where}`);
+    }
+    const projectEnv = join(projectRoot(), ".env");
+    if (existsSync(projectEnv)) console.log(dim(`The project's ${projectEnv} is copied here automatically whenever it is newer.`));
+    console.log(dim("The menubar app picks up key changes on its next request; no restart needed."));
+  });
+
+envCmd
+  .command("sync")
+  .description("copy the project's .env to ~/.cos/.env now")
+  .action(() => {
+    const r = syncProjectEnv(projectRoot());
+    console.log(r === "copied" ? `Copied ${join(projectRoot(), ".env")} → ${homeEnvFile()}` : r === "unchanged" ? `Already up to date: ${homeEnvFile()}` : "No project .env found.");
+  });
+
 // ---------- the native shell ----------
 
 const menubar = program.command("menubar").description("the native macOS shell: menubar icon, floating pill, double-tap Control, native listening");
@@ -593,6 +626,19 @@ menubar
       const file = await installLoginItem();
       await openMenubar();
       console.log(`Installed. Opens at login via ${file}.`);
+    } catch (err) {
+      fail((err as Error).message);
+    }
+  });
+
+menubar
+  .command("refresh")
+  .description("update the code the app runs and restart it; keeps permissions (use after code changes, unless Swift changed)")
+  .action(async () => {
+    try {
+      const r = await deployRuntime(projectRoot(), (l) => console.log(dim(l)));
+      await restartMenubar();
+      console.log(`Restarted Chief of Staff with the latest code (${r.dir}).`);
     } catch (err) {
       fail((err as Error).message);
     }

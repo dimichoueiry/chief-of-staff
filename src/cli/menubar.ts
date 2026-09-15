@@ -71,6 +71,19 @@ export async function openMenubar(): Promise<void> {
   await exec("open", ["-a", APP_PATH]);
 }
 
+/** Stop the running app and its server, then open it again. The app bundle is untouched, so permissions stay granted. */
+export async function restartMenubar(): Promise<void> {
+  for (const pattern of ["Chief of Staff.app/Contents/MacOS/ChiefOfStaff", "cos.js ui --port"]) {
+    try {
+      await exec("pkill", ["-f", pattern]);
+    } catch {
+      /* not running */
+    }
+  }
+  await new Promise((r) => setTimeout(r, 800));
+  await openMenubar();
+}
+
 export async function quitMenubar(): Promise<void> {
   try {
     await exec("osascript", ["-e", `tell application id "com.chief-of-staff.menubar" to quit`]);

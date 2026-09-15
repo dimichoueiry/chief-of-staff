@@ -24,6 +24,7 @@ import { loadLastBrief, saveBrief } from "../output/notify.js";
 import { renderBriefSpeech } from "../output/render.js";
 import { applyActivity, scanActivity } from "../sensors/git.js";
 import { todayISO } from "../util/dates.js";
+import { reloadHomeEnv } from "../util/env.js";
 import { speak, stopSpeaking } from "../voice/tts.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -51,7 +52,7 @@ export interface UiOptions {
 /** Sentences the offline Scribe can file without a model. */
 const CAPTURE_SHAPE = /^(remind|starting|start|new project|park|kill|done with|finished|touched|worked on|today i|note:|.+\s+every\s+|.+\s+next\s*:)/i;
 
-const NO_MODEL = "That needs a model. Add a key to .env (Anthropic, OpenAI or OpenRouter) and pick one with `cos models use …` or the menubar's Model menu. The brief, decisions and capture work without one.";
+const NO_MODEL = "That needs a model. Add a key (Anthropic, OpenAI or OpenRouter) to ~/.cos/.env or the project's .env, and pick one with `cos models use …` or the Model menu. The brief, decisions and capture work without one.";
 
 export function createUiServer(o: UiOptions): Server {
   const { config } = o;
@@ -231,6 +232,8 @@ export function createUiServer(o: UiOptions): Server {
 
   return createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
+    // Keys added to ~/.cos/.env apply to the next request; no restart.
+    if (url.pathname.startsWith("/api/")) reloadHomeEnv();
     try {
       if (url.pathname.startsWith("/api/")) await api(req, res, url);
       else await serveStatic(res, url.pathname);

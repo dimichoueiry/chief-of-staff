@@ -1,6 +1,8 @@
-import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { loadEnvFile, reloadHomeEnv, syncProjectEnv } from "./util/env.js";
+
+export { loadEnvFile };
 
 export interface Config {
   selfhubDir: string;
@@ -19,28 +21,18 @@ function expandHome(p: string): string {
 }
 
 /**
- * Load .env files into process.env without overriding anything already set.
- * Order: the working directory's .env, then ~/.cos/.env (where the desktop app
- * and the scheduler find your keys).
+ * Load keys and settings. When run from the project folder, a newer project .env
+ * is first copied to ~/.cos/.env, the file the app and scheduler read. Nothing
+ * already set in the environment is overridden. See util/env.ts.
  */
 export function loadDotenv(): void {
-  loadEnvFile(join(process.cwd(), ".env"));
-  loadEnvFile(join(process.env.COS_HOME || join(homedir(), ".cos"), ".env"));
-}
-
-export function loadEnvFile(file: string): void {
-  let text: string;
   try {
-    text = readFileSync(file, "utf8");
+    syncProjectEnv();
   } catch {
-    return;
+    /* a read-only home folder must not stop the CLI */
   }
-  for (const line of text.split(/\r?\n/)) {
-    const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
-    if (!m || line.trim().startsWith("#")) continue;
-    const value = m[2].replace(/^(['"])(.*)\1$/, "$2");
-    if (value && process.env[m[1]] === undefined) process.env[m[1]] = value;
-  }
+  loadEnvFile(join(process.cwd(), ".env"));
+  reloadHomeEnv();
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
