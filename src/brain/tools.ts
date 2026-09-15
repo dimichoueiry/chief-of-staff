@@ -7,8 +7,8 @@ import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { promisify } from "node:util";
-import Anthropic from "@anthropic-ai/sdk";
 import type { Config } from "../config.js";
+import type { ToolSpec } from "./llm/types.js";
 import type { Intent } from "../core/context.js";
 import { Journal } from "../core/journal.js";
 import { Ledger, PROJECT_STATUSES, findProject, type Project, type ProjectPatch } from "../core/ledger.js";
@@ -21,17 +21,17 @@ const exec = promisify(execFile);
 
 const s = (description: string) => ({ type: "string" as const, description });
 
-export const TOOLS: Record<string, Anthropic.Tool> = {
+export const TOOLS: Record<string, ToolSpec> = {
   get_project: {
     name: "get_project",
     description: "Read one project's full ledger entry, including done or killed ones not shown in context.",
-    input_schema: { type: "object", properties: { name: s("Project name (loose match)") }, required: ["name"] },
+    parameters: { type: "object", properties: { name: s("Project name (loose match)") }, required: ["name"] },
   },
   upsert_project: {
     name: "upsert_project",
     description:
       "Create a project or update fields on an existing one. Only the fields you pass change. Every call is a git commit.",
-    input_schema: {
+    parameters: {
       type: "object",
       properties: {
         name: s("Project name. Existing names match loosely; a new name creates the project."),
@@ -49,7 +49,7 @@ export const TOOLS: Record<string, Anthropic.Tool> = {
   skip_cadence: {
     name: "skip_cadence",
     description: "Suppress a project's cadence nudge for one cycle without deleting the cadence.",
-    input_schema: {
+    parameters: {
       type: "object",
       properties: { name: s("Project name"), until: s("YYYY-MM-DD to resume nudging; defaults to 7 days from today") },
       required: ["name"],
@@ -58,7 +58,7 @@ export const TOOLS: Record<string, Anthropic.Tool> = {
   touch_project: {
     name: "touch_project",
     description: "Record that a project was worked on (moves last touched forward, never back).",
-    input_schema: {
+    parameters: {
       type: "object",
       properties: { name: s("Project name"), date: s("YYYY-MM-DD, defaults to today") },
       required: ["name"],
@@ -67,7 +67,7 @@ export const TOOLS: Record<string, Anthropic.Tool> = {
   add_reminder: {
     name: "add_reminder",
     description: "Add a one-off reminder for a specific date.",
-    input_schema: {
+    parameters: {
       type: "object",
       properties: { date: s("YYYY-MM-DD"), text: s("What to remind about") },
       required: ["date", "text"],
@@ -76,17 +76,17 @@ export const TOOLS: Record<string, Anthropic.Tool> = {
   complete_reminder: {
     name: "complete_reminder",
     description: "Mark the first open reminder whose text contains the given words as done.",
-    input_schema: { type: "object", properties: { match: s("Words from the reminder text") }, required: ["match"] },
+    parameters: { type: "object", properties: { match: s("Words from the reminder text") }, required: ["match"] },
   },
   add_note: {
     name: "add_note",
     description: "Keep a thought, idea or fact that is not a project or a reminder.",
-    input_schema: { type: "object", properties: { text: s("The note") }, required: ["text"] },
+    parameters: { type: "object", properties: { text: s("The note") }, required: ["text"] },
   },
   append_journal: {
     name: "append_journal",
     description: "Append to today's journal entry (what happened, what's next).",
-    input_schema: {
+    parameters: {
       type: "object",
       properties: { text: s("One to four lines"), date: s("YYYY-MM-DD, defaults to today") },
       required: ["text"],
@@ -95,7 +95,7 @@ export const TOOLS: Record<string, Anthropic.Tool> = {
   get_git_log: {
     name: "get_git_log",
     description: "Recent commits for a project's folder (by its path field or a folder named like the project).",
-    input_schema: {
+    parameters: {
       type: "object",
       properties: { project: s("Project name"), limit: { type: "integer", description: "Max commits, default 15" } },
       required: ["project"],
@@ -107,7 +107,7 @@ const ALL = Object.keys(TOOLS);
 const WRITES = ["upsert_project", "skip_cadence", "touch_project", "add_reminder", "complete_reminder", "add_note", "append_journal"];
 
 /** Which tools each intent may use. The brief is read-only and gets none. */
-export function toolsFor(intent: Intent): Anthropic.Tool[] {
+export function toolsFor(intent: Intent): ToolSpec[] {
   const names: Record<Intent, string[]> = {
     brief: [],
     "silence-check": [],

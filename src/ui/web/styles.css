@@ -88,6 +88,7 @@ body {
 .answer { width: min(560px, 100%); background: rgba(26, 29, 37, 0.96); border: 1px solid var(--line); border-radius: 16px; padding: 14px 18px 16px; box-shadow: 0 20px 60px rgba(0,0,0,.4); }
 .answer-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-weight: 600; }
 .answer-head .spark { color: var(--accent); }
+.answer-head .model { color: var(--muted); font-weight: 400; font-size: 12px; font-family: var(--mono); }
 .answer-head .chip { margin-left: auto; }
 .answer pre { margin: 0; white-space: pre-wrap; font: inherit; color: #dfe3ea; }
 

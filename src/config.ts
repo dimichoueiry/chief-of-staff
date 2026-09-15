@@ -4,7 +4,8 @@ import { join } from "node:path";
 
 export interface Config {
   selfhubDir: string;
-  model: string;
+  /** COS_MODEL as written, if set. Which model actually runs is decided in brain/llm/registry.ts. */
+  model?: string;
   projectRoots: string[];
   name: string;
   /** Days of silence before a project is resurfaced. */
@@ -12,8 +13,6 @@ export interface Config {
   /** Journal days loaded into context. */
   journalDays: number;
 }
-
-export const DEFAULT_MODEL = "claude-opus-5";
 
 function expandHome(p: string): string {
   return p.startsWith("~") ? join(homedir(), p.slice(1)) : p;
@@ -43,7 +42,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     .map(expandHome);
   return {
     selfhubDir: expandHome(env.COS_SELFHUB ?? join(homedir(), "selfhub")),
-    model: env.COS_MODEL || DEFAULT_MODEL,
+    model: env.COS_MODEL || undefined,
     projectRoots: roots,
     name: env.COS_NAME || "",
     silenceDays: Number(env.COS_SILENCE_DAYS) || 14,

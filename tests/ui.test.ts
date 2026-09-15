@@ -1,4 +1,6 @@
-import { cp } from "node:fs/promises";
+import { cp, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -79,15 +81,19 @@ describe("ui server (offline)", () => {
   let cleanup: () => Promise<void>;
   let base: string;
   let close: () => Promise<void>;
+  let home: string;
 
   beforeEach(async () => {
     ({ dir, cleanup } = await makeTmpSelfhub());
     await cp(resolve("examples/selfhub-sample"), dir, { recursive: true });
     process.env.COS_CALENDAR = "none";
+    // App state (cached brief, model choice) goes to a throwaway folder, never the real ~/.cos.
+    home = await mkdtemp(join(tmpdir(), "cos-home-"));
+    process.env.COS_HOME = home;
     const server = createUiServer({
       config: loadConfig({ COS_SELFHUB: dir, COS_PROJECT_ROOTS: "/nonexistent", COS_NAME: "Dimitri" }),
       today: THU,
-      hasApiKey: false,
+      offline: true,
       allowSpeech: false,
     });
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -97,7 +103,9 @@ describe("ui server (offline)", () => {
   afterEach(async () => {
     await close();
     await cleanup();
+    await rm(home, { recursive: true, force: true });
     delete process.env.COS_CALENDAR;
+    delete process.env.COS_HOME;
   });
 
   it("serves the page and static assets", async () => {
@@ -129,7 +137,7 @@ describe("ui server (offline)", () => {
     expect(filed).toMatchObject({ kind: "capture", where: "reminder" });
     const q = await (await fetch(`${base}/api/pill`, { method: "POST", body: JSON.stringify({ text: "what should I do today?" }) })).json();
     expect(q.kind).toBe("answer");
-    expect(q.text).toContain("ANTHROPIC_API_KEY");
+    expect(q.text).toContain("needs a model");
     const projects = await (await fetch(`${base}/api/projects`)).json();
     expect(projects.map((p: { name: string }) => p.name)).toContain("drawcal");
     const spoke = await (await fetch(`${base}/api/speak`, { method: "POST", body: JSON.stringify({ text: "hi" }) })).json();
@@ -144,5 +152,25 @@ describe("ui server (offline)", () => {
     expect(missing.status).toBe(404);
     const stop = await (await fetch(`${base}/api/speak/stop`, { method: "POST", body: "{}" })).json();
     expect(stop).toEqual({ ok: true, stopped: false });
+  });
+
+  it("lists presets and providers, and saves a model choice the next request picks up", async () => {
+    const before = await (await fetch(`${base}/api/models`)).json();
+    expect(before.default).toBeNull();
+    expect(before.providers.map((p: { id: string }) => p.id)).toEqual(["anthropic", "openai", "openrouter", "compatible"]);
+    expect(before.presets.map((p: { spec: string }) => p.spec)).toContain("openai:gpt-5.4");
+
+    const post = (b: unknown) => fetch(`${base}/api/models`, { method: "POST", body: JSON.stringify(b) });
+    const after = await (await post({ spec: "openrouter:openai/gpt-5.2" })).json();
+    expect(after.default).toBe("openrouter:openai/gpt-5.2");
+    expect(after.intents.ask.spec).toBe("openrouter:openai/gpt-5.2");
+    const perIntent = await (await post({ spec: "anthropic:claude-haiku-4-5", intent: "capture" })).json();
+    expect(perIntent.intents.capture.spec).toBe("anthropic:claude-haiku-4-5");
+    expect(perIntent.intents.ask.spec).toBe("openrouter:openai/gpt-5.2");
+
+    expect((await post({ spec: "llama3.2" })).status).toBe(400);
+    expect((await post({ spec: "openai:gpt-5.4", intent: "dance" })).status).toBe(400);
+    const cleared = await (await post({ spec: null })).json();
+    expect(cleared.default).toBeNull();
   });
 });

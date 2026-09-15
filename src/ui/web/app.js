@@ -102,7 +102,7 @@ function renderBrief(data) {
   $("nudges-wrap").hidden = !brief.nudges.length;
   for (const n of brief.nudges) nudges.append(el("li", {}, n));
 
-  $("source").textContent = `${data.source}${offline ? " · offline: add the model key to .env for questions and focus" : ""} · ${data.today}`;
+  $("source").textContent = `${data.source}${offline ? " · no model key: questions and focus need one" : ""} · ${data.today}`;
   $("panel").dataset.speech = data.speech;
 }
 
@@ -148,9 +148,10 @@ async function stopSpeaking() {
   setState("idle");
 }
 
-function showAnswer(title, text) {
+function showAnswer(title, text, model = "") {
   $("answer").hidden = false;
   $("answer-title").textContent = title;
+  $("answer-model").textContent = model ? `· ${model}` : "";
   $("answer-text").textContent = text;
   if (!SHELL) $("answer").scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
@@ -175,7 +176,7 @@ async function submit(text, fromVoice = false) {
     setState("idle");
     return;
   }
-  showAnswer(r.kind === "capture" ? "Filed" : "Chief of staff", r.text || r.error || "");
+  showAnswer(r.kind === "capture" ? "Filed" : "Chief of staff", r.text || r.error || "", r.model);
   if (r.kind === "capture") markStale();
   setState("idle");
   // Spoken questions get spoken answers; typed ones stay quiet unless you press read aloud.
@@ -186,7 +187,7 @@ async function runFocus(project) {
   setState("thinking", `Looking at ${project}…`);
   try {
     const r = await post("/api/pill", { text: project, mode: "focus" });
-    showAnswer(r.project ? `${r.project} — top 3 right now` : "Focus", r.text || r.error || "");
+    showAnswer(r.project ? `${r.project} — top 3 right now` : "Focus", r.text || r.error || "", r.model);
     if (r.changes) markStale();
   } catch (err) {
     showAnswer("Focus", String(err));

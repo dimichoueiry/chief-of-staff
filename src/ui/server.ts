@@ -6,6 +6,10 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { readFile } from "node:fs/promises";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  MODEL_INTENTS, PROVIDERS, PROVIDER_ORDER, formatSpec, parseModelSpec, presets, providerConfigured,
+  readModelSettings, resolveModel, setModel, type ModelIntent,
+} from "../brain/llm/registry.js";
 import { runIntent } from "../brain/loop.js";
 import type { Brief } from "../brain/schema.js";
 import type { Config } from "../config.js";
@@ -36,7 +40,10 @@ const MIME: Record<string, string> = {
 export interface UiOptions {
   config: Config;
   today?: string;
-  hasApiKey: boolean;
+  /** provider:model forced for every request from this server. */
+  modelFlag?: string;
+  /** Never call a model, whatever keys exist (tests, or a deliberate offline mode). */
+  offline?: boolean;
   /** Set to false in tests so nothing is spoken. */
   allowSpeech?: boolean;
 }
@@ -44,18 +51,57 @@ export interface UiOptions {
 /** Sentences the offline Scribe can file without a model. */
 const CAPTURE_SHAPE = /^(remind|starting|start|new project|park|kill|done with|finished|touched|worked on|today i|note:|.+\s+every\s+|.+\s+next\s*:)/i;
 
+const NO_MODEL = "That needs a model. Add a key to .env (Anthropic, OpenAI or OpenRouter) and pick one with `cos models use …` or the menubar's Model menu. The brief, decisions and capture work without one.";
+
 export function createUiServer(o: UiOptions): Server {
   const { config } = o;
   const today = () => o.today ?? todayISO();
 
+  /** Settings are re-read on every request, so a switch in the menubar applies immediately. */
+  function ready(intent: ModelIntent): boolean {
+    if (o.offline) return false;
+    try {
+      return Boolean(resolveModel(intent, { flag: o.modelFlag })?.ready);
+    } catch {
+      return false;
+    }
+  }
+
   async function freshBrief(): Promise<{ brief: Brief; source: string }> {
     await applyActivity(new Ledger(config.selfhubDir), await scanActivity(config.projectRoots));
-    if (o.hasApiKey) {
-      const r = await runIntent({ config, intent: "brief", today: today() });
-      return { brief: r.brief!, source: config.model };
+    const rules = async (why: string) => {
+      const ctx = await buildContext({ config, intent: "brief", today: today() });
+      return { brief: buildBrief(ctx), source: why ? `rules (${why})` : "rules" };
+    };
+    if (!ready("brief")) return rules(o.offline ? "" : "no model key");
+    try {
+      const r = await runIntent({ config, intent: "brief", today: today(), modelFlag: o.modelFlag });
+      return { brief: r.brief!, source: r.model };
+    } catch (err) {
+      return rules(`model failed: ${String((err as Error).message).split("\n")[0]}`);
     }
-    const ctx = await buildContext({ config, intent: "brief", today: today() });
-    return { brief: buildBrief(ctx), source: "rules" };
+  }
+
+  function modelsState() {
+    const settings = readModelSettings();
+    const intents: Record<string, unknown> = {};
+    for (const intent of MODEL_INTENTS) {
+      try {
+        const r = resolveModel(intent, { flag: o.modelFlag, settings });
+        intents[intent] = r ? { spec: formatSpec(r.spec), source: r.source, ready: r.ready } : null;
+      } catch (err) {
+        intents[intent] = { error: (err as Error).message };
+      }
+    }
+    return {
+      default: settings.default ?? null,
+      intents,
+      presets: presets(settings).map((spec) => {
+        const provider = parseModelSpec(spec).provider;
+        return { spec, provider, ready: providerConfigured(provider) };
+      }),
+      providers: PROVIDER_ORDER.map((id) => ({ id, label: PROVIDERS[id].label, ready: providerConfigured(id), key: PROVIDERS[id].keyEnv[0] })),
+    };
   }
 
   async function json(res: ServerResponse, status: number, body: unknown): Promise<void> {
@@ -70,6 +116,8 @@ export function createUiServer(o: UiOptions): Server {
     return text ? (JSON.parse(text) as Record<string, unknown>) : {};
   }
 
+  const changes = (calls: { name: string; isError: boolean }[]) => calls.filter((c) => !c.isError && !c.name.startsWith("get_")).length;
+
   async function api(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const route = `${req.method} ${url.pathname}`;
     switch (route) {
@@ -79,7 +127,7 @@ export function createUiServer(o: UiOptions): Server {
         const stale = cached && cached.brief.date !== today();
         const r = cached && !stale ? { brief: cached.brief, source: cached.source } : await freshBrief();
         if (!cached || stale || refresh) await saveBrief(r.brief, r.source);
-        return json(res, 200, { ...r, speech: renderBriefSpeech(r.brief), offline: !o.hasApiKey, today: today() });
+        return json(res, 200, { ...r, speech: renderBriefSpeech(r.brief), offline: !ready("ask"), today: today() });
       }
       case "GET /api/projects": {
         const projects = await new Ledger(config.selfhubDir).read();
@@ -90,6 +138,21 @@ export function createUiServer(o: UiOptions): Server {
             .filter((p) => ["active", "parked"].includes(normalizeStatus(p.status)))
             .map((p) => ({ name: p.name, status: normalizeStatus(p.status), next: p.next ?? "", idle: daysIdle(p, today()), cadence: p.cadence ?? "" })),
         );
+      }
+      case "GET /api/models":
+        return json(res, 200, modelsState());
+      case "POST /api/models": {
+        const b = await body(req);
+        const spec = b.spec === null ? null : String(b.spec ?? "").trim();
+        const intent = b.intent ? String(b.intent) : undefined;
+        if (intent && !(MODEL_INTENTS as readonly string[]).includes(intent)) return json(res, 400, { error: `intent must be one of ${MODEL_INTENTS.join(", ")}` });
+        if (spec === "") return json(res, 400, { error: "spec is required (provider:model), or null to clear" });
+        try {
+          setModel(spec, intent as ModelIntent | undefined);
+        } catch (err) {
+          return json(res, 400, { error: (err as Error).message });
+        }
+        return json(res, 200, modelsState());
       }
       case "POST /api/decide": {
         const b = await body(req);
@@ -107,30 +170,26 @@ export function createUiServer(o: UiOptions): Server {
         if (mode === "focus") {
           const p = await new Ledger(config.selfhubDir).find(text);
           if (!p) return json(res, 404, { error: `No project matches "${text}".` });
-          if (!o.hasApiKey) {
+          if (!ready("focus")) {
             return json(res, 200, {
               kind: "focus",
               project: p.name,
-              text: `Recorded next action: ${p.next ?? "none yet"}.\n${p.why ? `Why it matters: ${p.why}.\n` : ""}\nThe top-3 analysis needs the model key in .env.`,
+              text: `Recorded next action: ${p.next ?? "none yet"}.\n${p.why ? `Why it matters: ${p.why}.\n` : ""}\nThe top-3 analysis needs a model. ${NO_MODEL.split(". ").slice(1).join(". ")}`,
             });
           }
-          const r = await runIntent({ config, intent: "focus", project: p.name, today: today() });
-          return json(res, 200, { kind: "focus", project: p.name, text: r.text, changes: r.toolCalls.filter((c) => !c.isError && !c.name.startsWith("get_")).length });
+          const r = await runIntent({ config, intent: "focus", project: p.name, today: today(), modelFlag: o.modelFlag });
+          return json(res, 200, { kind: "focus", project: p.name, text: r.text, model: r.model, changes: changes(r.toolCalls) });
         }
 
         const isCapture = mode === "capture" || (mode === "auto" && CAPTURE_SHAPE.test(text));
-        if (isCapture && !o.hasApiKey) {
+        const intent: ModelIntent = isCapture ? "capture" : "ask";
+        if (isCapture && !ready("capture")) {
           const filed = await scribe(config.selfhubDir, text.replace(/^note:\s*/i, ""), today());
-          return json(res, 200, { kind: "capture", text: filed.message + (filed.question ? `\n${filed.question}` : ""), where: filed.where });
+          return json(res, 200, { kind: "capture", text: filed.message + (filed.question ? `\n${filed.question}` : ""), where: filed.where, model: "rules" });
         }
-        if (!o.hasApiKey) {
-          return json(res, 200, {
-            kind: "answer",
-            text: "Questions need the model key (ANTHROPIC_API_KEY in .env), then restart. The brief, decisions and capture work without it.",
-          });
-        }
-        const r = await runIntent({ config, intent: isCapture ? "capture" : "ask", message: text, today: today() });
-        return json(res, 200, { kind: isCapture ? "capture" : "answer", text: r.text, changes: r.toolCalls.filter((c) => !c.isError && !c.name.startsWith("get_")).length });
+        if (!ready(intent)) return json(res, 200, { kind: "answer", text: NO_MODEL });
+        const r = await runIntent({ config, intent, message: text, today: today(), modelFlag: o.modelFlag });
+        return json(res, 200, { kind: isCapture ? "capture" : "answer", text: r.text, model: r.model, changes: changes(r.toolCalls) });
       }
       case "POST /api/wrap": {
         const b = await body(req);

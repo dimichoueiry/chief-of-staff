@@ -2,8 +2,13 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, relative } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { Command } from "commander";
-import { runIntent, RefusedError } from "../brain/loop.js";
+import { runIntent, providerFor, RefusedError } from "../brain/loop.js";
+import {
+  MODEL_INTENTS, NoModelError, PROVIDERS, PROVIDER_ORDER, explainNotReady, formatSpec, parseModelSpec,
+  presets, providerConfigured, readModelSettings, resolveModel, setModel, settingsFile, type ModelIntent,
+} from "../brain/llm/registry.js";
 import type { Brief } from "../brain/schema.js";
 import { loadConfig, loadDotenv, type Config } from "../config.js";
 import { buildContext, renderContext, type Intent } from "../core/context.js";
@@ -36,6 +41,7 @@ program
   .description("A chief of staff for one person.")
   .version("0.1.0")
   .option("--today <date>", "pretend today is this YYYY-MM-DD (for demos)")
+  .option("--model <provider:model>", "use this model for this command, e.g. openai:gpt-5.4 or openrouter:openai/gpt-5.2")
   .option("--selfhub <dir>", "memory repo (overrides COS_SELFHUB)");
 
 function config(): Config {
@@ -52,17 +58,39 @@ function fail(msg: string): never {
   console.error(msg);
   process.exit(1);
 }
-function hasApiKey(): boolean {
-  return Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+function modelFlag(): string | undefined {
+  return program.opts<{ model?: string }>().model;
 }
-function needKey(): void {
-  if (!hasApiKey()) fail("This command talks to the model. Set ANTHROPIC_API_KEY in .env (see .env.example).");
+/** Is a model with a key available for this intent? */
+function modelReady(intent: ModelIntent): boolean {
+  try {
+    return Boolean(resolveModel(intent, { flag: modelFlag() })?.ready);
+  } catch {
+    return false;
+  }
+}
+function needModel(intent: ModelIntent): void {
+  let resolved;
+  try {
+    resolved = resolveModel(intent, { flag: modelFlag() });
+  } catch (err) {
+    fail((err as Error).message);
+  }
+  if (!resolved?.ready) fail(explainNotReady(intent, resolved ?? null));
+}
+/** Turn provider errors into one plain line. Anthropic and OpenAI (also OpenRouter and compatible servers) raise their own classes. */
+function describeModelError(err: unknown): string | null {
+  if (err instanceof RefusedError || err instanceof NoModelError) return err.message;
+  if (err instanceof Anthropic.AuthenticationError || err instanceof OpenAI.AuthenticationError) return "The API key was rejected. Check the key for this provider in .env.";
+  if (err instanceof Anthropic.NotFoundError || err instanceof OpenAI.NotFoundError) return `Model not found: ${(err as Error).message}. Check the name with: cos models`;
+  if (err instanceof Anthropic.RateLimitError || err instanceof OpenAI.RateLimitError) return "Rate limited. Try again in a moment.";
+  if (err instanceof Anthropic.APIError) return `API error ${err.status}: ${err.message}`;
+  if (err instanceof OpenAI.APIError) return `API error ${err.status}: ${err.message}`;
+  return null;
 }
 async function modelError(err: unknown): Promise<never> {
-  if (err instanceof RefusedError) fail(err.message);
-  if (err instanceof Anthropic.AuthenticationError) fail("The API key was rejected. Check ANTHROPIC_API_KEY.");
-  if (err instanceof Anthropic.RateLimitError) fail("Rate limited. Try again in a moment.");
-  if (err instanceof Anthropic.APIError) fail(`API error ${err.status}: ${err.message}`);
+  const msg = describeModelError(err);
+  if (msg) fail(msg);
   throw err;
 }
 
@@ -122,15 +150,19 @@ program
 async function getBrief(cfg: Config, offline: boolean): Promise<{ brief: Brief; source: string }> {
   await syncTouches(cfg);
   const day = today();
-  if (offline || !hasApiKey()) {
+  const rules = async (why: string) => {
     const ctx = await buildContext({ config: cfg, intent: "brief", today: day });
-    return { brief: buildBrief(ctx), source: hasApiKey() ? "rules" : "rules (no ANTHROPIC_API_KEY)" };
-  }
+    return { brief: buildBrief(ctx), source: why ? `rules (${why})` : "rules" };
+  };
+  if (offline) return rules("");
+  if (!modelReady("brief")) return rules("no model key");
   try {
-    const r = await runIntent({ config: cfg, intent: "brief", today: day });
-    return { brief: r.brief!, source: cfg.model };
+    const r = await runIntent({ config: cfg, intent: "brief", today: day, modelFlag: modelFlag() });
+    return { brief: r.brief!, source: r.model };
   } catch (err) {
-    return modelError(err);
+    // The brief must always show up: fall back to rules and say why.
+    const msg = describeModelError(err) ?? (err as Error).message;
+    return rules(`model failed: ${msg.split("\n")[0]}`);
   }
 }
 
@@ -161,8 +193,8 @@ program
 
 // ---------- model intents ----------
 
-async function runAndPrint(intent: Intent, message?: string, project?: string): Promise<void> {
-  needKey();
+async function runAndPrint(intent: ModelIntent, message?: string, project?: string): Promise<void> {
+  needModel(intent);
   const cfg = config();
   await syncTouches(cfg);
   let streamed = false;
@@ -173,6 +205,7 @@ async function runAndPrint(intent: Intent, message?: string, project?: string): 
       message,
       project,
       today: today(),
+      modelFlag: modelFlag(),
       onText: (t) => {
         streamed = true;
         process.stdout.write(t);
@@ -182,6 +215,7 @@ async function runAndPrint(intent: Intent, message?: string, project?: string): 
     process.stdout.write("\n");
     const writes = r.toolCalls.filter((c) => !c.isError && !c.name.startsWith("get_"));
     if (writes.length) console.log(dim(`${writes.length} change${writes.length === 1 ? "" : "s"} committed to ${cfg.selfhubDir}`));
+    console.log(dim(`— ${r.model}`));
   } catch (err) {
     await modelError(err);
   }
@@ -275,14 +309,14 @@ program
   .option("--no-open", "do not open the browser")
   .action(async (o: { port: string; open: boolean }) => {
     const cfg = config();
-    const server = createUiServer({ config: cfg, hasApiKey: hasApiKey(), today: program.opts<{ today?: string }>().today });
+    const server = createUiServer({ config: cfg, modelFlag: modelFlag(), today: program.opts<{ today?: string }>().today });
     const port = Number(o.port) || 4747;
     await new Promise<void>((resolveListen, reject) => {
       server.once("error", reject);
       server.listen(port, "127.0.0.1", () => resolveListen());
     });
     const url = `http://127.0.0.1:${port}`;
-    console.log(`Chief of Staff UI at ${url}${hasApiKey() ? "" : dim("  (offline mode: brief, decisions and capture work; questions need ANTHROPIC_API_KEY)")}`);
+    console.log(`Chief of Staff UI at ${url}${modelReady("ask") ? "" : dim("  (no model key: brief, decisions and capture work; questions need one — see cos models)")}`);
     console.log(dim("Ctrl+C to stop."));
     if (o.open && process.platform === "darwin") {
       const { execFile } = await import("node:child_process");
@@ -414,6 +448,108 @@ scheduler
     }
   });
 
+// ---------- models and providers ----------
+
+const models = program
+  .command("models")
+  .description("which model answers what: list, pick, test")
+  .action(() => printModels());
+
+function printModels(): void {
+  const settings = readModelSettings();
+  console.log(bold("Providers"));
+  for (const id of PROVIDER_ORDER) {
+    const p = PROVIDERS[id];
+    const ok = providerConfigured(id);
+    console.log(`  ${ok ? "●" : dim("○")} ${p.label.padEnd(48)} ${ok ? "ready" : dim(`set ${p.keyEnv[0]}  (${p.keyUrl})`)}`);
+  }
+  console.log("");
+  console.log(bold("Models in use"));
+  for (const intent of MODEL_INTENTS) {
+    let line: string;
+    try {
+      const r = resolveModel(intent, { flag: modelFlag(), settings });
+      line = r
+        ? `${formatSpec(r.spec).padEnd(44)} ${dim(r.source)}${r.ready ? "" : `  ← ${r.missing} missing`}`
+        : dim("none — add a key");
+    } catch (err) {
+      line = `invalid: ${(err as Error).message}`;
+    }
+    console.log(`  ${intent.padEnd(8)} ${line}`);
+  }
+  console.log("");
+  console.log(bold("Pick one"));
+  console.log(`  cos models use openai:gpt-5.4                 ${dim("everything")}`);
+  console.log(`  cos models use anthropic:claude-haiku-4-5 --for capture   ${dim("one intent")}`);
+  console.log(`  cos --model openrouter:openai/gpt-5.2 ask "…"  ${dim("one command")}`);
+  console.log(dim(`  presets: ${presets(settings).join(", ")}`));
+  console.log(dim(`  saved in ${settingsFile()}`));
+}
+
+function intentOption(v?: string): ModelIntent | undefined {
+  if (!v) return undefined;
+  if (!(MODEL_INTENTS as readonly string[]).includes(v)) fail(`--for must be one of: ${MODEL_INTENTS.join(", ")}`);
+  return v as ModelIntent;
+}
+
+models
+  .command("use")
+  .argument("<model>", "provider:model, e.g. anthropic:claude-opus-5, openai:gpt-5.4, openrouter:openai/gpt-5.2, compatible:llama3.2")
+  .option("--for <intent>", `only for one intent (${MODEL_INTENTS.join(" | ")})`)
+  .description("choose the model (saved, used by the CLI, the scheduler and the menubar app)")
+  .action((model: string, o: { for?: string }) => {
+    const intent = intentOption(o.for);
+    let spec;
+    try {
+      spec = parseModelSpec(model);
+      setModel(formatSpec(spec), intent);
+    } catch (err) {
+      fail((err as Error).message);
+    }
+    console.log(`${intent ?? "default"} → ${formatSpec(spec)}`);
+    if (!providerConfigured(spec.provider)) {
+      console.log(dim(`Note: ${PROVIDERS[spec.provider].keyEnv[0]} is not set yet (${PROVIDERS[spec.provider].keyUrl}).`));
+    }
+  });
+
+models
+  .command("reset")
+  .option("--for <intent>", "clear only one intent's override")
+  .description("clear a saved choice (falls back to COS_MODEL, then the first provider with a key)")
+  .action((o: { for?: string }) => {
+    const intent = intentOption(o.for);
+    setModel(null, intent);
+    console.log(`Cleared ${intent ?? "the default"}.`);
+  });
+
+models
+  .command("test")
+  .argument("[model]", "provider:model to test; defaults to the model for ask")
+  .description("send one tiny request to check the key and model name work")
+  .action(async (model?: string) => {
+    let provider, spec;
+    try {
+      ({ provider, spec } = providerFor("ask", model ?? modelFlag()));
+    } catch (err) {
+      fail((err as Error).message);
+    }
+    const started = Date.now();
+    try {
+      const res = await provider.chat({
+        model: spec.model,
+        instructions: "You are a connectivity check.",
+        context: "Reply with exactly: ok",
+        messages: [{ role: "user", content: "Reply with exactly: ok" }],
+        tools: [],
+        effort: "low",
+        maxTokens: 2000,
+      });
+      console.log(`${formatSpec(spec)} answered "${res.text.slice(0, 60)}" in ${Date.now() - started} ms ${dim(`(served by ${res.model})`)}`);
+    } catch (err) {
+      await modelError(err);
+    }
+  });
+
 // ---------- the native shell ----------
 
 const menubar = program.command("menubar").description("the native macOS shell: menubar icon, floating pill, double-tap Fn, native listening");
@@ -491,7 +627,7 @@ program
   .option("--seconds <n>", "max seconds to listen", "12")
   .description("speak a question (or type it), hear the answer")
   .action(async (o: { seconds: string }) => {
-    needKey();
+    needModel("ask");
     const stt = await pickStt();
     let question: string;
     if (stt) {
@@ -507,7 +643,7 @@ program
     const cfg = config();
     await syncTouches(cfg);
     try {
-      const r = await runIntent({ config: cfg, intent: "ask", message: question, today: today() });
+      const r = await runIntent({ config: cfg, intent: "ask", message: question, today: today(), modelFlag: modelFlag() });
       console.log(`${bold("Chief of staff:")} ${r.text}`);
       await speak(r.text);
     } catch (err) {

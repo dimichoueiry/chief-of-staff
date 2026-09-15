@@ -1,8 +1,8 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type Anthropic from "@anthropic-ai/sdk";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { RefusedError, runIntent, type ModelCall } from "../src/brain/loop.js";
+import type { ChatRequest, ChatResponse, LLMProvider } from "../src/brain/llm/types.js";
+import { RefusedError, runIntent } from "../src/brain/loop.js";
 import { ToolRuntime, toolsFor } from "../src/brain/tools.js";
 import { loadConfig } from "../src/config.js";
 import { ensureRepo, git } from "../src/core/git.js";
@@ -13,33 +13,22 @@ import { makeTmpSelfhub } from "./helpers/tmp-selfhub.js";
 
 const TODAY = "2026-09-17";
 
-function message(content: Anthropic.ContentBlock[], stop: Anthropic.StopReason): Anthropic.Message {
-  return {
-    id: "msg_test",
-    type: "message",
-    role: "assistant",
-    model: "claude-opus-5",
-    content,
-    stop_reason: stop,
-    stop_sequence: null,
-    usage: { input_tokens: 1, output_tokens: 1 },
-  } as unknown as Anthropic.Message;
-}
-const text = (t: string): Anthropic.TextBlock => ({ type: "text", text: t, citations: null });
-const toolUse = (id: string, name: string, input: Record<string, unknown>): Anthropic.ToolUseBlock =>
-  ({ type: "tool_use", id, name, input }) as Anthropic.ToolUseBlock;
+const reply = (o: Partial<ChatResponse>): ChatResponse => ({ text: "", toolCalls: [], stop: "end", model: "scripted", ...o });
 
-/** A scripted model: returns the queued responses in order and records every request. */
-function scripted(responses: Anthropic.Message[]) {
-  const requests: Anthropic.MessageStreamParams[] = [];
-  const model: ModelCall = async (params, onText) => {
-    requests.push(params);
-    const r = responses.shift();
-    if (!r) throw new Error("script exhausted");
-    for (const b of r.content) if (b.type === "text" && onText) onText(b.text);
-    return r;
+/** A provider that returns queued responses in order and records every request. Deep-copies requests so later pushes don't rewrite history. */
+function scripted(responses: ChatResponse[]) {
+  const requests: ChatRequest[] = [];
+  const provider: LLMProvider = {
+    id: "openai",
+    async chat(req, onText) {
+      requests.push(structuredClone(req));
+      const r = responses.shift();
+      if (!r) throw new Error("script exhausted");
+      if (onText && r.text) onText(r.text);
+      return r;
+    },
   };
-  return { model, requests };
+  return { llm: { provider, spec: { provider: "openai" as const, model: "gpt-test" } }, requests };
 }
 
 describe("ToolRuntime", () => {
@@ -68,9 +57,8 @@ describe("ToolRuntime", () => {
     expect(p?.skipUntil).toBe("2026-09-24");
     expect(p?.lastTouched).toBe("2026-09-17");
     expect((await new Reminders(dir).list())[0].done).toBe(true);
-    expect(rt.calls.map((c) => c.name)).toHaveLength(13);
-    const log = await git(dir, ["log", "--format=%s"]);
-    expect(log).toContain('cos: skip cadence for "Fampy" until 2026-09-24');
+    expect(rt.calls).toHaveLength(13);
+    expect(await git(dir, ["log", "--format=%s"])).toContain('cos: skip cadence for "Fampy" until 2026-09-24');
   });
 
   it("reads git history for a project through its path field", async () => {
@@ -83,19 +71,19 @@ describe("ToolRuntime", () => {
     await git(repo, ["commit", "-q", "-m", "first real commit"]);
     const rt = new ToolRuntime(loadConfig({ COS_SELFHUB: dir, COS_PROJECT_ROOTS: "/nonexistent" }), TODAY);
     await rt.execute("upsert_project", { name: "Proj", path: repo });
-    const r = await rt.execute("get_git_log", { project: "proj", limit: 5 });
-    expect(r.result).toContain("first real commit");
+    expect((await rt.execute("get_git_log", { project: "proj", limit: 5 })).result).toContain("first real commit");
     expect((await rt.execute("get_git_log", { project: "unknown" })).result).toContain("No folder found");
   });
 
-  it("gives the brief no tools and capture only write tools", () => {
+  it("gives the brief no tools and each intent only its own", () => {
     expect(toolsFor("brief")).toEqual([]);
     expect(toolsFor("capture").map((t) => t.name)).not.toContain("get_git_log");
     expect(toolsFor("focus").map((t) => t.name)).toEqual(["get_project", "upsert_project", "get_git_log"]);
+    expect(toolsFor("ask")[0].parameters).toMatchObject({ type: "object" });
   });
 });
 
-describe("runIntent (scripted model)", () => {
+describe("runIntent (scripted provider)", () => {
   let dir: string;
   let cleanup: () => Promise<void>;
   beforeEach(async () => ({ dir, cleanup } = await makeTmpSelfhub()));
@@ -103,55 +91,54 @@ describe("runIntent (scripted model)", () => {
 
   const cfg = () => loadConfig({ COS_SELFHUB: dir, COS_PROJECT_ROOTS: "/nonexistent", COS_NAME: "Dimitri" });
 
-  it("executes tool calls, feeds results back, and returns the final text", async () => {
-    const { model, requests } = scripted([
-      message([text("Filing that."), toolUse("t1", "upsert_project", { name: "Fampy Academy", why: "course revenue" })], "tool_use"),
-      message([text("Created Fampy Academy (why: course revenue).")], "end_turn"),
+  it("executes tool calls, feeds results back in neutral form, and returns the final text", async () => {
+    const { llm, requests } = scripted([
+      reply({ text: "Filing that.", stop: "tool_use", toolCalls: [{ id: "t1", name: "upsert_project", input: { name: "Fampy Academy", why: "course revenue" } }], providerData: { opaque: 1 } }),
+      reply({ text: "Created Fampy Academy (why: course revenue)." }),
     ]);
     const streamed: string[] = [];
     const r = await runIntent({
       config: cfg(), intent: "capture", message: "starting a project: fampy academy, it's for course revenue",
-      today: TODAY, calendarProvider: noneProvider, model, onText: (t) => streamed.push(t),
+      today: TODAY, calendarProvider: noneProvider, llm, onText: (t) => streamed.push(t),
     });
     expect(r.turns).toBe(2);
+    expect(r.model).toBe("openai:gpt-test");
     expect(r.text).toBe("Created Fampy Academy (why: course revenue).");
     expect(r.toolCalls.map((c) => c.name)).toEqual(["upsert_project"]);
     expect((await new Ledger(dir).find("Fampy Academy"))?.why).toBe("course revenue");
     expect(streamed.join("")).toContain("Filing that.");
 
-    // The second request carries the assistant turn and the tool result.
-    const second = requests[1].messages;
-    expect(second).toHaveLength(3);
-    expect(second[2].role).toBe("user");
-    const results = second[2].content as Anthropic.ToolResultBlockParam[];
-    expect(results[0].tool_use_id).toBe("t1");
-    expect(String(results[0].content)).toContain("Created");
-
-    // Persona + task are the cacheable first system block; memory comes after.
-    const system = requests[0].system as Anthropic.TextBlockParam[];
-    expect(system[0].cache_control).toEqual({ type: "ephemeral" });
-    expect(system[0].text).toContain("chief of staff");
-    expect(system[1].text).toContain("# Memory");
-    const toolNames = (requests[0].tools ?? []).map((t) => ("name" in t ? t.name : ""));
-    expect(toolNames).toContain("upsert_project");
+    const [first, second] = requests;
+    expect(first.model).toBe("gpt-test");
+    expect(first.instructions).toContain("chief of staff");
+    expect(first.context).toContain("# Memory");
+    expect(first.tools.map((t) => t.name)).toContain("upsert_project");
+    expect(first.json).toBeUndefined();
+    expect(second.messages).toHaveLength(3);
+    expect(second.messages[1]).toMatchObject({ role: "assistant", providerData: { opaque: 1 } });
+    expect(second.messages[2]).toMatchObject({ role: "tool", results: [{ id: "t1" }] });
   });
 
-  it("asks for a structured brief with no tools and parses it", async () => {
-    const brief = { greeting: "Good morning, Dimitri", date: TODAY, headline: "h", focus: [], schedule: [], decisions: [], reminders: [], nudges: [] };
-    const { model, requests } = scripted([message([text(JSON.stringify(brief))], "end_turn")]);
-    const r = await runIntent({ config: cfg(), intent: "brief", today: TODAY, calendarProvider: noneProvider, model });
-    expect(r.brief).toEqual(brief);
-    expect(requests[0].tools).toBeUndefined();
-    expect(requests[0].output_config?.format?.type).toBe("json_schema");
-    expect(requests[0].thinking).toEqual({ type: "adaptive" });
+  it("asks for a JSON brief with no tools and normalises a prose-wrapped answer", async () => {
+    const payload = { greeting: "Good morning, Dimitri", date: TODAY, headline: "h", focus: [{ title: "Do it", project: "X", why: "y", size: "1 hour", when: "" }], schedule: [], decisions: [], reminders: [], nudges: [] };
+    const { llm, requests } = scripted([reply({ text: "Here is the brief:\n```json\n" + JSON.stringify(payload) + "\n```" })]);
+    const r = await runIntent({ config: cfg(), intent: "brief", today: TODAY, calendarProvider: noneProvider, llm });
+    expect(r.brief?.focus[0].title).toBe("Do it");
+    expect(requests[0].tools).toEqual([]);
+    expect(requests[0].json?.name).toBe("brief");
   });
 
-  it("surfaces refusals and stops runaway loops", async () => {
-    const { model } = scripted([message([], "refusal")]);
-    await expect(runIntent({ config: cfg(), intent: "ask", today: TODAY, calendarProvider: noneProvider, model })).rejects.toBeInstanceOf(RefusedError);
+  it("surfaces refusals, continues after a pause, and stops runaway loops", async () => {
+    const refused = scripted([reply({ stop: "refusal" })]);
+    await expect(runIntent({ config: cfg(), intent: "ask", today: TODAY, calendarProvider: noneProvider, llm: refused.llm })).rejects.toBeInstanceOf(RefusedError);
 
-    const endless = scripted(Array.from({ length: 5 }, (_, i) => message([toolUse(`t${i}`, "add_note", { text: "loop" })], "tool_use")));
-    const r = await runIntent({ config: cfg(), intent: "ask", today: TODAY, calendarProvider: noneProvider, model: endless.model, maxTurns: 3 });
+    const paused = scripted([reply({ stop: "pause", text: "partial" }), reply({ text: "done" })]);
+    const p = await runIntent({ config: cfg(), intent: "ask", today: TODAY, calendarProvider: noneProvider, llm: paused.llm });
+    expect(p.text).toBe("done");
+    expect(paused.requests[1].messages[1]).toMatchObject({ role: "assistant", text: "partial" });
+
+    const endless = scripted(Array.from({ length: 5 }, (_, i) => reply({ stop: "tool_use", toolCalls: [{ id: `t${i}`, name: "add_note", input: { text: "loop" } }] })));
+    const r = await runIntent({ config: cfg(), intent: "ask", today: TODAY, calendarProvider: noneProvider, llm: endless.llm, maxTurns: 3 });
     expect(r.turns).toBe(3);
     expect(r.toolCalls).toHaveLength(3);
   });
