@@ -154,6 +154,21 @@ export function renderBriefSpeech(b: Brief): string {
   return s.join(" ");
 }
 
+/** A model's markdown as something a voice can read: no asterisks, hashes, bullets or raw links. */
+export function markdownToSpeech(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/\[([^\]]+)\]\((?:https?:[^)]*)\)/g, "$1")
+    .replace(/https?:\/\/\S+/g, "the link")
+    .replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, "")
+    .replace(/^[ \t]*(?:[-*•]|\d+[.)])[ \t]+(.*?)[ \t]*$/gm, (_m, item: string) => sentence(item))
+    .replace(/(\*\*|__)(.+?)\1/g, "$2")
+    .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,!?:;]|$)/g, "$1$2")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/[ \t]+/g, " ")
+    .trim();
+}
+
 // ---------- notification ----------
 
 export function renderBriefNotification(b: Brief): { title: string; body: string } {

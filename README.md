@@ -78,6 +78,22 @@ First run asks for three permissions: Accessibility (to see the Control key from
 Microphone and Speech Recognition (to listen, on-device).
 Rebuilding the app changes its signature, so macOS may ask for these again.
 
+### It remembers the conversation
+
+The pill is one running conversation, not a series of one-off questions. Ask "what should I do
+today?", then "and tomorrow?", "why the second one?" or "ok, save that as the next action": each
+message goes to the model with the exchanges before it, including what it looked up, what it
+filed, and what it opened (even the instant "open …" requests that never touch a model).
+
+- The thread shows above the pill and is still there when you dismiss it and bring it back.
+- While it works, the pill says what it's doing ("Checking your calendar…"); replies show lists, bold and links.
+- **＋ new** (or ⌘N) starts a fresh conversation. After two quiet hours the next message starts one on its own
+  (`COS_CONVERSATION_IDLE_MINUTES`).
+- Conversations are saved in `~/.cos/conversations`, so restarting the app doesn't lose the thread.
+  Only the most recent exchanges that fit a size budget are sent to the model.
+
+Anything worth keeping beyond the conversation still goes into selfhub (ledger, reminders, notes) through the tools.
+
 `cos menubar open` relaunches it; `cos menubar uninstall` removes the app and the login item.
 Logs live in `~/.cos/logs`.
 
@@ -211,4 +227,5 @@ examples/     a sample selfhub for demos and tests
 | UI: the pill + brief panel served locally, browser speech recognition | done; `cos ui` |
 | Voice: `say` for speech, whisper.cpp for listening, typed fallback | done; `cos say brief`, `cos talk` |
 | Native menubar shell: floating pill, double-tap Control, ⌥Space, native on-device listening | done; `cos menubar install` |
+| Conversation memory in the pill: follow-ups, saved threads, live progress, formatted replies | done, tested (scripted model and headless browser) |
 | Wake word, phone notifications, autonomy epic | not yet |

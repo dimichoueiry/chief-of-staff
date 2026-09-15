@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Brief } from "../src/brain/schema.js";
 import {
+  markdownToSpeech,
   renderBriefMarkdown,
   renderBriefNotification,
   renderBriefSpeech,
@@ -86,5 +87,14 @@ describe("render", () => {
       title: "Good morning, Dimitri",
       body: "Record the intro video · 10:30–13:30 (+1 more)",
     });
+  });
+});
+
+describe("markdownToSpeech", () => {
+  it("reads a model's markdown without symbols or raw links", () => {
+    const md = "**Top 3 today**\n\n1. Record the *intro* video — `mlguerrilla`\n2. Reply to [the review](https://example.com/review)\n- see https://slate-iota-lac.vercel.app/app\n\n## Later\nKeep nuonc_rag parked.";
+    expect(markdownToSpeech(md)).toBe(
+      "Top 3 today\n\nRecord the intro video — mlguerrilla.\nReply to the review.\nsee the link.\n\nLater\nKeep nuonc_rag parked.",
+    );
   });
 });

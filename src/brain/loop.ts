@@ -32,9 +32,15 @@ export interface RunOptions {
   /** Inject a provider (tests). Skips resolution; `spec` names what it pretends to be. */
   llm?: { provider: LLMProvider; spec: ModelSpec };
   onText?: (delta: string) => void;
+  /** Called before each tool runs, so a UI can say what is happening. */
+  onTool?: (name: string, input: Record<string, unknown>) => void;
+  /** Earlier messages in this conversation, oldest first (see conversation.ts). */
+  history?: ChatMessage[];
   effort?: Effort;
   maxTurns?: number;
   context?: ContextBundle;
+  /** Replace how things are opened and where Slate boards come from (tests). */
+  actions?: ToolRuntime["actions"];
 }
 
 export interface RunResult {
@@ -48,6 +54,8 @@ export interface RunResult {
   model: string;
   /** Things the model wants to open that need the user's OK. */
   pendingOpens: PendingOpen[];
+  /** The tool calls and results of this run, without provider-specific data, for the conversation record. */
+  steps: ChatMessage[];
 }
 
 export class RefusedError extends Error {
@@ -77,7 +85,7 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
   const context =
     opts.context ??
     (await buildContext({ config, intent, project: opts.project, today: opts.today, calendarProvider: opts.calendarProvider }));
-  const runtime = new ToolRuntime(config, context.today, opts.calendarProvider);
+  const runtime = new ToolRuntime(config, context.today, opts.calendarProvider, opts.actions);
   const tools = toolsFor(intent);
   const maxTurns = opts.maxTurns ?? 12;
 
@@ -85,7 +93,9 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
   const memory = `# Memory\n${renderContext(context)}`;
   const userMessage = (opts.message ?? "").trim() || DEFAULT_MESSAGES[intent];
   if (!userMessage) throw new Error(`Intent "${intent}" needs a message.`);
-  const messages: ChatMessage[] = [{ role: "user", content: userMessage }];
+  const history = intent === "brief" ? [] : (opts.history ?? []);
+  const messages: ChatMessage[] = [...history, { role: "user", content: userMessage }];
+  const firstNew = messages.length;
 
   let turns = 0;
   let last: Awaited<ReturnType<LLMProvider["chat"]>> | undefined;
@@ -116,6 +126,7 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
     messages.push({ role: "assistant", text: res.text, toolCalls: res.toolCalls, providerData: res.providerData });
     const results = [];
     for (const call of res.toolCalls) {
+      opts.onTool?.(call.name, call.input);
       const done = await runtime.execute(call.name, call.input);
       results.push({ id: call.id, content: done.result, isError: done.isError || undefined });
     }
@@ -147,5 +158,12 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
     stopReason: last.stop,
     model: formatSpec(spec),
     pendingOpens: runtime.pendingOpens,
+    steps: messages
+      .slice(firstNew)
+      .flatMap((m): ChatMessage[] => {
+        if (m.role === "tool") return [m];
+        if (m.role === "assistant" && m.toolCalls.length) return [{ role: "assistant", text: m.text, toolCalls: m.toolCalls }];
+        return [];
+      }),
   };
 }

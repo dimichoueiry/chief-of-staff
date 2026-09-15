@@ -144,6 +144,32 @@ describe("runIntent (scripted provider)", () => {
     expect(second.messages[2]).toMatchObject({ role: "tool", results: [{ id: "t1" }] });
   });
 
+  it("sends the conversation so far before the new message and returns this run's steps without provider data", async () => {
+    const { llm, requests } = scripted([
+      reply({ stop: "tool_use", toolCalls: [{ id: "t9", name: "add_note", input: { text: "tauri for the menubar" } }], providerData: { reasoning_details: [1] } }),
+      reply({ text: "Noted." }),
+    ]);
+    const history = [
+      { role: "user" as const, content: "what was that menubar framework?" },
+      { role: "assistant" as const, text: "Tauri.", toolCalls: [] },
+    ];
+    const tools: string[] = [];
+    const r = await runIntent({
+      config: cfg(), intent: "ask", message: "save that as a note", today: TODAY, calendarProvider: noneProvider, llm, history,
+      onTool: (name) => tools.push(name),
+    });
+    expect(requests[0].messages).toEqual([...history, { role: "user", content: "save that as a note" }]);
+    expect(tools).toEqual(["add_note"]);
+    expect(r.steps).toEqual([
+      { role: "assistant", text: "", toolCalls: [{ id: "t9", name: "add_note", input: { text: "tauri for the menubar" } }] },
+      { role: "tool", results: [{ id: "t9", content: "Noted: tauri for the menubar" }] },
+    ]);
+
+    const brief = scripted([reply({ text: "{}" })]);
+    await runIntent({ config: cfg(), intent: "brief", today: TODAY, calendarProvider: noneProvider, llm: brief.llm, history });
+    expect(brief.requests[0].messages).toHaveLength(1); // the morning brief never carries a chat
+  });
+
   it("asks for a JSON brief with no tools and normalises a prose-wrapped answer", async () => {
     const payload = { greeting: "Good morning, Dimitri", date: TODAY, headline: "h", focus: [{ title: "Do it", project: "X", why: "y", size: "1 hour", when: "" }], schedule: [], decisions: [], reminders: [], nudges: [] };
     const { llm, requests } = scripted([reply({ text: "Here is the brief:\n```json\n" + JSON.stringify(payload) + "\n```" })]);

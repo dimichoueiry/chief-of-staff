@@ -16,6 +16,8 @@ export interface Config {
   journalDays: number;
   /** Calendar days loaded into context, starting today. */
   calendarDays: number;
+  /** Minutes of quiet after which the pill starts a new conversation. */
+  conversationIdleMinutes: number;
 }
 
 function expandHome(p: string): string {
@@ -51,5 +53,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     silenceDays: Number(env.COS_SILENCE_DAYS) || 14,
     journalDays: Number(env.COS_JOURNAL_DAYS) || 7,
     calendarDays: Math.min(31, Math.max(1, Number(env.COS_CALENDAR_DAYS) || 7)),
+    conversationIdleMinutes: Math.max(1, Number(env.COS_CONVERSATION_IDLE_MINUTES) || 120),
   };
 }

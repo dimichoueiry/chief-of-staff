@@ -54,10 +54,10 @@
         <span class="spark">✦</span>
         <span id="answer-title">Chief of staff</span>
         <span class="model" id="answer-model"></span>
-        <button class="chip chip-accent" id="answer-speak">▶ read aloud</button>
+        <button class="chip" id="new-chat" title="Start a new conversation (⌘N)">＋ new</button>
+        <button class="chip chip-accent" id="answer-speak" title="Read the last reply aloud">▶ read aloud</button>
       </div>
-      <pre id="answer-text"></pre>
-      <div class="answer-actions" id="answer-actions" hidden></div>
+      <div class="thread" id="thread" aria-live="polite"></div>
     </section>
 
     <form class="pill" id="pill" data-state="idle" autocomplete="off">

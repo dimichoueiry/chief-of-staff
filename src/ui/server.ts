@@ -10,6 +10,9 @@ import {
   MODEL_INTENTS, PROVIDERS, PROVIDER_ORDER, formatSpec, parseModelSpec, presets, providerConfigured,
   readModelSettings, resolveModel, setModel, type ModelIntent,
 } from "../brain/llm/registry.js";
+import { Conversations, conversationsDir, historyMessages, visibleTurns, type Conversation } from "../brain/conversation.js";
+import type { LLMProvider, ChatMessage } from "../brain/llm/types.js";
+import type { ModelSpec } from "../brain/llm/registry.js";
 import { runIntent } from "../brain/loop.js";
 import type { Brief } from "../brain/schema.js";
 import type { Config } from "../config.js";
@@ -21,7 +24,7 @@ import { daysIdle } from "../logic/cadence.js";
 import { decide, isChoice } from "../logic/decide.js";
 import { scribe } from "../logic/scribe.js";
 import { loadLastBrief, saveBrief } from "../output/notify.js";
-import { renderBriefSpeech } from "../output/render.js";
+import { markdownToSpeech, renderBriefSpeech } from "../output/render.js";
 import { eventsInRange } from "../sensors/calendar.js";
 import { applyActivity, scanActivity } from "../sensors/git.js";
 import { addDays, todayISO } from "../util/dates.js";
@@ -54,6 +57,36 @@ export interface UiOptions {
   /** Replace `open` and the Slate board list (tests). */
   openRunner?: Runner;
   slateLoader?: () => Promise<{ boards: SlateBoard[]; live: boolean; reason?: string }>;
+  /** Use this provider for every model request instead of the configured one (tests). */
+  llm?: { provider: LLMProvider; spec: ModelSpec };
+  /** Where conversations are kept (tests). */
+  conversations?: Conversations;
+}
+
+/** What the pill says while a tool runs. */
+const DOING: Record<string, string> = {
+  get_calendar: "Checking your calendar…",
+  get_project: "Reading the ledger…",
+  get_git_log: "Reading recent commits…",
+  open: "Opening…",
+  add_shortcut: "Saving a shortcut…",
+  add_reminder: "Setting a reminder…",
+  complete_reminder: "Updating reminders…",
+  add_note: "Taking a note…",
+  append_journal: "Writing in the journal…",
+};
+
+type Emit = (event: Record<string, unknown>) => void;
+
+interface PillReply {
+  kind: "answer" | "capture" | "action" | "confirm" | "focus" | "error";
+  text: string;
+  model?: string;
+  changes?: number;
+  confirm?: ReturnType<typeof confirmView>[];
+  where?: string;
+  project?: string;
+  steps?: ChatMessage[];
 }
 
 /** "open slate", "pull up my gmail", "launch cursor", "search for …": handled without a model. */
@@ -73,6 +106,7 @@ export function createUiServer(o: UiOptions): Server {
   /** Settings are re-read on every request, so a switch in the menubar applies immediately. */
   function ready(intent: ModelIntent): boolean {
     if (o.offline) return false;
+    if (o.llm) return true;
     try {
       return Boolean(resolveModel(intent, { flag: o.modelFlag })?.ready);
     } catch {
@@ -88,7 +122,7 @@ export function createUiServer(o: UiOptions): Server {
     };
     if (!ready("brief")) return rules(o.offline ? "" : "no model key");
     try {
-      const r = await runIntent({ config, intent: "brief", today: today(), modelFlag: o.modelFlag });
+      const r = await runIntent({ config, intent: "brief", today: today(), modelFlag: o.modelFlag, llm: o.llm });
       return { brief: r.brief!, source: r.model };
     } catch (err) {
       return rules(`model failed: ${String((err as Error).message).split("\n")[0]}`);
@@ -129,7 +163,97 @@ export function createUiServer(o: UiOptions): Server {
     return text ? (JSON.parse(text) as Record<string, unknown>) : {};
   }
 
-  const changes = (calls: { name: string; isError: boolean }[]) => calls.filter((c) => !c.isError && !c.name.startsWith("get_")).length;
+  const changes = (calls: { name: string; isError: boolean }[]) => calls.filter((c) => !c.isError && !c.name.startsWith("get_") && c.name !== "open").length;
+
+  const conversations = o.conversations ?? new Conversations(conversationsDir(), config.conversationIdleMinutes);
+  const openRunner = o.openRunner ?? macOpen;
+  const boards = o.slateLoader ?? (() => slateBoards());
+  let pillQueue: Promise<unknown> = Promise.resolve();
+
+  /** One message in the pill: remembered with its reply, and answered with the conversation so far. */
+  async function pill(b: Record<string, unknown>, emit: Emit): Promise<{ status: number; body: Record<string, unknown> }> {
+    const text = String(b.text ?? "").trim();
+    if (!text) return { status: 400, body: { error: "empty" } };
+    const mode = String(b.mode ?? "auto");
+
+    let said = text;
+    let focusOn: string | undefined;
+    if (mode === "focus") {
+      const p = await new Ledger(config.selfhubDir).find(text);
+      if (!p) return { status: 404, body: { error: `No project matches "${text}".` } };
+      focusOn = p.name;
+      said = `What are the top 3 moves on ${p.name} right now?`;
+    }
+
+    const convo = conversations.current();
+    emit({ type: "start", conversation: convo.id, user: said });
+    let reply: PillReply;
+    try {
+      reply = await respond(said, mode, focusOn, convo, emit);
+    } catch (err) {
+      reply = { kind: "error", text: `That didn't work: ${String((err as Error).message).split("\n")[0]}` };
+    }
+    conversations.append(
+      convo,
+      { role: "user", text: said },
+      { role: "assistant", text: reply.text, model: reply.model, kind: reply.kind, steps: reply.steps?.length ? reply.steps : undefined },
+    );
+    const { steps: _steps, ...shown } = reply;
+    return { status: 200, body: { ...shown, conversation: convo.id, user: said } };
+  }
+
+  async function respond(text: string, mode: string, focusOn: string | undefined, convo: Conversation, emit: Emit): Promise<PillReply> {
+    const model = (intent: ModelIntent, project?: string) =>
+      runIntent({
+        config, intent, project, message: text, today: today(), modelFlag: o.modelFlag, llm: o.llm,
+        history: historyMessages(convo),
+        actions: { run: openRunner, slate: boards },
+        onTool: (name) => emit({ type: "status", text: DOING[name] ?? "Updating your memory…" }),
+        onText: (delta) => emit({ type: "text", delta }),
+      });
+    const fromModel = (kind: PillReply["kind"], r: Awaited<ReturnType<typeof runIntent>>, extra: Partial<PillReply> = {}): PillReply => ({
+      kind, text: r.text, model: r.model, changes: changes(r.toolCalls), confirm: r.pendingOpens.map(confirmView), steps: r.steps, ...extra,
+    });
+
+    if (focusOn) {
+      if (ready("focus")) return fromModel("focus", await model("focus", focusOn), { project: focusOn });
+      const p = (await new Ledger(config.selfhubDir).find(focusOn))!;
+      return {
+        kind: "focus",
+        project: p.name,
+        model: "rules",
+        text: `Recorded next action: ${p.next ?? "none yet"}.\n${p.why ? `Why it matters: ${p.why}.\n` : ""}\nThe top-3 analysis needs a model. ${NO_MODEL.split(". ").slice(1).join(". ")}`,
+      };
+    }
+
+    if (mode !== "capture" && OPEN_SHAPE.test(text)) {
+      const opened = await openOrQueue(
+        {
+          target: text.replace(/^please\s+/i, "").replace(/^(?:pull up|bring up|show me)\s+/i, "open "),
+          shortcuts: await new Shortcuts(config.selfhubDir).list(),
+          projects: await new Ledger(config.selfhubDir).read(),
+          boards,
+        },
+        openRunner,
+      );
+      if (opened.status === "opened") return { kind: "action", text: opened.message, model: "rules" };
+      if (opened.status === "confirm") return { kind: "confirm", text: opened.message, confirm: [confirmView(opened.pending)], model: "rules" };
+      // Not something the rules know ("open the second one"): the model has the conversation and the same open tool.
+      if (!ready("ask")) {
+        const known = opened.candidates?.length ? `\nI know: ${opened.candidates.slice(0, 10).join(", ")}` : "";
+        return { kind: "answer", text: `Couldn't open that: ${opened.message}.${known}`, model: "rules" };
+      }
+    }
+
+    // With a model, everything in auto mode is one conversation that can both answer and file.
+    const intent: ModelIntent = mode === "capture" ? "capture" : "ask";
+    if (ready(intent)) return fromModel(mode === "capture" ? "capture" : "answer", await model(intent));
+    if (mode === "capture" || CAPTURE_SHAPE.test(text)) {
+      const filed = await scribe(config.selfhubDir, text.replace(/^note:\s*/i, ""), today());
+      return { kind: "capture", text: filed.message + (filed.question ? `\n${filed.question}` : ""), where: filed.where, model: "rules", changes: 1 };
+    }
+    return { kind: "answer", text: NO_MODEL, model: "rules" };
+  }
 
   async function api(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const route = `${req.method} ${url.pathname}`;
@@ -182,66 +306,47 @@ export function createUiServer(o: UiOptions): Server {
       }
       case "POST /api/pill": {
         const b = await body(req);
-        const text = String(b.text ?? "").trim();
-        if (!text) return json(res, 400, { error: "empty" });
-        const mode = String(b.mode ?? "auto");
-
-        if (mode === "focus") {
-          const p = await new Ledger(config.selfhubDir).find(text);
-          if (!p) return json(res, 404, { error: `No project matches "${text}".` });
-          if (!ready("focus")) {
-            return json(res, 200, {
-              kind: "focus",
-              project: p.name,
-              text: `Recorded next action: ${p.next ?? "none yet"}.\n${p.why ? `Why it matters: ${p.why}.\n` : ""}\nThe top-3 analysis needs a model. ${NO_MODEL.split(". ").slice(1).join(". ")}`,
-            });
-          }
-          const r = await runIntent({ config, intent: "focus", project: p.name, today: today(), modelFlag: o.modelFlag });
-          return json(res, 200, { kind: "focus", project: p.name, text: r.text, model: r.model, changes: changes(r.toolCalls) });
+        // Streamed as one JSON object per line: start, status and text while it works, then done.
+        const line = (event: Record<string, unknown>) => {
+          if (!res.headersSent) res.writeHead(200, { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" });
+          res.write(`${JSON.stringify(event)}\n`);
+        };
+        const stream = b.stream === true;
+        // One message at a time, so each reply is saved before the next message reads the conversation.
+        const turn = pillQueue.then(() => pill(b, stream ? line : () => {}));
+        pillQueue = turn.catch(() => undefined);
+        try {
+          const r = await turn;
+          if (!res.headersSent) return json(res, r.status, r.body);
+          line({ type: "done", result: r.body });
+        } catch (err) {
+          if (!res.headersSent) throw err;
+          line({ type: "error", error: (err as Error).message });
         }
-
-        if (mode !== "capture" && OPEN_SHAPE.test(text)) {
-          const opened = await openOrQueue(
-            {
-              target: text.replace(/^please\s+/i, "").replace(/^(?:pull up|bring up|show me)\s+/i, "open "),
-              shortcuts: await new Shortcuts(config.selfhubDir).list(),
-              projects: await new Ledger(config.selfhubDir).read(),
-              boards: o.slateLoader ?? (() => slateBoards()),
-            },
-            o.openRunner ?? macOpen,
-          );
-          if (opened.status === "opened") return json(res, 200, { kind: "action", text: opened.message, model: "rules" });
-          if (opened.status === "confirm") return json(res, 200, { kind: "confirm", text: opened.message, confirm: [confirmView(opened.pending)], model: "rules" });
-          // Not something the rules know: let the model try (it has the same open tool), or explain.
-          if (!ready("ask")) {
-            const known = opened.candidates?.length ? `\nI know: ${opened.candidates.slice(0, 10).join(", ")}` : "";
-            return json(res, 200, { kind: "answer", text: `Couldn't open that: ${opened.message}.${known}`, model: "rules" });
-          }
-        }
-
-        const isCapture = mode === "capture" || (mode === "auto" && CAPTURE_SHAPE.test(text));
-        const intent: ModelIntent = isCapture ? "capture" : "ask";
-        if (isCapture && !ready("capture")) {
-          const filed = await scribe(config.selfhubDir, text.replace(/^note:\s*/i, ""), today());
-          return json(res, 200, { kind: "capture", text: filed.message + (filed.question ? `\n${filed.question}` : ""), where: filed.where, model: "rules" });
-        }
-        if (!ready(intent)) return json(res, 200, { kind: "answer", text: NO_MODEL });
-        const r = await runIntent({ config, intent, message: text, today: today(), modelFlag: o.modelFlag });
-        return json(res, 200, {
-          kind: isCapture ? "capture" : "answer",
-          text: r.text,
-          model: r.model,
-          changes: changes(r.toolCalls),
-          confirm: r.pendingOpens.map(confirmView),
-        });
+        res.end();
+        return;
+      }
+      case "GET /api/conversation": {
+        const c = conversations.current();
+        return json(res, 200, { id: c.id, turns: visibleTurns(c) });
+      }
+      case "POST /api/conversation/new": {
+        const c = conversations.startNew();
+        return json(res, 200, { id: c.id, turns: visibleTurns(c) });
       }
       case "POST /api/actions/confirm": {
         const b = await body(req);
         const p = takePending(String(b.id ?? ""));
         if (!p) return json(res, 410, { error: "That request expired. Ask again." });
-        if (b.cancel === true) return json(res, 200, { ok: true, text: "Cancelled." });
+        const what = p.action.kind === "url" ? p.action.url : p.action.label;
+        if (b.cancel === true) {
+          conversations.append(conversations.current(), { role: "event", text: `They cancelled opening ${what}.` });
+          return json(res, 200, { ok: true, text: "Cancelled." });
+        }
         try {
-          return json(res, 200, { ok: true, text: await performOpen(p.action, o.openRunner ?? macOpen) });
+          const text = await performOpen(p.action, openRunner);
+          conversations.append(conversations.current(), { role: "event", text: `They confirmed, and ${what} was opened.` });
+          return json(res, 200, { ok: true, text });
         } catch (err) {
           return json(res, 422, { error: (err as Error).message });
         }
@@ -258,7 +363,7 @@ export function createUiServer(o: UiOptions): Server {
         const text = String(b.text ?? "").trim();
         if (!text) return json(res, 400, { error: "empty" });
         if (o.allowSpeech === false) return json(res, 200, { ok: true, muted: true });
-        const spoken = await speak(text);
+        const spoken = await speak(markdownToSpeech(text));
         return json(res, 200, { ok: true, engine: spoken.engine, fellBack: spoken.fellBack ?? null, stopped: spoken.stopped });
       }
       case "POST /api/speak/stop":

@@ -159,35 +159,232 @@ async function stopSpeaking() {
   setState("idle");
 }
 
-function showConfirm(items) {
-  const box = $("answer-actions");
-  box.replaceChildren();
-  box.hidden = !items || !items.length;
-  for (const item of items || []) {
-    if (item.url) box.append(el("div", { class: "url" }, item.url));
+// ---------- replies: a little markdown, built as DOM nodes (never innerHTML) ----------
+function openLink(url) {
+  if (!/^https?:\/\//i.test(url)) return;
+  if (SHELL) toShell({ type: "open", url });
+  else window.open(url, "_blank", "noopener");
+}
+
+function inline(text) {
+  const out = [];
+  const re = /\*\*(.+?)\*\*|`([^`]+)`|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^\s<>()]*[^\s<>().,;:!?'"])|(^|[\s(])\*([^*\n]+)\*(?=[\s).,!?:;]|$)/g;
+  let last = 0;
+  let m;
+  const link = (label, url) => el("a", { href: url, onclick: (e) => { e.preventDefault(); openLink(url); } }, label);
+  while ((m = re.exec(text))) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    if (m[1] !== undefined) out.push(el("strong", {}, ...inline(m[1])));
+    else if (m[2] !== undefined) out.push(el("code", {}, m[2]));
+    else if (m[3] !== undefined) out.push(link(m[3], m[4]));
+    else if (m[5] !== undefined) out.push(link(m[5], m[5]));
+    else out.push(m[6], el("em", {}, m[7]));
+    last = re.lastIndex;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
+function renderMarkdown(text) {
+  const frag = document.createDocumentFragment();
+  const lines = String(text || "").replace(/\r/g, "").split("\n");
+  let list = null;
+  let para = [];
+  const flush = () => {
+    if (!para.length) return;
+    const p = el("p");
+    para.forEach((l, i) => (i ? p.append(el("br"), ...inline(l)) : p.append(...inline(l))));
+    frag.append(p);
+    para = [];
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (/^\s*```/.test(line)) {
+      flush();
+      list = null;
+      const code = [];
+      while (++i < lines.length && !/^\s*```/.test(lines[i])) code.push(lines[i]);
+      frag.append(el("pre", {}, code.join("\n")));
+      continue;
+    }
+    const bullet = /^\s*[-*•]\s+(.*)$/.exec(line);
+    const num = /^\s*(\d+)[.)]\s+(.*)$/.exec(line);
+    if (bullet || num) {
+      flush();
+      const tag = bullet ? "UL" : "OL";
+      if (!list || list.tagName !== tag) {
+        list = el(tag.toLowerCase());
+        if (num && num[1] !== "1") list.setAttribute("start", num[1]);
+        frag.append(list);
+      }
+      list.append(el("li", {}, ...inline(bullet ? bullet[1] : num[2])));
+      continue;
+    }
+    if (!line.trim()) {
+      flush();
+      list = null;
+      continue;
+    }
+    if (list && /^\s{2,}\S/.test(line)) {
+      list.lastElementChild.append(el("br"), ...inline(line.trim()));
+      continue;
+    }
+    list = null;
+    const heading = /^\s*#{1,6}\s+(.*)$/.exec(line);
+    if (heading) {
+      flush();
+      frag.append(el("p", {}, el("strong", {}, ...inline(heading[1]))));
+    } else para.push(line);
+  }
+  flush();
+  return frag;
+}
+
+// ---------- the conversation ----------
+const thread = $("thread");
+let conversationId = null;
+let busy = false;
+let lastReply = "";
+
+function scrollThread() {
+  thread.scrollTop = thread.scrollHeight;
+  if (!SHELL) $("answer").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function confirmButtons(items, said = "") {
+  const box = el("div", { class: "answer-actions" });
+  for (const item of items) {
+    // Always show exactly where it goes, once.
+    if (item.url && !said.includes(item.url.replace(/\/$/, ""))) box.append(el("div", { class: "url" }, item.url));
     const decide = async (cancel) => {
       for (const b of box.querySelectorAll("button")) b.disabled = true;
       const r = await post("/api/actions/confirm", { id: item.id, cancel });
       box.replaceChildren(el("div", { class: "url" }, r.text || r.error || ""));
     };
     box.append(
-      el("button", { class: "chip chip-keep", onclick: () => decide(false) }, `Open ${item.label.length > 40 ? "link" : item.label}`),
+      el("button", { class: "chip chip-keep", onclick: () => decide(false) }, item.label.length > 40 || /^https?:/i.test(item.label) ? "Open" : `Open ${item.label}`),
       el("button", { class: "chip", onclick: () => decide(true) }, "Cancel"),
     );
   }
+  return box;
 }
 
-function showAnswer(title, text, model = "") {
-  showConfirm([]);
+/** Put a reply (or the text streaming in so far) into an assistant turn. */
+function fillTurn(node, turn) {
+  node.dataset.kind = turn.kind || "answer";
+  node.classList.toggle("pending", Boolean(turn.pending));
+  const body = el("div", { class: "body" });
+  if (turn.pending && !turn.text) body.append(el("span", { class: "typing" }, el("i"), el("i"), el("i")));
+  else body.append(renderMarkdown(turn.text));
+  node.replaceChildren(body);
+  if (turn.confirm && turn.confirm.length) node.append(confirmButtons(turn.confirm, turn.text));
+}
+
+function addTurn(turn) {
+  let node;
+  if (turn.role === "user") node = el("div", { class: "turn user" }, turn.text);
+  else if (turn.role === "event") node = el("div", { class: "turn event" }, turn.text);
+  else {
+    node = el("div", { class: "turn assistant" });
+    fillTurn(node, turn);
+    if (!turn.pending) lastReply = turn.text;
+  }
+  thread.append(node);
   $("answer").hidden = false;
-  $("answer-title").textContent = title;
-  $("answer-model").textContent = model ? `· ${model}` : "";
-  $("answer-text").textContent = text;
-  if (!SHELL) $("answer").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  scrollThread();
+  return node;
 }
 
-function hideAnswer() {
-  $("answer").hidden = true;
+function renderThread(c) {
+  conversationId = c.id;
+  thread.replaceChildren();
+  lastReply = "";
+  $("answer-model").textContent = "";
+  for (const t of c.turns) addTurn(t);
+  $("answer").hidden = !c.turns.length;
+}
+
+/** Show the conversation in progress; after a quiet spell the server has started a new one. */
+async function syncConversation() {
+  if (busy) return;
+  try {
+    const c = await get("/api/conversation");
+    if (!busy && c.id !== conversationId) renderThread(c);
+  } catch {
+    /* the server is restarting; try again next time */
+  }
+}
+
+async function newConversation() {
+  if (busy) return;
+  renderThread(await post("/api/conversation/new", {}));
+  input.focus();
+}
+
+/** POST and read newline-delimited JSON events as they arrive; returns the final result. */
+async function postStream(url, body, onEvent) {
+  const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...body, stream: true }) });
+  if (!(r.headers.get("content-type") || "").includes("ndjson") || !r.body) return r.json();
+  const reader = r.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result = null;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let nl;
+    while ((nl = buffer.indexOf("\n")) >= 0) {
+      const line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (!line) continue;
+      const ev = JSON.parse(line);
+      if (ev.type === "done") result = ev.result;
+      else if (ev.type === "error") result = { kind: "error", text: ev.error };
+      else onEvent(ev);
+    }
+  }
+  return result || { kind: "error", text: "The connection closed before a reply." };
+}
+
+async function send(body, thinking, fromVoice = false) {
+  busy = true;
+  setState("thinking", thinking);
+  let pending = null;
+  let live = "";
+  const begin = (conversation, user) => {
+    if (conversation && conversation !== conversationId) renderThread({ id: conversation, turns: [] });
+    if (user) addTurn({ role: "user", text: user });
+    pending = addTurn({ role: "assistant", text: "", pending: true });
+  };
+  let r;
+  try {
+    r = await postStream("/api/pill", body, (ev) => {
+      if (ev.type === "start") begin(ev.conversation, ev.user);
+      else if (ev.type === "status") {
+        live = "";
+        status.textContent = ev.text;
+        if (pending) fillTurn(pending, { text: "", pending: true });
+      } else if (ev.type === "text" && pending) {
+        live += ev.delta;
+        fillTurn(pending, { text: live, pending: true });
+        scrollThread();
+      }
+    });
+  } catch (err) {
+    r = { kind: "error", text: String(err) };
+  }
+  if (r.error && !r.text) r = { kind: "error", text: r.error };
+  if (!pending) begin(r.conversation, r.user);
+  fillTurn(pending, r);
+  lastReply = r.text || "";
+  $("answer-model").textContent = r.model && r.model !== "rules" ? `· ${r.model}` : "";
+  scrollThread();
+  if (r.changes) markStale();
+  busy = false;
+  setState("idle");
+  // Spoken questions get spoken replies; typed ones stay quiet unless you press read aloud.
+  if (fromVoice && r.text) await speakText(r.text);
 }
 
 async function submit(text, fromVoice = false) {
@@ -197,34 +394,11 @@ async function submit(text, fromVoice = false) {
     return;
   }
   input.value = "";
-  setState("thinking", fromVoice ? `“${t}”` : "Thinking…");
-  let r;
-  try {
-    r = await post("/api/pill", { text: t, mode: inputMode });
-  } catch (err) {
-    showAnswer("Chief of staff", String(err));
-    setState("idle");
-    return;
-  }
-  const titles = { capture: "Filed", action: "Done", confirm: "Confirm" };
-  showAnswer(titles[r.kind] || "Chief of staff", r.text || r.error || "", r.model);
-  showConfirm(r.confirm);
-  if (r.kind === "capture") markStale();
-  setState("idle");
-  // Spoken questions get spoken answers; typed ones stay quiet unless you press read aloud.
-  if (fromVoice && r.kind === "answer" && r.text) await speakText(r.text);
+  await send({ text: t, mode: inputMode }, fromVoice ? `“${t}”` : "Thinking…", fromVoice);
 }
 
-async function runFocus(project) {
-  setState("thinking", `Looking at ${project}…`);
-  try {
-    const r = await post("/api/pill", { text: project, mode: "focus" });
-    showAnswer(r.project ? `${r.project} — top 3 right now` : "Focus", r.text || r.error || "", r.model);
-    if (r.changes) markStale();
-  } catch (err) {
-    showAnswer("Focus", String(err));
-  }
-  setState("idle");
+function runFocus(project) {
+  return send({ text: project, mode: "focus" }, `Looking at ${project}…`);
 }
 
 // ---------- voice in a plain browser (Web Speech API). The native shell listens itself. ----------
@@ -274,16 +448,15 @@ function setView(view) {
 window.cosShell = {
   focus() {
     input.focus();
+    syncConversation();
   },
   setMode(view) {
     setView(view);
     input.focus();
   },
   listening(on) {
-    if (on) {
-      hideAnswer();
-      setState("listening", "Listening…");
-    } else if (pill.dataset.state === "listening") setState("idle");
+    if (on) setState("listening", "Listening…");
+    else if (pill.dataset.state === "listening") setState("idle");
   },
   transcript(text, final) {
     if (!final) {
@@ -304,9 +477,9 @@ window.cosShell = {
   focusProject(name) {
     runFocus(name);
   },
+  /** Hide for now; the conversation stays and is there next time. */
   dismiss() {
     if (pill.dataset.state === "speaking") post("/api/speak/stop", {});
-    hideAnswer();
     input.value = "";
     setState("idle");
   },
@@ -323,7 +496,8 @@ $("stop").addEventListener("click", stopSpeaking);
 $("menu-btn").addEventListener("click", () => toShell({ type: "menu" }));
 $("btn-refresh").addEventListener("click", () => loadBrief(true));
 $("btn-speak").addEventListener("click", () => speakText($("panel").dataset.speech || ""));
-$("answer-speak").addEventListener("click", () => speakText($("answer-text").textContent));
+$("answer-speak").addEventListener("click", () => speakText(lastReply));
+$("new-chat").addEventListener("click", newConversation);
 $("mode").addEventListener("click", () => {
   inputMode = inputMode === "auto" ? "ask" : inputMode === "ask" ? "capture" : "auto";
   $("mode").textContent = inputMode;
@@ -335,6 +509,10 @@ document.addEventListener("keydown", (e) => {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
     e.preventDefault();
     input.focus();
+  }
+  if (e.metaKey && e.key.toLowerCase() === "n") {
+    e.preventDefault();
+    newConversation();
   }
   if (e.key === "Escape") {
     window.cosShell.dismiss();
@@ -357,3 +535,4 @@ if (SHELL) {
 
 setState("idle");
 loadBrief();
+syncConversation();

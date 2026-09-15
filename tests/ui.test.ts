@@ -4,6 +4,7 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ChatRequest, ChatResponse, LLMProvider } from "../src/brain/llm/types.js";
 import { loadConfig } from "../src/config.js";
 import { git } from "../src/core/git.js";
 import { Ledger } from "../src/core/ledger.js";
@@ -192,6 +193,25 @@ describe("ui server (offline)", () => {
     expect((await fetch(`${base}/api/calendar?from=2026-09-23&to=2026-09-17`)).status).toBe(422);
   });
 
+  it("remembers the conversation across offline messages and starts over on request", async () => {
+    const post = (b: unknown, path = "/api/pill") => fetch(`${base}${path}`, { method: "POST", body: JSON.stringify(b) });
+    const first = await (await post({ text: "open slate" })).json();
+    const second = await (await post({ text: "remind me friday to call the bank" })).json();
+    expect(second.conversation).toBe(first.conversation);
+    const c = await (await fetch(`${base}/api/conversation`)).json();
+    expect(c.id).toBe(first.conversation);
+    expect(c.turns.map((t: { role: string; text: string }) => `${t.role}: ${t.text}`)).toEqual([
+      "user: open slate",
+      "assistant: Opened Slate.",
+      "user: remind me friday to call the bank",
+      "assistant: Reminder set for 2026-09-18: call the bank",
+    ]);
+    const fresh = await (await post({}, "/api/conversation/new")).json();
+    expect(fresh.id).not.toBe(first.conversation);
+    expect(fresh.turns).toEqual([]);
+    expect((await (await fetch(`${base}/api/conversation`)).json()).id).toBe(fresh.id);
+  });
+
   it("lists presets and providers, and saves a model choice the next request picks up", async () => {
     const before = await (await fetch(`${base}/api/models`)).json();
     expect(before.default).toBeNull();
@@ -210,5 +230,119 @@ describe("ui server (offline)", () => {
     expect((await post({ spec: "openai:gpt-5.4", intent: "dance" })).status).toBe(400);
     const cleared = await (await post({ spec: null })).json();
     expect(cleared.default).toBeNull();
+  });
+});
+
+describe("ui server (scripted model)", () => {
+  let dir: string;
+  let cleanup: () => Promise<void>;
+  let home: string;
+  let base: string;
+  let close: () => Promise<void>;
+  let queue: ChatResponse[];
+  let requests: ChatRequest[];
+
+  const reply = (o: Partial<ChatResponse>): ChatResponse => ({ text: "", toolCalls: [], stop: "end", model: "scripted", ...o });
+  const post = (b: unknown, path = "/api/pill") => fetch(`${base}${path}`, { method: "POST", body: JSON.stringify(b) });
+
+  beforeEach(async () => {
+    queue = [];
+    requests = [];
+    ({ dir, cleanup } = await makeTmpSelfhub());
+    await cp(resolve("examples/selfhub-sample"), dir, { recursive: true });
+    process.env.COS_CALENDAR = "none";
+    home = await mkdtemp(join(tmpdir(), "cos-home-"));
+    process.env.COS_HOME = home;
+    const provider: LLMProvider = {
+      id: "openai",
+      async chat(req, onText) {
+        requests.push(structuredClone(req));
+        const r = queue.shift();
+        if (!r) throw new Error("script exhausted");
+        if (onText && r.text) onText(r.text);
+        return r;
+      },
+    };
+    const server = createUiServer({
+      config: loadConfig({ COS_SELFHUB: dir, COS_PROJECT_ROOTS: "/nonexistent", COS_NAME: "Dimitri" }),
+      today: THU,
+      allowSpeech: false,
+      llm: { provider, spec: { provider: "openai", model: "gpt-test" } },
+      openRunner: async () => {},
+      slateLoader: async () => ({ boards: [], live: true }),
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    close = () => new Promise((r) => server.close(() => r()));
+  });
+  afterEach(async () => {
+    await close();
+    await cleanup();
+    await rm(home, { recursive: true, force: true });
+    delete process.env.COS_CALENDAR;
+    delete process.env.COS_HOME;
+  });
+
+  it("answers follow-ups with the earlier exchanges, including what the rules did", async () => {
+    queue.push(reply({ text: "Record the intro video for MLGuerrilla." }));
+    const first = await (await post({ text: "what should I do today?" })).json();
+    expect(first).toMatchObject({ kind: "answer", text: "Record the intro video for MLGuerrilla.", model: "openai:gpt-test", user: "what should I do today?" });
+
+    await post({ text: "open slate" }); // no model needed, but still part of the conversation
+
+    queue.push(reply({ text: "Tomorrow is clear." }));
+    const second = await (await post({ text: "and tomorrow?" })).json();
+    expect(second.conversation).toBe(first.conversation);
+    expect(requests.at(-1)!.messages).toEqual([
+      { role: "user", content: "what should I do today?" },
+      { role: "assistant", text: "Record the intro video for MLGuerrilla.", toolCalls: [] },
+      { role: "user", content: "open slate" },
+      { role: "assistant", text: "Opened Slate.", toolCalls: [] },
+      { role: "user", content: "and tomorrow?" },
+    ]);
+    // "starting …" used to be filed blindly; with a model, it's part of the same conversation and can be a reply.
+    queue.push(reply({ text: "Starting with the landing page, then." }));
+    await post({ text: "start with the landing page" });
+    expect(requests.at(-1)!.instructions).toContain("Short follow-ups continue the last exchange");
+    expect(requests.at(-1)!.tools.map((t) => t.name)).toContain("open");
+
+    await post({}, "/api/conversation/new");
+    queue.push(reply({ text: "Hi." }));
+    await post({ text: "hello" });
+    expect(requests.at(-1)!.messages).toEqual([{ role: "user", content: "hello" }]);
+  });
+
+  it("streams what it is doing, then the reply, and records tool steps for the next message", async () => {
+    queue.push(
+      reply({ stop: "tool_use", toolCalls: [{ id: "c1", name: "get_calendar", input: { from: "2026-09-18" } }] }),
+      reply({ text: "Nothing on Friday." }),
+    );
+    const res = await post({ text: "what's on friday?", stream: true });
+    expect(res.headers.get("content-type")).toContain("application/x-ndjson");
+    const events = (await res.text()).trim().split("\n").map((l) => JSON.parse(l));
+    expect(events.map((e) => e.type)).toEqual(["start", "status", "text", "done"]);
+    expect(events[0]).toMatchObject({ user: "what's on friday?" });
+    expect(events[1].text).toBe("Checking your calendar…");
+    expect(events[3].result).toMatchObject({ kind: "answer", text: "Nothing on Friday.", changes: 0 });
+
+    queue.push(reply({ text: "Also nothing." }));
+    await post({ text: "saturday?" });
+    const replayed = requests.at(-1)!.messages;
+    expect(replayed.map((m) => m.role)).toEqual(["user", "assistant", "tool", "assistant", "user"]);
+    expect(replayed[2]).toMatchObject({ role: "tool", results: [{ id: "h1_c1", content: expect.stringContaining("Calendar 2026-09-18") }] });
+    const visible = await (await fetch(`${base}/api/conversation`)).json();
+    expect(visible.turns.every((t: Record<string, unknown>) => !("steps" in t))).toBe(true);
+  });
+
+  it("keeps a failed reply in the conversation so 'try again' has something to refer to", async () => {
+    const failed = await (await post({ text: "what should I do today?" })).json();
+    expect(failed).toMatchObject({ kind: "error", text: "That didn't work: script exhausted" });
+    queue.push(reply({ text: "Record the intro video." }));
+    await post({ text: "try again" });
+    expect(requests.at(-1)!.messages.map((m) => (m.role === "user" ? m.content : m.role === "assistant" ? m.text : m.role))).toEqual([
+      "what should I do today?",
+      "That didn't work: script exhausted",
+      "try again",
+    ]);
   });
 });
