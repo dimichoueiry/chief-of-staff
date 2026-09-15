@@ -18,7 +18,7 @@ import { PERSONA } from "./persona.js";
 import { DEFAULT_MESSAGES, loadPrompt } from "./prompts.js";
 import { BRIEF_SCHEMA, type Brief } from "./schema.js";
 import { ToolRuntime, toolsFor, type ToolCall } from "./tools.js";
-import type { PendingOpen } from "../actions/open.js";
+import type { Pending } from "../actions/pending.js";
 
 export interface RunOptions {
   config: Config;
@@ -54,8 +54,8 @@ export interface RunResult {
   stopReason: string;
   /** provider:model that handled the run. */
   model: string;
-  /** Things the model wants to open that need the user's OK. */
-  pendingOpens: PendingOpen[];
+  /** Things the model wants to do that wait for the user's OK. */
+  pending: Pending[];
   /** The tool calls and results of this run, without provider-specific data, for the conversation record. */
   steps: ChatMessage[];
 }
@@ -160,7 +160,7 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
     turns,
     stopReason: last.stop,
     model: formatSpec(spec),
-    pendingOpens: runtime.pendingOpens,
+    pending: runtime.pending,
     steps: messages
       .slice(firstNew)
       .flatMap((m): ChatMessage[] => {

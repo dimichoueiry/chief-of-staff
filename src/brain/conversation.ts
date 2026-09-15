@@ -10,6 +10,7 @@ import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 
 import { join } from "node:path";
 import { todayISO } from "../util/dates.js";
 import { cosHome } from "../util/home.js";
+import type { ConfirmView } from "../actions/pending.js";
 import type { ChatMessage } from "./llm/types.js";
 
 export interface Turn {
@@ -24,6 +25,8 @@ export interface Turn {
   kind?: string;
   /** assistant: the tool calls and results behind the reply, replayed to the model. */
   steps?: ChatMessage[];
+  /** assistant: actions this reply left waiting for the user's OK. */
+  confirm?: ConfirmView[];
 }
 
 export interface Conversation {
@@ -149,6 +152,20 @@ export function localStamp(iso: string): { date: string; time: string } {
   return { date: todayISO(d), time: `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}` };
 }
 
+/** Events since the last reply (a confirmed link, a command that ran): told to the model with the next message. */
+export function eventsSinceReply(c: Conversation): string[] {
+  const out: string[] = [];
+  for (let i = c.turns.length - 1; i >= 0 && c.turns[i].role !== "assistant"; i--) {
+    if (c.turns[i].role === "event") out.unshift(c.turns[i].text);
+  }
+  return out;
+}
+
+/** A message with what happened since the last reply in front, the way history replays it. */
+export function withEvents(events: string[], said: string): string {
+  return events.length ? `(Since your last reply: ${events.join(" ")})\n\n${said}` : said;
+}
+
 /** What the page shows: the turns without the tool steps. */
 export function visibleTurns(c: Conversation): Omit<Turn, "steps">[] {
   return c.turns.map(({ steps: _steps, ...t }) => t);
@@ -181,8 +198,7 @@ export function historyMessages(c: Conversation, o: HistoryOptions = {}): ChatMe
       events.push(t.text);
     } else if (t.role === "user") {
       // Events stay pending until a reply lands, so a message that never got one doesn't swallow them.
-      const said = events.length ? `(Since your last reply: ${events.join(" ")})\n\n${t.text}` : t.text;
-      open = [{ role: "user", content: said }];
+      open = [{ role: "user", content: withEvents(events, t.text) }];
       exchanges.push(open);
     } else if (open) {
       const n = exchanges.length;

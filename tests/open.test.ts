@@ -168,7 +168,7 @@ describe("shortcuts store and the open tool", () => {
     const queued = await rt.execute("open", { target: "https://totally-legit.example/login" });
     expect(queued.isError).toBe(false);
     expect(queued.result).toMatch(/confirm/);
-    expect(rt.pendingOpens).toHaveLength(1);
+    expect(rt.pending).toHaveLength(1);
     expect(calls).toHaveLength(1);
 
     expect((await rt.execute("open", { target: "nothing at all" })).isError).toBe(true);

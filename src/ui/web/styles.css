@@ -97,6 +97,7 @@ body {
 .answer-head .chip { white-space: nowrap; }
 .answer-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .answer-actions .url { flex-basis: 100%; color: var(--muted); font: 12px var(--mono); word-break: break-all; }
+.answer-actions .detail { flex-basis: 100%; margin: 0; max-height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-word; font: 12px var(--mono); color: #cfd4dc; background: #1a1d24; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
 
 .thread { display: flex; flex-direction: column; gap: 10px; max-height: 50vh; overflow-y: auto; overscroll-behavior: contain; }
 .turn { max-width: 100%; }

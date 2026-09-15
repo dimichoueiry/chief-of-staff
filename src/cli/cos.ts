@@ -40,6 +40,8 @@ import { addDays, isISODate, todayISO } from "../util/dates.js";
 import { homeEnvFile, parseEnv, syncProjectEnv } from "../util/env.js";
 import { deployRuntime } from "./deploy.js";
 import { openOrQueue, performOpen } from "../actions/open.js";
+import { ACCESS_MODES, accessFile, isAccessMode, readAccess, saveAccess, type AccessMode } from "../actions/access.js";
+import { AgentGrid, formatSessions } from "../actions/agentgrid.js";
 import { findFolders, formatFolderSearch } from "../actions/folders.js";
 import { Shortcuts } from "../actions/shortcuts.js";
 import { findBoards, slateBaseUrl, slateBoardUrl, slateBoards } from "../actions/slate.js";
@@ -261,6 +263,47 @@ program
   .argument("<sentence...>", "one sentence; it gets filed to the right place")
   .description("file a sentence: project, reminder, note or journal")
   .action((s: string[]) => runAndPrint("capture", s.join(" ")));
+
+// ---------- terminal and agents ----------
+
+const accessCmd = program
+  .command("access")
+  .description("what the assistant may do on its own: the terminal and Agent Grid agents")
+  .action(() => {
+    const a = readAccess();
+    const explain: Record<AccessMode, string> = {
+      off: "not at all",
+      ask: "looks around freely; anything that changes something waits for your OK",
+      auto: "does it; deletes, force pushes and the like still ask; sudo and disk erasing never run",
+    };
+    console.log(`${bold("terminal")}  ${a.terminal}  ${dim(explain[a.terminal])}`);
+    console.log(`${bold("agents")}    ${a.agents}  ${dim(a.agents === "ask" ? "can list and read agents; starting or messaging one waits for your OK" : explain[a.agents])}`);
+    console.log(dim(`Change: cos access terminal auto | cos access agents ask   (saved in ${accessFile()})`));
+    console.log(dim(`Every command it runs is logged in ~/.cos/logs/terminal.log`));
+  });
+
+for (const what of ["terminal", "agents"] as const) {
+  accessCmd
+    .command(what)
+    .argument("<mode>", ACCESS_MODES.join(" | "))
+    .description(`set ${what} access`)
+    .action((mode: string) => {
+      if (!isAccessMode(mode)) fail(`mode must be one of: ${ACCESS_MODES.join(", ")}`);
+      saveAccess({ [what]: mode });
+      console.log(`${what} access → ${mode}. Applies to the next thing it does.`);
+    });
+}
+
+program
+  .command("agents")
+  .description("your Agent Grid sessions, as the assistant sees them")
+  .action(async () => {
+    try {
+      console.log(formatSessions(await new AgentGrid().sessions()));
+    } catch (err) {
+      fail((err as Error).message);
+    }
+  });
 
 // ---------- folders ----------
 
@@ -661,7 +704,7 @@ program
       process.exit(1);
     }
     if (!(await confirm(r.message, o.yes))) return console.log("Not opened.");
-    console.log(await performOpen(r.pending.action));
+    console.log(await performOpen(r.pending.payload));
   });
 
 const shortcutsCmd = program

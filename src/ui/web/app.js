@@ -286,15 +286,21 @@ function scrollThread() {
 function confirmButtons(items, said = "") {
   const box = el("div", { class: "answer-actions" });
   for (const item of items) {
-    // Always show exactly where it goes, once.
-    if (item.url && !said.includes(item.url.replace(/\/$/, ""))) box.append(el("div", { class: "url" }, item.url));
+    const verb = item.verb || "Open";
+    const detail = item.detail || item.url || "";
+    // Always show exactly what will happen, once: the address, or the whole command or task.
+    if (detail && !said.includes(detail.replace(/\/$/, ""))) box.append(el(item.kind === "open" || !item.kind ? "div" : "pre", { class: item.kind === "open" || !item.kind ? "url" : "detail" }, detail));
     const decide = async (cancel) => {
       for (const b of box.querySelectorAll("button")) b.disabled = true;
+      if (!cancel && item.kind === "command") status.textContent = "Running it…";
       const r = await post("/api/actions/confirm", { id: item.id, cancel });
-      box.replaceChildren(el("div", { class: "url" }, r.text || r.error || ""));
+      if (pill.dataset.state === "idle") status.textContent = "";
+      box.replaceChildren(el(item.kind === "command" ? "pre" : "div", { class: item.kind === "command" ? "detail" : "url" }, r.text || r.error || ""));
+      scrollThread();
     };
+    const label = verb === "Open" && !(item.label.length > 40 || /^https?:/i.test(item.label)) ? `Open ${item.label}` : verb;
     box.append(
-      el("button", { class: "chip chip-keep", onclick: () => decide(false) }, item.label.length > 40 || /^https?:/i.test(item.label) ? "Open" : `Open ${item.label}`),
+      el("button", { class: "chip chip-keep", onclick: () => decide(false) }, label),
       el("button", { class: "chip", onclick: () => decide(true) }, "Cancel"),
     );
   }

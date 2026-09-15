@@ -178,6 +178,44 @@ A web address the model comes up with on its own is never opened directly: the p
 with **Open** and **Cancel**. Only http(s) addresses open; files open only from your home folder,
 and never scripts or installers. `COS_SLATE_URL` points at a different Slate address if needed.
 
+## Terminal and coding agents
+
+The assistant can use your terminal and your Agent Grid agents, so "what are the last commits in
+ML gorilla?", "install ffmpeg", "do any of my agents need me?" or "have an agent add a quiz to
+module 6" all work from the pill.
+
+**Terminal.** Commands run in your login shell (zsh), in a folder, with a timeout. What runs on
+its own is decided by rules in the code, not by the model:
+
+| Kind | Examples | In `ask` (default) | In `auto` |
+|---|---|---|---|
+| Looks or opens | `ls`, `find`, `cat`, `grep`, `git log`, `open -a Cursor ~/x` | runs | runs |
+| Changes something | `mkdir`, `brew install`, `npm run build`, `curl`, writing files | waits for your OK | runs |
+| Risky | `rm`, `git push --force`, `kill`, reading `.env` or `~/.ssh`, `curl … \| sh` | waits for your OK | waits for your OK |
+| Never | `sudo`, erasing disks, deleting your home folder | refused | refused |
+
+When something waits, the pill shows the exact command with **Run** and **Cancel**, or you just
+say "yes" or "no". Only you can confirm; the model has no way to. API keys are stripped from the
+environment commands see, long output is saved in full under `~/.cos/terminal`, and every command
+is logged to `~/.cos/logs/terminal.log`. Long-running things (a dev server) open in a Terminal
+window you can watch.
+
+**Agent Grid.** It lists your Claude Code and Codex sessions (who needs you first), reads what an
+agent did, starts new agents in a project folder (adding the folder to Agent Grid if it's new), and
+messages them. Starting or messaging an agent waits for your OK in `ask` mode. When it needs a
+capability it doesn't have, it can have an agent build a small script in `~/cos-tools` and then
+run it.
+
+Agent Grid mints a new key every time it starts; it now writes it to `~/.agentgrid/web.json`
+(owner-only) so the assistant can connect. Restart Agent Grid once after updating it.
+
+```bash
+cos access                    # what it may do on its own
+cos access terminal auto      # off | ask | auto
+cos access agents ask
+cos agents                    # your Agent Grid sessions, as the assistant sees them
+```
+
 ## Models and providers
 
 The brain is model-agnostic. Add a key for any provider you use, then pick models whenever
@@ -262,4 +300,5 @@ examples/     a sample selfhub for demos and tests
 | Native menubar shell: floating pill, double-tap Control, ⌥Space, native on-device listening | done; `cos menubar install` |
 | Conversation memory in the pill: follow-ups, saved threads, live progress, formatted replies | done, tested (scripted model and headless browser) |
 | Memory across conversations: summaries of the last 7 days in every request, search over all past conversations, `cos conversations` | done, tested; verified live on OpenRouter |
+| Terminal (rules-based permissions, confirm by button or "yes") and Agent Grid agents (list, read, start, message) | done, tested; verified live with a second Agent Grid instance |
 | Wake word, phone notifications, autonomy epic | not yet |

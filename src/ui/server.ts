@@ -10,7 +10,7 @@ import {
   MODEL_INTENTS, PROVIDERS, PROVIDER_ORDER, formatSpec, parseModelSpec, presets, providerConfigured,
   readModelSettings, resolveModel, setModel, type ModelIntent,
 } from "../brain/llm/registry.js";
-import { Conversations, conversationsDir, historyMessages, visibleTurns, type Conversation } from "../brain/conversation.js";
+import { Conversations, conversationsDir, eventsSinceReply, historyMessages, visibleTurns, withEvents, type Conversation } from "../brain/conversation.js";
 import type { LLMProvider, ChatMessage } from "../brain/llm/types.js";
 import type { ModelSpec } from "../brain/llm/registry.js";
 import { providerFor, runIntent } from "../brain/loop.js";
@@ -31,7 +31,12 @@ import { eventsInRange } from "../sensors/calendar.js";
 import { applyActivity, scanActivity } from "../sensors/git.js";
 import { addDays, todayISO } from "../util/dates.js";
 import { reloadHomeEnv } from "../util/env.js";
-import { macOpen, openOrQueue, performOpen, takePending, type PendingOpen, type Runner } from "../actions/open.js";
+import type { Access } from "../actions/access.js";
+import type { AgentGrid } from "../actions/agentgrid.js";
+import { macOpen, openOrQueue, type Runner } from "../actions/open.js";
+import { confirmView, isPending, take, type ConfirmView } from "../actions/pending.js";
+import { performPending } from "../actions/perform.js";
+import type { Shell } from "../actions/terminal.js";
 import { findFolders, formatFolderSearch } from "../actions/folders.js";
 import { Shortcuts } from "../actions/shortcuts.js";
 import { slateBoards, type SlateBoard } from "../actions/slate.js";
@@ -66,6 +71,10 @@ export interface UiOptions {
   conversations?: Conversations;
   /** Summarise ended conversations in the background after each message (default true). */
   backgroundSummaries?: boolean;
+  /** How commands run, where Agent Grid is, and what's allowed (tests). */
+  shell?: Shell;
+  agentGrid?: AgentGrid;
+  access?: () => Access;
 }
 
 /** What the pill says while a tool runs. */
@@ -75,6 +84,11 @@ const DOING: Record<string, string> = {
   get_git_log: "Reading recent commits…",
   find_folder: "Looking for the folder…",
   get_conversations: "Searching earlier conversations…",
+  run_command: "Running a command…",
+  get_agents: "Checking your agents…",
+  start_agent: "Starting an agent…",
+  get_agent_output: "Reading what the agent did…",
+  message_agent: "Messaging the agent…",
   open: "Opening…",
   add_shortcut: "Saving a shortcut…",
   add_reminder: "Setting a reminder…",
@@ -90,7 +104,7 @@ interface PillReply {
   text: string;
   model?: string;
   changes?: number;
-  confirm?: ReturnType<typeof confirmView>[];
+  confirm?: ConfirmView[];
   where?: string;
   project?: string;
   steps?: ChatMessage[];
@@ -107,7 +121,14 @@ const PLAIN_SEARCH = /^(?:please\s+)?(?:search|look up)\b/i;
 const WEB_SEARCH = /^(?:please\s+)?(?:google\b|search (?:the web|google|online)\b)|\b(?:on|in) (?:google|the web)\s*[.?!]?$|\bonline\s*[.?!]?$/i;
 const REFERS_BACK = /\b(?:we|our|us|i said|i told you|you said|talked|discussed|decided|mentioned|conversations?|remember|earlier|yesterday|last (?:time|week))\b/i;
 
-const confirmView = (p: PendingOpen) => ({ id: p.id, label: p.action.label, url: p.action.kind === "url" ? p.action.url : null });
+/** A short yes or no to the last reply's pending actions: the user's own OK, never the model's. */
+const AFFIRM = /^(?:(?:yes|yeah|yep|yup|sure|ok(?:ay)?|alright|go ahead|do it|run it|start it|send it|open it|confirm(?:ed)?|approved?|please do|go for it|sounds good|let'?s do it|let'?s go|perfect)[\s,.!]*)+(?:please|thanks?|thank you)?[.!]*$/i;
+const DENY = /^(?:no|nope|nah|cancel|don'?t|do not|stop|never ?mind|not now|hold on|wait)(?:[\s,.!]+(?:thanks?|thank you|don'?t|do it|run it|cancel(?: it)?|that))*[\s.!]*$/i;
+
+/** What goes into the conversation about something that was done: the result, with any cut stated. */
+function outcome(text: string, max = 3_000): string {
+  return text.length <= max ? text : `${text.slice(0, max)}\n… (${(text.length - max).toLocaleString("en-US")} more characters not kept here)`;
+}
 
 /** Sentences the offline Scribe can file without a model. */
 const CAPTURE_SHAPE = /^(remind|starting|start|new project|park|kill|done with|finished|touched|worked on|today i|note:|.+\s+every\s+|.+\s+next\s*:)/i;
@@ -183,6 +204,7 @@ export function createUiServer(o: UiOptions): Server {
   const conversations = o.conversations ?? new Conversations(conversationsDir(), config.conversationIdleMinutes);
   const openRunner = o.openRunner ?? macOpen;
   const boards = o.slateLoader ?? (() => slateBoards());
+  const deps = { run: openRunner, shell: o.shell, agentGrid: o.agentGrid };
   let pillQueue: Promise<unknown> = Promise.resolve();
   let summarizing = false;
 
@@ -222,32 +244,65 @@ export function createUiServer(o: UiOptions): Server {
     emit({ type: "start", conversation: convo.id, user: said });
     let reply: PillReply;
     try {
-      reply = await respond(said, mode, focusOn, convo, emit);
+      // "yes" or "no" to what the last reply was waiting on: do it (or drop it) first, then answer with the result in hand.
+      const settled = mode === "focus" ? [] : await settlePending(convo, said, emit);
+      if (settled.length && !ready("ask")) reply = { kind: "action", text: settled.join("\n"), model: "rules" };
+      // Anything that happened since the last reply (this yes, a tapped button) travels with the message.
+      else reply = await respond(said, mode, focusOn, convo, emit, withEvents(eventsSinceReply(convo), said));
     } catch (err) {
       reply = { kind: "error", text: `That didn't work: ${String((err as Error).message).split("\n")[0]}` };
     }
     conversations.append(
       convo,
       { role: "user", text: said },
-      { role: "assistant", text: reply.text, model: reply.model, kind: reply.kind, steps: reply.steps?.length ? reply.steps : undefined },
+      {
+        role: "assistant", text: reply.text, model: reply.model, kind: reply.kind,
+        steps: reply.steps?.length ? reply.steps : undefined,
+        confirm: reply.confirm?.length ? reply.confirm : undefined,
+      },
     );
     summarizeSoon();
     const { steps: _steps, ...shown } = reply;
     return { status: 200, body: { ...shown, conversation: convo.id, user: said } };
   }
 
-  async function respond(text: string, mode: string, focusOn: string | undefined, convo: Conversation, emit: Emit): Promise<PillReply> {
+  async function settlePending(convo: Conversation, said: string, emit: Emit): Promise<string[]> {
+    const yes = AFFIRM.test(said);
+    const no = !yes && DENY.test(said);
+    if (!yes && !no) return [];
+    const last = [...convo.turns].reverse().find((t) => t.role === "assistant");
+    const waiting = (last?.confirm ?? []).filter((c) => isPending(c.id));
+    const events: string[] = [];
+    for (const c of waiting) {
+      const p = take(c.id);
+      if (!p) continue;
+      if (no) {
+        events.push(`They said no, so this was not done: ${p.label}.`);
+        continue;
+      }
+      emit({ type: "status", text: p.kind === "command" ? "Running it…" : p.kind === "agent-start" ? "Starting the agent…" : "On it…" });
+      try {
+        events.push(`They said yes and it is already done (do not do it again): ${p.label}. Result: ${outcome(await performPending(p, deps))}`);
+      } catch (err) {
+        events.push(`They said yes, but ${p.label} failed: ${(err as Error).message}`);
+      }
+    }
+    if (events.length) conversations.append(convo, ...events.map((text) => ({ role: "event" as const, text })));
+    return events;
+  }
+
+  async function respond(text: string, mode: string, focusOn: string | undefined, convo: Conversation, emit: Emit, modelText = text): Promise<PillReply> {
     const model = (intent: ModelIntent, project?: string) =>
       runIntent({
-        config, intent, project, message: text, today: today(), modelFlag: o.modelFlag, llm: o.llm,
+        config, intent, project, message: modelText, today: today(), modelFlag: o.modelFlag, llm: o.llm,
         history: historyMessages(convo),
         recall: renderRecall(conversations, { today: today(), excludeId: convo.id }),
-        actions: { run: openRunner, slate: boards, conversations },
+        actions: { run: openRunner, slate: boards, conversations, shell: o.shell, agentGrid: o.agentGrid, access: o.access },
         onTool: (name) => emit({ type: "status", text: DOING[name] ?? "Updating your memory…" }),
         onText: (delta) => emit({ type: "text", delta }),
       });
     const fromModel = (kind: PillReply["kind"], r: Awaited<ReturnType<typeof runIntent>>, extra: Partial<PillReply> = {}): PillReply => ({
-      kind, text: r.text, model: r.model, changes: changes(r.toolCalls), confirm: r.pendingOpens.map(confirmView), steps: r.steps, ...extra,
+      kind, text: r.text, model: r.model, changes: changes(r.toolCalls), confirm: r.pending.map(confirmView), steps: r.steps, ...extra,
     });
 
     if (focusOn) {
@@ -379,18 +434,18 @@ export function createUiServer(o: UiOptions): Server {
       }
       case "POST /api/actions/confirm": {
         const b = await body(req);
-        const p = takePending(String(b.id ?? ""));
+        const p = take(String(b.id ?? ""));
         if (!p) return json(res, 410, { error: "That request expired. Ask again." });
-        const what = p.action.kind === "url" ? p.action.url : p.action.label;
         if (b.cancel === true) {
-          conversations.append(conversations.current(), { role: "event", text: `They cancelled opening ${what}.` });
+          conversations.append(conversations.current(), { role: "event", text: `They tapped Cancel, so this was not done: ${p.label}.` });
           return json(res, 200, { ok: true, text: "Cancelled." });
         }
         try {
-          const text = await performOpen(p.action, openRunner);
-          conversations.append(conversations.current(), { role: "event", text: `They confirmed, and ${what} was opened.` });
+          const text = await performPending(p, deps);
+          conversations.append(conversations.current(), { role: "event", text: `They tapped ${p.verb} and it is already done (do not do it again): ${p.label}. Result: ${outcome(text)}` });
           return json(res, 200, { ok: true, text });
         } catch (err) {
+          conversations.append(conversations.current(), { role: "event", text: `They confirmed, but ${p.label} failed: ${(err as Error).message}` });
           return json(res, 422, { error: (err as Error).message });
         }
       }

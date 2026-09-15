@@ -11,7 +11,7 @@
  * - Apps must be installed .app bundles found in the usual Applications folders.
  */
 import { execFile } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { queue, take, type Pending } from "./pending.js";
 import { stat } from "node:fs/promises";
 import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -212,27 +212,16 @@ export async function performOpen(action: OpenAction, run: Runner = macOpen): Pr
 
 // ---------- confirmations ----------
 
-export interface PendingOpen {
-  id: string;
-  action: OpenAction;
-  createdAt: number;
-}
-
-const PENDING_TTL_MS = 5 * 60_000;
-const pending = new Map<string, PendingOpen>();
+export type PendingOpen = Pending<OpenAction>;
 
 export function queueOpen(action: OpenAction): PendingOpen {
-  for (const [id, p] of pending) if (Date.now() - p.createdAt > PENDING_TTL_MS) pending.delete(id);
-  const p = { id: randomUUID(), action, createdAt: Date.now() };
-  pending.set(p.id, p);
-  return p;
+  return queue("open", action, { label: action.label, detail: action.kind === "url" ? action.url : action.label, verb: "Open" });
 }
 
-export function takePending(id: string): PendingOpen | null {
-  const p = pending.get(id);
-  pending.delete(id);
-  if (!p || Date.now() - p.createdAt > PENDING_TTL_MS) return null;
-  return p;
+/** Take a pending open (see pending.ts); null for anything else, used or expired. */
+export function takePending(id: string): { id: string; action: OpenAction } | null {
+  const p = take(id);
+  return p && p.kind === "open" ? { id: p.id, action: p.payload as OpenAction } : null;
 }
 
 /** Resolve and either open now (trusted) or queue for confirmation (a web address from the model). */

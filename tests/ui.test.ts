@@ -241,6 +241,7 @@ describe("ui server (scripted model)", () => {
   let close: () => Promise<void>;
   let queue: ChatResponse[];
   let requests: ChatRequest[];
+  let ran: string[];
 
   const reply = (o: Partial<ChatResponse>): ChatResponse => ({ text: "", toolCalls: [], stop: "end", model: "scripted", ...o });
   const post = (b: unknown, path = "/api/pill") => fetch(`${base}${path}`, { method: "POST", body: JSON.stringify(b) });
@@ -248,6 +249,7 @@ describe("ui server (scripted model)", () => {
   beforeEach(async () => {
     queue = [];
     requests = [];
+    ran = [];
     ({ dir, cleanup } = await makeTmpSelfhub());
     await cp(resolve("examples/selfhub-sample"), dir, { recursive: true });
     process.env.COS_CALENDAR = "none";
@@ -271,6 +273,11 @@ describe("ui server (scripted model)", () => {
       backgroundSummaries: false,
       openRunner: async () => {},
       slateLoader: async () => ({ boards: [], live: true }),
+      access: () => ({ terminal: "ask", agents: "ask" }),
+      shell: async (command) => {
+        ran.push(command);
+        return { exitCode: 0, timedOut: false, output: command.startsWith("brew") ? "ffmpeg 7.1 installed" : "ok" };
+      },
     });
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -364,6 +371,54 @@ describe("ui server (scripted model)", () => {
       expect((await (await post({ text })).json())).toMatchObject({ kind: "action", model: "rules" });
     }
     expect(requests).toHaveLength(3);
+  });
+
+  it("runs a waiting command when they say yes (or tap Run), drops it on no, and answers with the result", async () => {
+    const say = async (text: string) => (await post({ text })).json();
+
+    queue.push(
+      reply({ stop: "tool_use", toolCalls: [{ id: "r1", name: "run_command", input: { command: "brew install ffmpeg" } }] }),
+      reply({ text: "I'll install ffmpeg with Homebrew. Say yes to run it." }),
+    );
+    const asked = await say("install ffmpeg");
+    expect(asked.confirm).toEqual([expect.objectContaining({ kind: "command", verb: "Run", detail: "$ brew install ffmpeg\nin ~" })]);
+    expect(ran).toEqual([]);
+
+    queue.push(reply({ text: "Installed ffmpeg 7.1." }));
+    const done = await say("yes");
+    expect(ran).toEqual(["brew install ffmpeg"]);
+    expect(done.text).toBe("Installed ffmpeg 7.1.");
+    const told = requests.at(-1)!.messages.at(-1);
+    expect(told?.role === "user" && told.content).toMatch(/^\(Since your last reply: They said yes and it is already done \(do not do it again\): brew install ffmpeg\. Result: \$ brew install ffmpeg\n\(in ~; exit 0; [\d.]+s\)\nffmpeg 7\.1 installed\)\n\nyes$/);
+
+    // A second yes has nothing waiting: it is just a message.
+    queue.push(reply({ text: "Nothing else is waiting." }));
+    await say("yes");
+    expect(ran).toHaveLength(1);
+
+    // No drops it.
+    queue.push(
+      reply({ stop: "tool_use", toolCalls: [{ id: "r2", name: "run_command", input: { command: "mkdir -p ~/cos-tools" } }] }),
+      reply({ text: "Want me to create ~/cos-tools?" }),
+    );
+    await say("make a tools folder");
+    queue.push(reply({ text: "OK, left it." }));
+    await say("no");
+    expect(ran).toHaveLength(1);
+    expect(JSON.stringify(requests.at(-1)!.messages.at(-1))).toContain("They said no, so this was not done: mkdir -p ~/cos-tools.");
+
+    // The button does the same, and the next message knows.
+    queue.push(
+      reply({ stop: "tool_use", toolCalls: [{ id: "r3", name: "run_command", input: { command: "npm run build", cwd: "~" } }] }),
+      reply({ text: "Build it?" }),
+    );
+    const build = await say("build it");
+    const ok = await (await post({ id: build.confirm[0].id }, "/api/actions/confirm")).json();
+    expect(ok.text).toMatch(/^\$ npm run build\n/);
+    expect(ran.at(-1)).toBe("npm run build");
+    queue.push(reply({ text: "Built." }));
+    await say("how did that go?");
+    expect(JSON.stringify(requests.at(-1)!.messages)).toContain("They tapped Run and it is already done (do not do it again): npm run build. Result:");
   });
 
   it("keeps a failed reply in the conversation so 'try again' has something to refer to", async () => {
