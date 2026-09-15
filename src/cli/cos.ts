@@ -33,7 +33,7 @@ import { eventsInRange, formatAgenda } from "../sensors/calendar.js";
 import { playerBuilt, readyPlayer } from "../voice/player.js";
 import { pickStt } from "../voice/stt.js";
 import {
-  CUE_MODES, DEFAULT_VOICE, LISTEN_PAUSE, OPENAI_VOICES, activeTts, isKnownVoice, readVoiceSettings, saveVoiceSettings, speak, voiceSettingsFile,
+  CUE_MODES, DEFAULT_VOICE, LISTEN_PAUSE, OPENAI_VOICES, activeTts, isKnownVoice, isWakeName, readVoiceSettings, saveVoiceSettings, speak, voiceSettingsFile,
   type CueMode, type TtsProvider,
 } from "../voice/tts.js";
 import { activityRoots, applyActivity, scanActivity } from "../sensors/git.js";
@@ -948,6 +948,7 @@ const voiceCmd = program
     console.log(`  speed     ${s.speed}`);
     console.log(`  pause     ${s.listenPause}s of quiet ends what you say ${dim("(cos voice pause <seconds>)")}`);
     console.log(`  cues      ${s.cues} ${dim("(cos voice cues both|turn|off)")}`);
+    console.log(`  wake      ${s.wake ? `on: "${s.wakeName} wake up" listens, "${s.wakeName} listen" interrupts, "${s.wakeName} sleep" closes` : "off"} ${dim("(cos voice wake on|off, cos voice name <name>)")}`);
     console.log(`  style     ${dim(s.instructions)}`);
     console.log("");
     console.log(`${bold("Voices")}  ${OPENAI_VOICES.map((v) => (v === s.voice ? `[${v}]` : v)).join("  ")}`);
@@ -1015,6 +1016,30 @@ voiceCmd
     saveVoiceSettings({ cues: mode as CueMode });
     const heard = { both: "a quiet cue as a reply starts, and a chime when it's your turn", turn: "a chime when it's your turn", off: "no chimes" }[mode as CueMode];
     console.log(`Cues → ${mode}: ${heard}. Hear them: cos voice test`);
+  });
+
+voiceCmd
+  .command("wake")
+  .argument("<on|off>", "on | off")
+  .description("wait for its name in the menubar app: \"Darius wake up\", \"Darius listen\", \"Darius sleep\"")
+  .action((mode: string) => {
+    if (!["on", "off"].includes(mode)) fail("wake must be on or off");
+    const s = saveVoiceSettings({ wake: mode === "on" });
+    console.log(
+      s.wake
+        ? `Wake phrase on. Say "${s.wakeName} wake up" to talk, "${s.wakeName} listen" to cut in, "${s.wakeName} sleep" to close. Recognised on this Mac only; the mic stays on while it waits.`
+        : "Wake phrase off. Double-tap Control to talk.",
+    );
+  });
+
+voiceCmd
+  .command("name")
+  .argument("<name>", "one word, e.g. Darius")
+  .description("the name it wakes to")
+  .action((name: string) => {
+    if (!isWakeName(name)) fail("the name must be one word of 3 to 20 letters");
+    const s = saveVoiceSettings({ wakeName: name.trim() });
+    console.log(`Name → ${s.wakeName}. Say "${s.wakeName} wake up".${s.wake ? "" : " (The wake phrase is off: cos voice wake on.)"}`);
   });
 
 voiceCmd

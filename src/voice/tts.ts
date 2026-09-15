@@ -47,6 +47,9 @@ export interface VoiceSettings {
   listenPause: number;
   /** Chimes around the voice in a conversation. */
   cues: CueMode;
+  /** The menubar app waits for its name: "<wakeName> wake up" listens, "… listen" interrupts, "… sleep" closes. */
+  wake: boolean;
+  wakeName: string;
 }
 
 export const LISTEN_PAUSE = { min: 1, max: 10 } as const;
@@ -62,6 +65,8 @@ export const DEFAULT_VOICE: VoiceSettings = {
   sayVoice: "",
   listenPause: 2.5,
   cues: "both",
+  wake: true,
+  wakeName: "Darius",
 };
 
 export function voiceSettingsFile(): string {
@@ -86,6 +91,8 @@ export function readVoiceSettings(env: NodeJS.ProcessEnv = process.env, file: st
   const merged = { ...DEFAULT_VOICE, ...fromEnv, ...saved };
   if (!["auto", "openai", "say"].includes(merged.provider)) merged.provider = "auto";
   if (!CUE_MODES.includes(merged.cues)) merged.cues = DEFAULT_VOICE.cues;
+  if (typeof merged.wake !== "boolean") merged.wake = DEFAULT_VOICE.wake;
+  merged.wakeName = typeof merged.wakeName === "string" && isWakeName(merged.wakeName) ? merged.wakeName.trim() : DEFAULT_VOICE.wakeName;
   merged.speed = Math.min(4, Math.max(0.25, Number(merged.speed) || 1));
   merged.listenPause = Math.min(LISTEN_PAUSE.max, Math.max(LISTEN_PAUSE.min, Number(merged.listenPause) || DEFAULT_VOICE.listenPause));
   return merged;
@@ -104,6 +111,11 @@ export function saveVoiceSettings(patch: Partial<VoiceSettings> | null, file: st
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify(saved, null, 2) + "\n", "utf8");
   return readVoiceSettings(process.env, file);
+}
+
+/** A name to wake it with: one word of 3 to 20 letters, so it can be heard and matched. */
+export function isWakeName(name: string): boolean {
+  return /^\p{L}[\p{L}'-]{2,19}$/u.test(name.trim());
 }
 
 export function isKnownVoice(voice: string): boolean {

@@ -1,11 +1,11 @@
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  DEFAULT_VOICE, activeTts, chunkText, isKnownVoice, readVoiceSettings, saveVoiceSettings, speak, stopSpeaking,
+  DEFAULT_VOICE, activeTts, chunkText, isKnownVoice, isWakeName, readVoiceSettings, saveVoiceSettings, speak, stopSpeaking,
   type SpeechEngine, type VoiceSettings,
 } from "../src/voice/tts.js";
 
@@ -54,6 +54,20 @@ describe("voice settings", () => {
     expect(isKnownVoice("marin")).toBe(true);
     expect(isKnownVoice("voice_123abc")).toBe(true);
     expect(isKnownVoice("robot")).toBe(false);
+  });
+
+  it("keeps the wake phrase settings the menubar app reads, and refuses names it couldn't match", async () => {
+    const file = join(dir, "voice.json");
+    expect(readVoiceSettings({}, file)).toMatchObject({ wake: true, wakeName: "Darius" });
+    saveVoiceSettings({ wake: false, wakeName: "Nova" }, file);
+    expect(readVoiceSettings({}, file)).toMatchObject({ wake: false, wakeName: "Nova" });
+    // What the app writes when the menu toggles it: pretty-printed, keys sorted, other settings kept.
+    await writeFile(file, JSON.stringify({ voice: "cedar", wake: true, wakeName: "Nova" }, null, 2));
+    expect(readVoiceSettings({}, file)).toMatchObject({ voice: "cedar", wake: true, wakeName: "Nova" });
+    await writeFile(file, JSON.stringify({ wake: "yes", wakeName: "hey you there" }));
+    expect(readVoiceSettings({}, file)).toMatchObject({ wake: true, wakeName: "Darius" });
+    expect(["Darius", "Nova", "Zoë", "D'Arcy"].every(isWakeName)).toBe(true);
+    expect(["Al", "two words", "R2D2", ""].some(isWakeName)).toBe(false);
   });
 });
 

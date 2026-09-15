@@ -1,4 +1,4 @@
-// Checks for Endpointing, compiled with swiftc alongside the source file (tests/menubar-endpointing.test.ts).
+// Checks for Endpointing and WakePhrase, compiled with swiftc alongside the source files (tests/menubar-endpointing.test.ts).
 import Foundation
 
 var failures = 0
@@ -70,6 +70,46 @@ do {
   v.recognized("I want to", at: at(1))
   v.recognized("I wanna", at: at(1.2))
   check("a revision replaces, never duplicates", v.text == "I wanna")
+}
+
+// The wake phrase: the name and a command, as the recogniser writes them, misheard or not.
+do {
+  let darius = WakePhrase(name: "Darius")
+  let said: [(String, WakeCommand?)] = [
+    ("Darius wake up", .wake),
+    ("Darius, wake up.", .wake),
+    ("hey Darius", .wake),
+    ("Okay Darius", .wake),
+    ("Darius are you there?", .wake),
+    ("Darias wake up", .wake),
+    ("Dorius wakeup", .wake),
+    ("Marius wake up", .wake),
+    ("Dare us wake up", .wake),
+    ("Darius listen", .listen),
+    ("Darius, stop", .listen),
+    ("Darius please listen to me", .listen),
+    ("…and the second thing on your calendar is the Darius hold on", .listen),
+    ("Darius sleep", .sleep),
+    ("Darius go to sleep", .sleep),
+    ("Darius, that’s all", .sleep),
+    ("Darius's goodnight", .sleep),
+    ("Darius wake up actually Darius sleep", .sleep),
+    // Not for it:
+    ("Darius", nil),
+    ("I had lunch with Darius yesterday", nil),
+    ("Darius said he would call", nil),
+    ("we tried various stop points", nil),
+    ("the arias were lovely, wake up early", nil),
+    ("wake up", nil),
+    ("listen to this", nil),
+    ("hey there", nil),
+    ("", nil),
+  ]
+  for (text, want) in said {
+    check("\"\(text)\" → \(want.map(\.rawValue) ?? "nothing")", darius.find(in: text) == want)
+  }
+  check("another name works the same", WakePhrase(name: "Nova").find(in: "Nova sleep") == .sleep && WakePhrase(name: "Nova").find(in: "Darius sleep") == nil)
+  check("hints teach the recogniser the name", darius.hints.contains("Darius wake up"))
 }
 
 print(failures == 0 ? "all checks passed" : "\(failures) failed")

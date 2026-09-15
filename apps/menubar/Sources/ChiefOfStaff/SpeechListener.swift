@@ -10,6 +10,8 @@ final class SpeechListener {
   var onPartial: (String) -> Void = { _ in }
   var onFinal: (String) -> Void = { _ in }
   var onError: (String) -> Void = { _ in }
+  /// Done listening, however it ended: the microphone is free again.
+  var onIdle: () -> Void = {}
 
   /// Seconds of quiet that end what you're saying, unless ~/.cos/voice.json sets listenPause (`cos voice pause`).
   static let defaultPause: TimeInterval = 2.5
@@ -46,6 +48,7 @@ final class SpeechListener {
     guard state == .idle else { return }
     guard let recognizer, recognizer.isAvailable else {
       onError("Speech recognition is not available right now.")
+      onIdle()
       return
     }
     endpoint = Endpointing(pause: Self.savedPause() ?? Self.defaultPause)
@@ -67,6 +70,7 @@ final class SpeechListener {
       state = .idle
       teardown()
       onError("The microphone did not start: \(error.localizedDescription)")
+      onIdle()
       return
     }
     ticker = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) { [weak self] _ in self?.tick() }
@@ -111,7 +115,8 @@ final class SpeechListener {
     if let result {
       endpoint.recognized(result.bestTranscription.formattedString, at: Date())
       onPartial(endpoint.text)
-      guard result.isFinal else { return }
+      // What was heard can end the listen ("Darius sleep"): then there's nothing more to do here.
+      guard state != .idle, result.isFinal else { return }
       if state == .settling {
         deliver()
       } else {
@@ -176,6 +181,7 @@ final class SpeechListener {
     guard shouldDeliver else {
       state = .idle
       teardown()
+      onIdle()
       return
     }
     if settle {
@@ -195,6 +201,7 @@ final class SpeechListener {
     let text = endpoint.text
     teardown()
     if text.isEmpty, let lastError { onError(lastError) } else { onFinal(text) }
+    onIdle()
   }
 
   private func teardown() {

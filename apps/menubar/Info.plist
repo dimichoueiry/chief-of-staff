@@ -13,7 +13,7 @@
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Chief of Staff listens when you double-tap Control so you can talk to it.</string>
+  <string>Chief of Staff listens when you double-tap Control, and for its name (“Darius wake up”) when that's turned on. Waiting for its name is recognised on this Mac only.</string>
   <key>NSSpeechRecognitionUsageDescription</key>
   <string>Chief of Staff turns what you say into a question or a note.</string>
   <key>NSCalendarsFullAccessUsageDescription</key>

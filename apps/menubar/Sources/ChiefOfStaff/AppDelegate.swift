@@ -6,6 +6,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private var server: ServerManager!
   private let hotkeys = HotkeyMonitor()
   private let speech = SpeechListener()
+  private let wake = WakeListener()
+  private var wakeSettings = WakeSettings.load()
+  private var wakeItem: NSMenuItem!
+  private var loggedWakeProblem: String?
   private let focusMenu = NSMenu()
   private let modelMenu = NSMenu()
   private let permissionsMenu = NSMenu()
@@ -36,9 +40,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     hotkeys.onShortcut = { [weak self] in self?.summon(listen: false) }
     hotkeys.start()
 
-    speech.onPartial = { [weak self] text in self?.panel.eval("cosShell.transcript(\(Self.js(text)), false)") }
-    speech.onFinal = { [weak self] text in self?.panel.eval("cosShell.transcript(\(Self.js(text)), true)") }
+    speech.onPartial = { [weak self] text in
+      guard let self else { return }
+      if self.saidSleep(text) { return }
+      self.panel.eval("cosShell.transcript(\(Self.js(text)), false)")
+    }
+    speech.onFinal = { [weak self] text in
+      guard let self else { return }
+      if self.saidSleep(text) { return }
+      self.panel.eval("cosShell.transcript(\(Self.js(text)), true)")
+    }
     speech.onError = { [weak self] err in self?.panel.eval("cosShell.status(\(Self.js(err)))") }
+    // The microphone is free again: go back to waiting for the name.
+    speech.onIdle = { [weak self] in self?.resumeWake() }
+    wake.onCommand = { [weak self] command in self?.heard(command) }
+    // `cos voice wake off` or a new name applies within a few seconds, with no restart.
+    Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.reloadWakeSettings() }
 
     server.ensureRunning { [weak self] ok in
       guard let self else { return }
@@ -47,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return
       }
       self.ready = true
+      self.resumeWake()
       self.panel.load(URL(string: "\(config.baseURL)/?shell=1&mode=pill")!)
       Log.write("ready at \(config.baseURL)")
       DispatchQueue.main.async { self.offerSetup() }
@@ -55,6 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   func applicationWillTerminate(_ notification: Notification) {
     hotkeys.stop()
+    wake.stop()
     speech.cancel()
     server?.stop()
   }
@@ -90,6 +109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     add(menu, "Today's brief", #selector(showBrief), key: "b")
     add(menu, "Talk   (⌃ ⌃)", #selector(talk))
     add(menu, "Ask or capture…   (⌥Space)", #selector(type))
+    wakeItem = add(menu, "Listen for “Darius”", #selector(toggleWake))
     let focus = NSMenuItem(title: "Focus a project", action: nil, keyEquivalent: "")
     focus.submenu = focusMenu
     menu.addItem(focus)
@@ -118,9 +138,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   func menuWillOpen(_ menu: NSMenu) {
     guard menu !== focusMenu, menu !== modelMenu else { return }
+    refreshWakeItem()
     refreshPermissionsMenu()
     refreshFocusMenu()
     refreshModelMenu()
+  }
+
+  // MARK: the wake phrase
+
+  /// "Darius wake up" / "Darius listen": listen now, after the "your turn" chime. "Darius sleep": stop and close.
+  private func heard(_ command: WakeCommand) {
+    guard ready else { return }
+    switch command {
+    case .wake, .listen:
+      guard !speech.listening else { return }
+      wake.stop() // hand the microphone over
+      server.postJSON("api/speak/stop", [:]) // talked over: it stops at once, not after the chime
+      setView("pill")
+      panel.show()
+      playTurnCue { [weak self] in self?.startListening() }
+    case .sleep:
+      speech.cancel()
+      panel.eval("cosShell.dismiss()")
+      panel.hide()
+      resumeWake()
+    }
+  }
+
+  /// "Darius sleep" said while it's already listening to you.
+  private func saidSleep(_ text: String) -> Bool {
+    guard wakeSettings.enabled, WakePhrase(name: wakeSettings.name).find(in: text) == .sleep else { return false }
+    Log.write("wake: heard sleep while listening")
+    heard(.sleep)
+    return true
+  }
+
+  private func resumeWake() {
+    guard ready, wakeSettings.enabled, !speech.listening else { return }
+    wake.start(name: wakeSettings.name)
+    if wake.problem != loggedWakeProblem {
+      loggedWakeProblem = wake.problem
+      if let problem = wake.problem { Log.write("wake: not listening: \(problem)") }
+    }
+  }
+
+  /// Every few seconds: pick up `cos voice wake` / `cos voice name`, and start waiting once permissions are on.
+  private func reloadWakeSettings() {
+    let now = WakeSettings.load()
+    if now != wakeSettings {
+      wakeSettings = now
+      if !now.enabled { wake.stop() }
+    }
+    if wakeSettings.enabled, !wake.running || wake.problem != nil { resumeWake() }
+  }
+
+  @objc private func toggleWake() {
+    WakeSettings.setEnabled(!wakeSettings.enabled)
+    reloadWakeSettings()
+    if wakeSettings.enabled, let problem = wake.problem {
+      alert("Not listening for “\(wakeSettings.name)” yet", "Because \(problem). Turn on Microphone and Speech Recognition under ✦ › Permissions.")
+    }
+  }
+
+  private func refreshWakeItem() {
+    let name = wakeSettings.name.prefix(1).uppercased() + wakeSettings.name.dropFirst()
+    let off = wakeSettings.enabled && !wake.running ? " (not listening: \(wake.problem ?? "starting"))" : ""
+    wakeItem.title = "Listen for “\(name)”\(off)"
+    wakeItem.state = wakeSettings.enabled ? .on : .off
+  }
+
+  /// The same soft chime the pill plays when it's your turn, then go; straight away when cues are off or it isn't built yet.
+  private func playTurnCue(then go: @escaping () -> Void) {
+    let sounds = ShellConfig.home.appendingPathComponent("sounds")
+    let cue = wakeSettings.cues == "off" ? nil : (try? FileManager.default.contentsOfDirectory(at: sounds, includingPropertiesForKeys: [.contentModificationDateKey]))?
+      .filter { $0.lastPathComponent.hasPrefix("turn-") && $0.pathExtension == "wav" }
+      .max { ((try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) < ((try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) }
+    guard let cue, let sound = NSSound(contentsOf: cue, byReference: true), sound.play() else { return go() }
+    // The mic opens once the chime has played, so it doesn't hear it.
+    DispatchQueue.main.asyncAfter(deadline: .now() + sound.duration + 0.08) { go() }
   }
 
   // MARK: permissions
@@ -395,6 +490,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     case "hide":
       speech.cancel()
       panel.hide()
+      resumeWake()
     case "open":
       if let s = message["url"] as? String, let url = URL(string: s) { NSWorkspace.shared.open(url) }
     default:
@@ -409,6 +505,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         self.panel.eval("cosShell.status(\(Self.js("Microphone or speech recognition is off: System Settings › Privacy & Security.")))")
         return
       }
+      self.wake.stop() // one listener on the microphone at a time
       self.panel.eval("cosShell.listening(true)")
       self.speech.start()
     }

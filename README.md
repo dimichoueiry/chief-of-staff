@@ -77,6 +77,12 @@ npm run cos -- menubar install   # builds ~/Applications/Chief of Staff.app, ope
   over it, and a quieter single note marks the start of a spoken reply. It closes after 8 quiet seconds, on Esc, or when you say "thanks" or "that's all"
   (which also hides the pill). Double-tapping Control while it talks cuts it off and listens. Replies to
   typed questions, and "open …" requests, don't reopen the mic.
+- **Say its name.** "Darius wake up" (or "hey Darius") opens the pill and listens, after the "your turn" chime.
+  "Darius listen" (or "stop", "wait", "hold on") cuts it off mid-reply and listens. "Darius sleep" (or "go to
+  sleep", "that's all") stops and closes it. The name alone does nothing, so talking about someone called Darius
+  is safe, and misheard versions ("Darias", "Marius") still count. While it waits, speech is recognised on this Mac
+  only (it won't run where on-device recognition isn't available), and macOS shows the microphone as in use.
+  ✦ › Listen for "Darius" turns it on or off; `cos voice wake on|off`, `cos voice name Nova` changes the name.
 - **⌥Space** anywhere: the pill appears for typing.
 - **Compact mic.** The ⤡ button at the right of the bar shrinks it to a small, see-through mic (about 85 px
   wide instead of 640) that covers less of the screen; ⤢ opens it back up. It turns solid while it listens,
@@ -190,6 +196,8 @@ cos voice style "upbeat and brisk, like a coach"
 cos voice speed 1.1
 cos voice provider say            # force the Mac voice (auto | openai | say)
 cos voice cues turn               # chimes: both (start + your turn), turn, or off
+cos voice wake off                # stop waiting for "Darius wake up" (on | off)
+cos voice name Nova               # wake to a different name
 ```
 
 Settings are saved in `~/.cos/voice.json` and apply to the next thing it says, including in the menubar app.
