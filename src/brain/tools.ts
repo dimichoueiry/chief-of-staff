@@ -21,6 +21,7 @@ import { readAccess, type Access, type AccessMode } from "../actions/access.js";
 import { AgentGrid, findSession, formatSessions, formatTranscript } from "../actions/agentgrid.js";
 import { openOrQueue, safeWebUrl, checkPath, macOpen, type Runner } from "../actions/open.js";
 import { findBookmarks, formatBookmarks, readBookmarks, type BookmarkRead } from "../actions/bookmarks.js";
+import { baseDomain, consequentialClick, sharedBrowser, siteOf, type AssistantBrowser } from "../actions/browser.js";
 import { isPending, queue, take, type ConfirmView, type Pending } from "../actions/pending.js";
 import { performPending } from "../actions/perform.js";
 import { classifyCommand, decide, formatResult, resolveCwd, runCommand, runVisible, tildePath, type CommandRequest, type Shell } from "../actions/terminal.js";
@@ -253,6 +254,60 @@ export const TOOLS: Record<string, ToolSpec> = {
       required: ["session", "message"],
     },
   },
+  browser_open: {
+    name: "browser_open",
+    description:
+      "Open a web page in your own browser (a separate Chrome window with its own sign-ins, not theirs) to read it or do something on it for them: " +
+      "what's due on a course site, an order's status, something behind a sign-in, a form to fill in. Returns the page as an outline: its text, links, buttons and fields, each with a [ref=…]. " +
+      "A site not on your browser's list waits for their OK once. To just show them a page in their own browser, use open instead.",
+    parameters: { type: "object", properties: { url: s("The full address, e.g. https://canvas.illinois.edu/courses") }, required: ["url"] },
+  },
+  browser_read: {
+    name: "browser_read",
+    description: "Read the page open in your browser again: after it changed or loaded more, or to find something on a long page.",
+    parameters: { type: "object", properties: { find: s("Only the lines that mention any of these words, e.g. \"due quiz\"") } },
+  },
+  browser_click: {
+    name: "browser_click",
+    description:
+      "Click a link, button, tab or checkbox in your browser, by its [ref=…] from the page as you last read it. Returns the page after. " +
+      "Clicking something that sends, submits, buys, posts or deletes waits for their OK.",
+    parameters: {
+      type: "object",
+      properties: { ref: s("The ref, e.g. e13"), element: s("What it is, e.g. \"Assignments link\"") },
+      required: ["ref", "element"],
+    },
+  },
+  browser_type: {
+    name: "browser_type",
+    description:
+      "Type into a field in your browser, by its [ref=…]. Set submit to press Enter afterwards (that waits for their OK). " +
+      "Never for passwords or codes: they sign in themselves, in your browser's window.",
+    parameters: {
+      type: "object",
+      properties: {
+        ref: s("The field's ref, e.g. e10"),
+        element: s("What it is, e.g. \"search box\""),
+        text: s("What to type"),
+        submit: { type: "boolean", description: "Press Enter after typing" },
+      },
+      required: ["ref", "element", "text"],
+    },
+  },
+  browser_select: {
+    name: "browser_select",
+    description: "Choose an option in a dropdown in your browser, by its [ref=…].",
+    parameters: {
+      type: "object",
+      properties: { ref: s("The dropdown's ref"), element: s("What it is"), values: { type: "array", items: { type: "string" }, description: "The option(s) to choose, as shown" } },
+      required: ["ref", "element", "values"],
+    },
+  },
+  browser_back: {
+    name: "browser_back",
+    description: "Go back to the previous page in your browser.",
+    parameters: { type: "object", properties: {} },
+  },
   get_git_log: {
     name: "get_git_log",
     description: "Recent commits for a project's folder (by its path field or a folder named like the project).",
@@ -266,7 +321,7 @@ export const TOOLS: Record<string, ToolSpec> = {
 
 const ALL = Object.keys(TOOLS);
 /** Tools that do something outside memory: the conversation record lists what they did. */
-export const ACTIONS = ["open", "run_command", "start_agent", "message_agent"];
+export const ACTIONS = ["open", "run_command", "start_agent", "message_agent", "browser_click", "browser_type"];
 
 /** Tools that change memory. Everything else only reads or opens. */
 export const WRITES = ["upsert_project", "skip_cadence", "touch_project", "add_reminder", "complete_reminder", "add_note", "append_journal", "add_shortcut"];
@@ -328,6 +383,7 @@ export class ToolRuntime {
       recentlyDone?: { kind: string; detail: string }[];
       bookmarks?: () => Promise<BookmarkRead>;
       screen?: ScreenCapturer;
+      browser?: AssistantBrowser;
     } = {},
   ) {
     this.shortcuts = new Shortcuts(config.selfhubDir);
@@ -534,7 +590,7 @@ export class ToolRuntime {
             continue;
           }
           try {
-            const out = await performPending(p, { run: this.actions.run, shell: this.actions.shell, agentGrid: this.actions.agentGrid });
+            const out = await performPending(p, { run: this.actions.run, shell: this.actions.shell, agentGrid: this.actions.agentGrid, browser: this.actions.browser });
             this.done.push({ kind: p.kind, detail: p.detail });
             lines.push(`Done, as they said (already done: do not do it again): ${p.label}. Result: ${out}`);
           } catch (err) {
@@ -606,6 +662,72 @@ export class ToolRuntime {
         this.done.push({ kind: "agent-message", detail });
         return `Sent to ${found.title}.`;
       }
+      case "browser_open": {
+        this.browserAllowed();
+        const url = safeWebUrl(this.str(input, "url", true));
+        if (!url) throw new Error("only http and https addresses can be opened in the browser");
+        const browser = this.browser();
+        if (!browser.allowed(url)) {
+          const site = siteOf(url)!;
+          const base = baseDomain(site);
+          const detail = `Let your browser use ${site}${base !== site ? ` (and the rest of ${base})` : ""}, and open ${url}`;
+          const twice = this.repeated("browser-site", detail);
+          if (twice) return twice;
+          this.pending.push(queue("browser-site", { url }, { label: `${site} in the assistant's browser`, detail, verb: "Allow" }));
+          return `Not opened: ${site} isn't on your browser's site list yet. Ask them in one short sentence whether to allow it in your browser. They can just say yes.`;
+        }
+        return browser.open(url);
+      }
+      case "browser_read":
+        this.browserAllowed();
+        return this.browser().read(this.str(input, "find") || undefined);
+      case "browser_click": {
+        const mode = this.browserAllowed();
+        const browser = this.browser();
+        const el = browser.element(this.str(input, "ref", true));
+        const what = el.name ? `“${el.name}”` : `the unlabeled ${el.role}`;
+        const detail = `Click ${what} on ${browser.address}`;
+        if (consequentialClick(el)) {
+          const twice = this.repeated("browser-act", detail);
+          if (twice) return twice;
+          if (mode === "ask") {
+            this.pending.push(queue("browser-act", { action: "click", element: el, url: browser.address }, { label: `click ${what} on ${siteOf(browser.address) ?? "the page"}`, detail, verb: "Click" }));
+            return `Not clicked yet: ${what} may send or change something. Ask them in one short sentence whether to click it, saying what will happen (and what it sends, if anything). They can just say yes.`;
+          }
+          this.done.push({ kind: "browser-act", detail });
+        }
+        return browser.click(el);
+      }
+      case "browser_type": {
+        const mode = this.browserAllowed();
+        const browser = this.browser();
+        const el = browser.element(this.str(input, "ref", true));
+        const text = String(input.text ?? "");
+        if (!text) throw new Error('"text" is required');
+        const submit = input.submit === true;
+        if (await browser.isPassword(el)) throw new Error("Refused: that's a password or code field. Tell them to sign in themselves, in your browser's window; it remembers.");
+        if (submit) {
+          const detail = `Type into “${el.name || el.role}” on ${browser.address} and press Enter:\n${text}`;
+          const twice = this.repeated("browser-act", detail);
+          if (twice) return twice;
+          if (mode === "ask") {
+            this.pending.push(queue("browser-act", { action: "type", element: el, url: browser.address, text, submit }, { label: `send “${text.length > 40 ? `${text.slice(0, 37)}…` : text}” on ${siteOf(browser.address) ?? "the page"}`, detail, verb: "Send" }));
+            return "Not sent yet: pressing Enter submits it. Ask them in one short sentence whether to send it, reading them what you typed. They can just say yes.";
+          }
+          this.done.push({ kind: "browser-act", detail });
+        }
+        return browser.type(el, text, submit);
+      }
+      case "browser_select": {
+        this.browserAllowed();
+        const browser = this.browser();
+        const values = Array.isArray(input.values) ? input.values.map(String) : [];
+        if (!values.length) throw new Error('"values" is required');
+        return browser.select(browser.element(this.str(input, "ref", true)), values);
+      }
+      case "browser_back":
+        this.browserAllowed();
+        return this.browser().back();
       case "get_git_log": {
         const projectName = this.str(input, "project", true);
         const limit = Math.min(Math.max(Number(input.limit) || 15, 1), 100);
@@ -631,6 +753,16 @@ export class ToolRuntime {
       return "This exact thing was already done a moment ago. Don't do it again unless they clearly ask for it to be repeated.";
     }
     return null;
+  }
+
+  private browser(): AssistantBrowser {
+    return this.actions.browser ?? sharedBrowser();
+  }
+
+  private browserAllowed(): AccessMode {
+    const mode = (this.actions.access ?? readAccess)().browser;
+    if (mode === "off") throw new Error("Your browser is turned off. They can turn it on with `cos access browser ask`.");
+    return mode;
   }
 
   private grid(): AgentGrid {

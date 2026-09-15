@@ -19,9 +19,11 @@ export interface Access {
   links: AccessMode;
   /** Looking at the screen when asked ("look at this"): auto looks, off never does. */
   screen: AccessMode;
+  /** The assistant's own browser: ask reads and clicks around freely, but sending, submitting or buying waits for an OK; auto does those too. New sites always ask. */
+  browser: AccessMode;
 }
 
-export const DEFAULT_ACCESS: Access = { terminal: "ask", agents: "ask", links: "auto", screen: "auto" };
+export const DEFAULT_ACCESS: Access = { terminal: "ask", agents: "ask", links: "auto", screen: "auto", browser: "ask" };
 
 export function accessFile(): string {
   return join(cosHome(), "access.json");
@@ -43,6 +45,7 @@ export function readAccess(file: string = accessFile()): Access {
     agents: saved.agents && isAccessMode(saved.agents) ? saved.agents : DEFAULT_ACCESS.agents,
     links: saved.links && isAccessMode(saved.links) ? saved.links : DEFAULT_ACCESS.links,
     screen: saved.screen && isAccessMode(saved.screen) ? saved.screen : DEFAULT_ACCESS.screen,
+    browser: saved.browser && isAccessMode(saved.browser) ? saved.browser : DEFAULT_ACCESS.browser,
   };
 }
 

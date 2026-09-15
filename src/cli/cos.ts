@@ -41,6 +41,7 @@ import { homeEnvFile, parseEnv, syncProjectEnv } from "../util/env.js";
 import { deployRuntime } from "./deploy.js";
 import { openOrQueue, performOpen } from "../actions/open.js";
 import { ACCESS_MODES, accessFile, isAccessMode, readAccess, saveAccess, type AccessMode } from "../actions/access.js";
+import { allowSite, baseDomain, browserHome, forgetSite, readSites } from "../actions/browser.js";
 import { AgentGrid, formatSessions } from "../actions/agentgrid.js";
 import { findFolders, formatFolderSearch } from "../actions/folders.js";
 import { Shortcuts } from "../actions/shortcuts.js";
@@ -280,13 +281,14 @@ const accessCmd = program
     console.log(`${bold("terminal")}  ${a.terminal}  ${dim(explain[a.terminal])}`);
     console.log(`${bold("agents")}    ${a.agents}  ${dim(a.agents === "ask" ? "can list and read agents; starting or messaging one waits for your OK" : explain[a.agents])}`);
     console.log(`${bold("screen")}    ${a.screen}  ${dim(a.screen === "off" ? "never looks at your screen" : "looks when you say \"look at this\" or point at something on screen")}`);
+    console.log(`${bold("browser")}   ${a.browser}  ${dim(a.browser === "off" ? "never uses its browser" : a.browser === "ask" ? "reads and clicks around on sites you allowed; sending, submitting or buying waits for your OK" : "also sends and submits on its own on sites you allowed")}`);
     console.log(`${bold("links")}     ${a.links}  ${dim(a.links === "auto" ? "web pages it finds or builds open straight away" : a.links === "ask" ? "web pages it finds or builds wait for your OK" : "it never opens web pages it came up with")}`);
     console.log(dim("An OK can be spoken: \"yeah, send it\" or \"no\" works as well as the button."));
     console.log(dim(`Change: cos access terminal auto | cos access agents ask   (saved in ${accessFile()})`));
     console.log(dim(`Every command it runs is logged in ~/.cos/logs/terminal.log`));
   });
 
-for (const what of ["terminal", "agents", "links", "screen"] as const) {
+for (const what of ["terminal", "agents", "links", "screen", "browser"] as const) {
   accessCmd
     .command(what)
     .argument("<mode>", ACCESS_MODES.join(" | "))
@@ -307,6 +309,37 @@ program
     } catch (err) {
       fail((err as Error).message);
     }
+  });
+
+// ---------- the assistant's browser ----------
+
+const browserCmd = program
+  .command("browser")
+  .description("the assistant's own browser: the sites it may use (it signs in with its own profile, never yours)")
+  .action(() => {
+    const sites = readSites();
+    console.log(sites.length ? sites.map((s) => `${s}${baseDomain(s) !== s ? dim(`  (and the rest of ${baseDomain(s)})`) : ""}`).join("\n") : "No sites yet. It asks the first time it wants one, or: cos browser allow canvas.illinois.edu");
+    console.log(dim(`Profile (its sign-ins): ${join(browserHome(), "profile")}   Access: cos access browser ask|auto|off`));
+  });
+
+browserCmd
+  .command("allow")
+  .argument("<site>", "a site or any address on it, e.g. canvas.illinois.edu")
+  .description("let the assistant's browser use a site")
+  .action((site: string) => {
+    try {
+      console.log(`Allowed ${allowSite(site)}.`);
+    } catch (err) {
+      fail((err as Error).message);
+    }
+  });
+
+browserCmd
+  .command("forget")
+  .argument("<site>", "a site on the list")
+  .description("take a site off the list (its sign-in stays in the profile until you sign out there)")
+  .action((site: string) => {
+    console.log(forgetSite(site) ? `Removed ${site}.` : `${site} isn't on the list.`);
   });
 
 // ---------- screen ----------

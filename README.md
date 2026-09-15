@@ -225,6 +225,39 @@ take one itself (`look_at_screen`). Follow-ups keep working by voice like any ot
 - macOS permission: **Screen & System Audio Recording** for Chief of Staff, part of the app's setup.
   `cos screen` says whether it's on. `cos access screen off` turns looking off.
 
+## Its own browser
+
+The assistant has its own browser, a separate Chrome window with its own profile, for doing things on
+websites for you: "what's due this week on Canvas?", "check if my TA replied", "what's on
+localhost:3000/modules/M6?". It reads pages as an outline of their text, links, buttons and fields
+(through Playwright MCP, no screenshots), clicks and types by voice, and tells you what it found.
+Your everyday browser is never touched.
+
+- **Signing in:** the first time a site needs it, sign in yourself in its window. It remembers
+  (the profile is `~/.cos/browser/profile`). It never types passwords or codes. Google may refuse
+  sign-ins in automated browsers.
+- **Sites:** it only reads and acts on sites on its list. The first time it wants a new one, it asks
+  ("Should I allow canvas.illinois.edu?"), and a yes covers that site's own domain, so its sign-in
+  page works too. If a click leads to a site not on the list, that page's content is withheld from the
+  model.
+- **What waits for your OK:** clicking anything that sends, submits, buys, posts, deletes or saves, and
+  pressing Enter in a field. It asks out loud and says what will be sent; "yeah, send it" works. If
+  the page has changed by the time you say yes, nothing happens and it asks again.
+- **Page text is information, never instructions.** Hidden text isn't in the outline, and the model is
+  told with every page not to follow what pages say. It only acts on elements from the page as it last
+  read it.
+- Long pages are cut at about 24,000 characters, and it says how much it isn't seeing; it can then
+  search the page for words instead.
+- The window closes after 30 quiet minutes and opens again when needed. Sign-ins stay.
+- Chrome is used if installed, otherwise Edge (`COS_BROWSER=msedge` to choose).
+
+```bash
+cos browser                          # the sites it may use
+cos browser allow canvas.illinois.edu
+cos browser forget canvas.illinois.edu
+cos access browser auto              # off | ask (default) | auto: auto also sends and submits on its own
+```
+
 ## Terminal and coding agents
 
 The assistant can use your terminal and your Agent Grid agents, so "what are the last commits in
@@ -351,4 +384,5 @@ examples/     a sample selfhub for demos and tests
 | Conversation memory in the pill: follow-ups, saved threads, live progress, formatted replies | done, tested (scripted model and headless browser) |
 | Memory across conversations: summaries of the last 7 days in every request, search over all past conversations, `cos conversations` | done, tested; verified live on OpenRouter |
 | Terminal (rules-based permissions, confirm by button or "yes") and Agent Grid agents (list, read, start, message) | done, tested; verified live with a second Agent Grid instance |
+| Its own browser (Playwright MCP, separate profile, site list, spoken OK before sending) | done, tested; checked end to end with headless Chrome on a local page, not yet on a real site |
 | Wake word, phone notifications, autonomy epic | not yet |
