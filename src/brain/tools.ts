@@ -17,6 +17,7 @@ import { Ledger, PROJECT_STATUSES, findProject, type Project, type ProjectPatch 
 import { Notes } from "../core/notes.js";
 import { Reminders } from "../core/reminders.js";
 import { openOrQueue, safeWebUrl, checkPath, macOpen, type PendingOpen, type Runner } from "../actions/open.js";
+import { findFolders, formatFolderSearch } from "../actions/folders.js";
 import { Shortcuts } from "../actions/shortcuts.js";
 import { slateBoards, type SlateBoard } from "../actions/slate.js";
 import { eventsInRange, formatAgenda, type CalendarProvider } from "../sensors/calendar.js";
@@ -36,7 +37,8 @@ export const TOOLS: Record<string, ToolSpec> = {
   upsert_project: {
     name: "upsert_project",
     description:
-      "Create a project or update fields on an existing one. Only the fields you pass change. Every call is a git commit.",
+      "Create a project or update fields on an existing one. Only the fields you pass change. Every call is a git commit. " +
+      "Pass only what you know; leave cadence, deadline and notes out rather than filling them with placeholders.",
     parameters: {
       type: "object",
       properties: {
@@ -148,6 +150,21 @@ export const TOOLS: Record<string, ToolSpec> = {
       },
     },
   },
+  find_folder: {
+    name: "find_folder",
+    description:
+      "Find folders on the user's Mac by name, tolerant of misspelling and speech mistakes (\"ML gorilla\" finds mlguerilla). " +
+      "Searches Desktop, Documents, GitHub and the usual code folders. Shows each match's git status, last commit, README line and contents. " +
+      "Use it whenever you need a project's path; never ask the user to type one.",
+    parameters: {
+      type: "object",
+      properties: {
+        name: s("The name as they said it, e.g. \"ML gorilla\" or \"agent grid\""),
+        within: s("Optional folder to search first, e.g. ~/Documents/GitHub"),
+      },
+      required: ["name"],
+    },
+  },
   get_git_log: {
     name: "get_git_log",
     description: "Recent commits for a project's folder (by its path field or a folder named like the project).",
@@ -160,7 +177,8 @@ export const TOOLS: Record<string, ToolSpec> = {
 };
 
 const ALL = Object.keys(TOOLS);
-const WRITES = ["upsert_project", "skip_cadence", "touch_project", "add_reminder", "complete_reminder", "add_note", "append_journal", "add_shortcut"];
+/** Tools that change memory. Everything else only reads or opens. */
+export const WRITES = ["upsert_project", "skip_cadence", "touch_project", "add_reminder", "complete_reminder", "add_note", "append_journal", "add_shortcut"];
 
 /** Which tools each intent may use. The brief is read-only and gets none. */
 export function toolsFor(intent: Intent): ToolSpec[] {
@@ -168,8 +186,8 @@ export function toolsFor(intent: Intent): ToolSpec[] {
     brief: [],
     "silence-check": [],
     ask: ALL,
-    capture: [...WRITES, "get_project", "get_calendar"],
-    focus: ["get_project", "upsert_project", "get_git_log", "get_calendar", "open", "get_conversations"],
+    capture: [...WRITES, "get_project", "get_calendar", "find_folder"],
+    focus: ["get_project", "upsert_project", "get_git_log", "get_calendar", "open", "get_conversations", "find_folder"],
     wrap: ["get_project", "append_journal", "touch_project", "upsert_project", "get_git_log", "get_conversations"],
   };
   return names[intent].map((n) => TOOLS[n]);
@@ -352,6 +370,13 @@ export class ToolRuntime {
           from: from || undefined,
           to: to || undefined,
         });
+      }
+      case "find_folder": {
+        const within = this.str(input, "within");
+        const r = await findFolders(this.str(input, "name", true), {
+          roots: [...(within ? [expandHome(within)] : []), ...this.config.projectRoots],
+        });
+        return formatFolderSearch(r);
       }
       case "get_git_log": {
         const projectName = this.str(input, "project", true);

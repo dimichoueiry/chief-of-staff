@@ -7,6 +7,7 @@ import OpenAI from "openai";
 import { Command } from "commander";
 import { Conversations, conversationsDir } from "../brain/conversation.js";
 import { runIntent, providerFor, RefusedError } from "../brain/loop.js";
+import { WRITES } from "../brain/tools.js";
 import { renderRecall, searchConversations, summarizeEnded, summaryText } from "../brain/recall.js";
 import {
   MODEL_INTENTS, NoModelError, PROVIDERS, PROVIDER_ORDER, explainNotReady, formatSpec, parseModelSpec,
@@ -39,6 +40,7 @@ import { addDays, isISODate, todayISO } from "../util/dates.js";
 import { homeEnvFile, parseEnv, syncProjectEnv } from "../util/env.js";
 import { deployRuntime } from "./deploy.js";
 import { openOrQueue, performOpen } from "../actions/open.js";
+import { findFolders, formatFolderSearch } from "../actions/folders.js";
 import { Shortcuts } from "../actions/shortcuts.js";
 import { findBoards, slateBaseUrl, slateBoardUrl, slateBoards } from "../actions/slate.js";
 import { buildMenubar, installLoginItem, openMenubar, restartMenubar, uninstallMenubar } from "./menubar.js";
@@ -118,7 +120,7 @@ async function syncTouches(cfg: Config, quiet = true): Promise<void> {
 const LEDGER_TEMPLATE = `# Projects
 
 One block per project. Fields: why · status (active | parked | done | killed) · cadence · next · last touched · deadline · notes · path
-Rules: one next action per project. why is mandatory. last touched is maintained for you from git activity.
+Rules: one next action per project. A why helps rank it. last touched is maintained for you from git activity.
 Add a project with: cos capture "starting a project: <name>, it's for <why>"
 `;
 
@@ -230,7 +232,7 @@ async function runAndPrint(intent: ModelIntent, message?: string, project?: stri
     });
     if (!streamed) process.stdout.write(r.text);
     process.stdout.write("\n");
-    const writes = r.toolCalls.filter((c) => !c.isError && !c.name.startsWith("get_"));
+    const writes = r.toolCalls.filter((c) => !c.isError && WRITES.includes(c.name));
     if (writes.length) console.log(dim(`${writes.length} change${writes.length === 1 ? "" : "s"} committed to ${cfg.selfhubDir}`));
     console.log(dim(`— ${r.model}`));
   } catch (err) {
@@ -259,6 +261,16 @@ program
   .argument("<sentence...>", "one sentence; it gets filed to the right place")
   .description("file a sentence: project, reminder, note or journal")
   .action((s: string[]) => runAndPrint("capture", s.join(" ")));
+
+// ---------- folders ----------
+
+program
+  .command("folders")
+  .argument("<name...>", "a folder name as you'd say it, e.g. ml gorilla")
+  .description("find folders by a loose or misheard name (what the assistant uses to find project paths)")
+  .action(async (name: string[]) => {
+    console.log(formatFolderSearch(await findFolders(name.join(" "), { roots: config().projectRoots })));
+  });
 
 // ---------- conversations ----------
 

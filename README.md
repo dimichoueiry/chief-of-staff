@@ -169,6 +169,11 @@ Say or type "open …" in the pill (or run `cos open …`). These open instantly
 - Projects with a `path:` in the ledger: `open drawcal`, or `cos open drawcal --app Cursor`.
 - Installed apps (`open calendar`) and searches (`search for tauri menubar`).
 
+It finds project folders itself. Say "track ML gorilla, next step is the module 6 lesson" and it
+searches Desktop, Documents, GitHub and the usual code folders for a close name (misspelled or
+misheard is fine), picks the git repo that fits, and saves the project with its path in the same
+reply. It never asks you to type a path. `cos folders ml gorilla` shows what it would find.
+
 A web address the model comes up with on its own is never opened directly: the pill shows it
 with **Open** and **Cancel**. Only http(s) addresses open; files open only from your home folder,
 and never scripts or installers. `COS_SLATE_URL` points at a different Slate address if needed.

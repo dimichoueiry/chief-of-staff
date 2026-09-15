@@ -14,6 +14,7 @@ import { Conversations, conversationsDir, historyMessages, visibleTurns, type Co
 import type { LLMProvider, ChatMessage } from "../brain/llm/types.js";
 import type { ModelSpec } from "../brain/llm/registry.js";
 import { providerFor, runIntent } from "../brain/loop.js";
+import { WRITES } from "../brain/tools.js";
 import { renderRecall, summarizeEnded } from "../brain/recall.js";
 import type { Brief } from "../brain/schema.js";
 import type { Config } from "../config.js";
@@ -31,6 +32,7 @@ import { applyActivity, scanActivity } from "../sensors/git.js";
 import { addDays, todayISO } from "../util/dates.js";
 import { reloadHomeEnv } from "../util/env.js";
 import { macOpen, openOrQueue, performOpen, takePending, type PendingOpen, type Runner } from "../actions/open.js";
+import { findFolders, formatFolderSearch } from "../actions/folders.js";
 import { Shortcuts } from "../actions/shortcuts.js";
 import { slateBoards, type SlateBoard } from "../actions/slate.js";
 import { speak, stopSpeaking } from "../voice/tts.js";
@@ -71,6 +73,8 @@ const DOING: Record<string, string> = {
   get_calendar: "Checking your calendar…",
   get_project: "Reading the ledger…",
   get_git_log: "Reading recent commits…",
+  find_folder: "Looking for the folder…",
+  get_conversations: "Searching earlier conversations…",
   open: "Opening…",
   add_shortcut: "Saving a shortcut…",
   add_reminder: "Setting a reminder…",
@@ -174,7 +178,7 @@ export function createUiServer(o: UiOptions): Server {
     return text ? (JSON.parse(text) as Record<string, unknown>) : {};
   }
 
-  const changes = (calls: { name: string; isError: boolean }[]) => calls.filter((c) => !c.isError && !c.name.startsWith("get_") && c.name !== "open").length;
+  const changes = (calls: { name: string; isError: boolean }[]) => calls.filter((c) => !c.isError && WRITES.includes(c.name)).length;
 
   const conversations = o.conversations ?? new Conversations(conversationsDir(), config.conversationIdleMinutes);
   const openRunner = o.openRunner ?? macOpen;
@@ -313,6 +317,12 @@ export function createUiServer(o: UiOptions): Server {
         const to = url.searchParams.get("to") ?? addDays(from, 6);
         const r = await eventsInRange(from, to);
         return json(res, r.error ? 422 : 200, { from, to, provider: r.provider, error: r.error ?? null, events: r.events });
+      }
+      case "GET /api/folders": {
+        const name = (url.searchParams.get("name") ?? "").trim();
+        if (!name) return json(res, 400, { error: "name is required" });
+        const r = await findFolders(name, { roots: config.projectRoots });
+        return json(res, 200, { ...r, text: formatFolderSearch(r) });
       }
       case "GET /api/models":
         return json(res, 200, modelsState());

@@ -8,6 +8,7 @@ import type { ModelSpec } from "./llm/registry.js";
 import type { LLMProvider } from "./llm/types.js";
 import { Conversations, localStamp, type Conversation, type Turn } from "./conversation.js";
 import { formatSpec } from "./llm/registry.js";
+import { WRITES } from "./tools.js";
 import { addDays, todayISO } from "../util/dates.js";
 
 const SUMMARY_PROMPT = `You keep the memory of a personal chief of staff. Below is one finished conversation between the user ("Them") and the chief of staff ("You").
@@ -51,7 +52,7 @@ function actionsOf(t: Turn): string[] {
     if (step.role !== "tool") continue;
     for (const r of step.results) {
       const name = names.get(r.id) ?? "";
-      if (!r.isError && !name.startsWith("get_")) out.push(oneLine(clip(r.content, 200)));
+      if (!r.isError && (WRITES.includes(name) || name === "open")) out.push(oneLine(clip(r.content, 200)));
     }
   }
   return out;
