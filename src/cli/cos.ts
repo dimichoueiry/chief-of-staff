@@ -26,6 +26,7 @@ import { pickStt } from "../voice/stt.js";
 import { speak } from "../voice/tts.js";
 import { applyActivity, scanActivity } from "../sensors/git.js";
 import { isISODate, todayISO } from "../util/dates.js";
+import { buildMenubar, installLoginItem, openMenubar, uninstallMenubar } from "./menubar.js";
 import { ask, confirm } from "./prompt.js";
 
 loadDotenv();
@@ -411,6 +412,61 @@ scheduler
     for (const s of await launchd.status()) {
       console.log(`${s.at}  ${s.label}  ${s.installed ? (s.loaded ? "loaded" : "installed, not loaded") : dim("not installed")}`);
     }
+  });
+
+// ---------- the native shell ----------
+
+const menubar = program.command("menubar").description("the native macOS shell: menubar icon, floating pill, double-tap Fn, native listening");
+
+menubar
+  .command("build")
+  .description("compile the Swift app into ~/Applications/Chief of Staff.app")
+  .option("--port <n>", "port the shell starts the server on", process.env.COS_UI_PORT ?? "4747")
+  .action(async (o: { port: string }) => {
+    const root = resolve(new URL("../..", import.meta.url).pathname);
+    try {
+      const app = await buildMenubar({ repoRoot: root, node: process.execPath, port: Number(o.port) || 4747, log: (l) => console.log(dim(l)) });
+      console.log(`Built ${app}`);
+      console.log("Next: cos menubar open   (first run asks for Accessibility, Microphone and Speech permissions)");
+    } catch (err) {
+      fail((err as Error).message);
+    }
+  });
+
+menubar
+  .command("open")
+  .description("launch the shell")
+  .action(async () => {
+    try {
+      await openMenubar();
+      console.log("Chief of Staff is in your menubar. Double-tap Fn (or ⌥Space) anywhere to talk to it.");
+    } catch (err) {
+      fail((err as Error).message);
+    }
+  });
+
+menubar
+  .command("install")
+  .description("build, open, and start at login")
+  .option("--port <n>", "port", process.env.COS_UI_PORT ?? "4747")
+  .action(async (o: { port: string }) => {
+    const root = resolve(new URL("../..", import.meta.url).pathname);
+    try {
+      await buildMenubar({ repoRoot: root, node: process.execPath, port: Number(o.port) || 4747, log: (l) => console.log(dim(l)) });
+      const file = await installLoginItem();
+      await openMenubar();
+      console.log(`Installed. Opens at login via ${file}.`);
+    } catch (err) {
+      fail((err as Error).message);
+    }
+  });
+
+menubar
+  .command("uninstall")
+  .description("quit, remove the login item and the app")
+  .action(async () => {
+    const removed = await uninstallMenubar();
+    console.log(removed.length ? `Removed:\n${removed.join("\n")}` : "Nothing installed.");
   });
 
 // ---------- voice ----------
