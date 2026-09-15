@@ -226,6 +226,47 @@ describe("ui server (offline)", () => {
     expect((await (await fetch(`${base}/api/conversation`)).json()).id).toBe(fresh.id);
   });
 
+  it("lets the menubar use any model: tries it first, keeps it in the list, changes nothing when it fails", async () => {
+    const tried: string[] = [];
+    const server = createUiServer({
+      config: loadConfig({ COS_SELFHUB: dir, COS_PROJECT_ROOTS: "/nonexistent" }), today: THU, offline: true, allowSpeech: false,
+      modelTester: async (spec) => {
+        tried.push(`${spec.provider}:${spec.model}`);
+        if (spec.model.includes("nope")) throw new Error("404 No endpoints found for openai/gpt-nope");
+        return { ms: 1671, servedBy: "openai/gpt-5.6-luna" };
+      },
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const post = (path: string, b: unknown) => fetch(`${url}${path}`, { method: "POST", body: JSON.stringify(b) });
+    try {
+      const menu = await (await fetch(`${url}/api/models`)).json();
+      expect(menu.actions.map((a: { kind: string; title: string }) => `${a.kind}: ${a.title}`)).toEqual(["input: Use any model…", "open: Browse OpenRouter models…"]);
+      expect(menu.actions[0]).toMatchObject({ path: "api/models/use", button: "Try and use" });
+
+      const used = await (await post("/api/models/use", { value: "~openai/gpt-luna-latest" })).json();
+      expect(used).toMatchObject({ ok: true, message: "Now using openrouter:~openai/gpt-luna-latest", detail: "It answered in 1.7 s (served by openai/gpt-5.6-luna)." });
+      expect(used.default).toBe("openrouter:~openai/gpt-luna-latest");
+      expect(used.presets[0]).toMatchObject({ spec: "openrouter:~openai/gpt-luna-latest", custom: true });
+      expect(used.actions.at(-1)).toMatchObject({ kind: "post", title: "Remove openrouter:~openai/gpt-luna-latest from this list", path: "api/models/forget" });
+
+      const broken = await post("/api/models/use", { value: "openrouter:openai/gpt-nope" });
+      expect(broken.status).toBe(422);
+      expect((await broken.json()).error).toBe("openrouter:openai/gpt-nope didn't work, so nothing changed: 404 No endpoints found for openai/gpt-nope");
+      expect((await (await fetch(`${url}/api/models`)).json()).default).toBe("openrouter:~openai/gpt-luna-latest");
+
+      expect((await post("/api/models/use", { value: "llama3.2" })).status).toBe(400);
+      expect((await post("/api/models/use", { value: "  " })).status).toBe(400);
+      expect(tried).toEqual(["openrouter:~openai/gpt-luna-latest", "openrouter:openai/gpt-nope"]);
+
+      const forgotten = await (await post("/api/models/forget", { spec: "openrouter:~openai/gpt-luna-latest" })).json();
+      expect(forgotten.presets.some((p: { spec: string }) => p.spec === "openrouter:~openai/gpt-luna-latest")).toBe(false);
+      expect(forgotten.default).toBe("openrouter:~openai/gpt-luna-latest"); // still in use, just off the list
+    } finally {
+      await new Promise((r) => server.close(() => r(undefined)));
+    }
+  });
+
   it("lists presets and providers, and saves a model choice the next request picks up", async () => {
     const before = await (await fetch(`${base}/api/models`)).json();
     expect(before.default).toBeNull();

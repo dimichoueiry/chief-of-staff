@@ -267,5 +267,41 @@ export function presets(settings: ModelSettings = readModelSettings()): string[]
     "openrouter:openai/gpt-5.4-mini",
     "openrouter:google/gemini-2.5-pro",
   ];
-  return [...new Set([...builtIn, ...(settings.presets ?? [])])];
+  // Your own models first: they're the ones you picked.
+  return [...new Set([...(settings.presets ?? []), ...builtIn])];
+}
+
+/** Keep a model in the menu's list (newest first). */
+export function rememberModel(spec: string, file: string = settingsFile()): ModelSettings {
+  const formatted = formatSpec(parseModelSpec(spec));
+  const settings = readModelSettings(file);
+  settings.presets = [formatted, ...(settings.presets ?? []).filter((p) => p !== formatted)];
+  writeModelSettings(settings, file);
+  return settings;
+}
+
+/** Take a model you added off the menu's list. Built-in ones can't be removed. */
+export function forgetModel(spec: string, file: string = settingsFile()): ModelSettings {
+  const settings = readModelSettings(file);
+  settings.presets = (settings.presets ?? []).filter((p) => p !== spec);
+  writeModelSettings(settings, file);
+  return settings;
+}
+
+/** One tiny request, so a typo or a missing key shows up now rather than mid-conversation. */
+export async function testModel(spec: ModelSpec, env: NodeJS.ProcessEnv = process.env): Promise<{ ms: number; servedBy: string; text: string }> {
+  if (!providerConfigured(spec.provider, env)) {
+    throw new Error(`There's no key for ${PROVIDERS[spec.provider].label}. Add ${PROVIDERS[spec.provider].keyEnv[0]} to ~/.cos/.env first.`);
+  }
+  const started = Date.now();
+  const res = await createProvider(spec, env).chat({
+    model: spec.model,
+    instructions: "You are a connectivity check.",
+    context: "Reply with exactly: ok",
+    messages: [{ role: "user", content: "Reply with exactly: ok" }],
+    tools: [],
+    effort: "low",
+    maxTokens: 2000,
+  });
+  return { ms: Date.now() - started, servedBy: res.model, text: res.text };
 }

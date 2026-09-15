@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       return
     }
     server = ServerManager(config: config)
+    installEditMenu()
     buildStatusItem()
 
     panel = PillPanel()
@@ -59,6 +60,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     hotkeys.stop()
     speech.cancel()
     server?.stop()
+  }
+
+  /// A menubar app has no menu bar of its own, so ⌘C, ⌘V, ⌘X, ⌘A and ⌘Z do nothing in text fields
+  /// (the pill's input, the model box) unless an Edit menu exists to route them. It's never shown.
+  private func installEditMenu() {
+    let main = NSMenu()
+    let editItem = NSMenuItem()
+    let edit = NSMenu(title: "Edit")
+    edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+    edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+    edit.addItem(.separator())
+    edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+    edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+    edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+    edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+    editItem.submenu = edit
+    main.addItem(editItem)
+    NSApp.mainMenu = main
   }
 
   // MARK: status item
@@ -131,9 +150,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         self.modelMenu.addItem(item)
       }
       self.modelMenu.addItem(.separator())
-      let hint = NSMenuItem(title: "Any model: cos models use provider:model", action: nil, keyEquivalent: "")
-      hint.isEnabled = false
-      self.modelMenu.addItem(hint)
+      // Whatever else the server lists ("Use any model…", "Browse…"), so new items need no rebuild.
+      for action in state["actions"] as? [[String: Any]] ?? [] {
+        guard let title = action["title"] as? String else { continue }
+        let item = NSMenuItem(title: title, action: #selector(self.runMenuAction(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = action
+        self.modelMenu.addItem(item)
+      }
       if saved != nil {
         let clear = NSMenuItem(title: "Clear saved choice", action: #selector(self.clearModel), keyEquivalent: "")
         clear.target = self
@@ -145,6 +169,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   @objc private func selectModel(_ sender: NSMenuItem) {
     guard let spec = sender.representedObject as? String else { return }
     server.postJSON("api/models", ["spec": spec]) { _ in Log.write("model → \(spec)") }
+  }
+
+  /// A menu item described by the server: open a link, post to an endpoint, or ask for a value first.
+  @objc private func runMenuAction(_ sender: NSMenuItem) {
+    guard let action = sender.representedObject as? [String: Any], let kind = action["kind"] as? String else { return }
+    switch kind {
+    case "open":
+      if let s = action["url"] as? String, let url = URL(string: s) { NSWorkspace.shared.open(url) }
+    case "post":
+      guard let path = action["path"] as? String else { return }
+      server.postJSON(path, action["body"] as? [String: Any] ?? [:]) { [weak self] obj in self?.report(obj) }
+    case "input":
+      guard let path = action["path"] as? String else { return }
+      NSApp.activate(ignoringOtherApps: true)
+      let ask = NSAlert()
+      ask.messageText = action["prompt"] as? String ?? sender.title
+      ask.informativeText = action["message"] as? String ?? ""
+      let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 380, height: 24))
+      field.placeholderString = action["placeholder"] as? String
+      field.stringValue = action["value"] as? String ?? ""
+      ask.accessoryView = field
+      ask.addButton(withTitle: action["button"] as? String ?? "OK")
+      ask.addButton(withTitle: "Cancel")
+      ask.window.initialFirstResponder = field
+      guard ask.runModal() == .alertFirstButtonReturn else { return }
+      let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+      guard !value.isEmpty else { return }
+      Log.write("menu: \(sender.title) \(value)")
+      server.postJSON(path, ["value": value]) { [weak self] obj in self?.report(obj) }
+    default:
+      break
+    }
+  }
+
+  /// Say how a menu action went: the server's message, or its error.
+  private func report(_ obj: Any?) {
+    guard let result = obj as? [String: Any] else {
+      alert("That didn't work.", "The app's server didn't answer. See ~/.cos/logs/menubar-server.log.")
+      return
+    }
+    if let error = result["error"] as? String {
+      alert("That didn't work.", error)
+    } else if let message = result["message"] as? String {
+      alert(message, result["detail"] as? String ?? "")
+    }
   }
 
   @objc private func clearModel() {

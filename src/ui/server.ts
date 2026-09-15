@@ -7,8 +7,8 @@ import { readFile } from "node:fs/promises";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  MODEL_INTENTS, PROVIDERS, PROVIDER_ORDER, formatSpec, parseModelSpec, presets, providerConfigured,
-  readModelSettings, resolveModel, setModel, type ModelIntent,
+  MODEL_INTENTS, PROVIDERS, PROVIDER_ORDER, forgetModel, formatSpec, parseModelSpec, presets, providerConfigured,
+  readModelSettings, rememberModel, resolveModel, setModel, testModel, type ModelIntent,
 } from "../brain/llm/registry.js";
 import { Conversations, conversationsDir, eventsSinceReply, historyMessages, visibleTurns, withEvents, type Conversation, type Turn } from "../brain/conversation.js";
 import type { LLMProvider, ChatMessage } from "../brain/llm/types.js";
@@ -81,6 +81,8 @@ export interface UiOptions {
   access?: () => Access;
   bookmarks?: () => Promise<BookmarkRead>;
   screen?: ScreenCapturer;
+  /** How a model is checked before it's used from the menu (tests). */
+  modelTester?: (spec: ModelSpec) => Promise<{ ms: number; servedBy: string }>;
 }
 
 /** How long a finished action counts as "just done", so the same one isn't queued again. */
@@ -150,6 +152,10 @@ function outcome(text: string, max = 3_000): string {
 /** Sentences the offline Scribe can file without a model. */
 const CAPTURE_SHAPE = /^(remind|starting|start|new project|park|kill|done with|finished|touched|worked on|today i|note:|.+\s+every\s+|.+\s+next\s*:)/i;
 
+function Log(line: string): void {
+  console.log(`${new Date().toISOString()} ${line}`);
+}
+
 const NO_MODEL = "That needs a model. Add a key (Anthropic, OpenAI or OpenRouter) to ~/.cos/.env or the project's .env, and pick one with `cos models use …` or the Model menu. The brief, decisions and capture work without one.";
 
 export function createUiServer(o: UiOptions): Server {
@@ -202,13 +208,26 @@ export function createUiServer(o: UiOptions): Server {
         intents[intent] = { error: (err as Error).message };
       }
     }
+    const current = (intents.ask as { spec?: string } | null)?.spec ?? "";
     return {
       default: settings.default ?? null,
       intents,
       presets: presets(settings).map((spec) => {
         const provider = parseModelSpec(spec).provider;
-        return { spec, provider, ready: providerConfigured(provider) };
+        return { spec, provider, ready: providerConfigured(provider), custom: (settings.presets ?? []).includes(spec) };
       }),
+      // Extra items for the menubar's Model menu; the app draws whatever is listed here.
+      actions: [
+        {
+          kind: "input", title: "Use any model…", prompt: "Use any model",
+          message: "An OpenRouter model id, like ~openai/gpt-luna-latest or anthropic/claude-sonnet-5, or provider:model (anthropic:claude-opus-5, openai:gpt-5.4). It's tried once before it's used, and added to this list.",
+          placeholder: "~openai/gpt-luna-latest", value: current, button: "Try and use", path: "api/models/use",
+        },
+        { kind: "open", title: "Browse OpenRouter models…", url: "https://openrouter.ai/models" },
+        ...((settings.presets ?? []).includes(current)
+          ? [{ kind: "post", title: `Remove ${current} from this list`, path: "api/models/forget", body: { spec: current } }]
+          : []),
+      ],
       providers: PROVIDER_ORDER.map((id) => ({ id, label: PROVIDERS[id].label, ready: providerConfigured(id), key: PROVIDERS[id].keyEnv[0] })),
     };
   }
@@ -486,6 +505,33 @@ export function createUiServer(o: UiOptions): Server {
           return json(res, 400, { error: (err as Error).message });
         }
         return json(res, 200, modelsState());
+      }
+      case "POST /api/models/use": {
+        const b = await body(req);
+        const raw = String(b.value ?? b.spec ?? "").trim();
+        if (!raw) return json(res, 400, { error: "Type a model, like ~openai/gpt-luna-latest." });
+        let spec: ModelSpec;
+        try {
+          spec = parseModelSpec(raw);
+        } catch (err) {
+          return json(res, 400, { error: (err as Error).message });
+        }
+        const name = formatSpec(spec);
+        try {
+          const t = await (o.modelTester ?? testModel)(spec);
+          setModel(name);
+          rememberModel(name);
+          Log(`model → ${name}`);
+          return json(res, 200, { ok: true, message: `Now using ${name}`, detail: `It answered in ${(t.ms / 1000).toFixed(1)} s (served by ${t.servedBy}).`, ...modelsState() });
+        } catch (err) {
+          const why = String((err as Error).message).split("\n")[0];
+          return json(res, 422, { error: `${name} didn't work, so nothing changed: ${why}` });
+        }
+      }
+      case "POST /api/models/forget": {
+        const b = await body(req);
+        forgetModel(String(b.spec ?? ""));
+        return json(res, 200, { ok: true, message: "Removed from the list", ...modelsState() });
       }
       case "POST /api/decide": {
         const b = await body(req);

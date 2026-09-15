@@ -11,7 +11,7 @@ import { WRITES } from "../brain/tools.js";
 import { renderRecall, searchConversations, summarizeEnded, summaryText } from "../brain/recall.js";
 import {
   MODEL_INTENTS, NoModelError, PROVIDERS, PROVIDER_ORDER, explainNotReady, formatSpec, parseModelSpec,
-  presets, providerConfigured, readModelSettings, resolveModel, setModel, settingsFile, type ModelIntent,
+  presets, providerConfigured, readModelSettings, resolveModel, rememberModel, setModel, settingsFile, type ModelIntent,
 } from "../brain/llm/registry.js";
 import type { Brief } from "../brain/schema.js";
 import { loadConfig, loadDotenv, type Config } from "../config.js";
@@ -655,6 +655,7 @@ models
     try {
       spec = parseModelSpec(model);
       setModel(formatSpec(spec), intent);
+      rememberModel(formatSpec(spec)); // shows in the menubar's Model menu from now on
     } catch (err) {
       fail((err as Error).message);
     }
