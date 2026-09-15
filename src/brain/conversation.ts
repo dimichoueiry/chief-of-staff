@@ -8,6 +8,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { todayISO } from "../util/dates.js";
 import { cosHome } from "../util/home.js";
 import type { ChatMessage } from "./llm/types.js";
 
@@ -30,6 +31,19 @@ export interface Conversation {
   startedAt: string;
   updatedAt: string;
   turns: Turn[];
+  /** Written once the conversation has ended (see recall.ts). */
+  summary?: ConversationSummary;
+  /** The last failed attempt to summarise, so a broken model isn't retried on every message. */
+  summaryFailedAt?: string;
+}
+
+export interface ConversationSummary {
+  text: string;
+  /** provider:model, or "rules" for conversations too short to need a model. */
+  model: string;
+  at: string;
+  /** True when the conversation was too long and only its later part was summarised. */
+  partial?: boolean;
 }
 
 export function conversationsDir(): string {
@@ -47,22 +61,46 @@ export class Conversations {
     return join(this.dir, `${id}.json`);
   }
 
-  private latest(): Conversation | null {
-    let names: string[];
+  /** File names newest first: ids start with the start time. */
+  private names(): string[] {
     try {
-      names = readdirSync(this.dir).filter((n) => n.endsWith(".json")).sort();
+      return readdirSync(this.dir).filter((n) => n.endsWith(".json")).sort().reverse();
     } catch {
-      return null;
+      return [];
     }
-    // Ids start with the start time, so the last name is the newest conversation.
-    for (const name of names.reverse()) {
-      try {
-        return JSON.parse(readFileSync(join(this.dir, name), "utf8")) as Conversation;
-      } catch {
-        /* a damaged file: try the one before */
-      }
+  }
+
+  private read(name: string): Conversation | null {
+    try {
+      return JSON.parse(readFileSync(join(this.dir, name), "utf8")) as Conversation;
+    } catch {
+      return null; // a damaged file
+    }
+  }
+
+  private latest(): Conversation | null {
+    for (const name of this.names()) {
+      const c = this.read(name);
+      if (c) return c;
     }
     return null;
+  }
+
+  /** Every saved conversation, newest first. Damaged files are skipped and counted. */
+  list(): { conversations: Conversation[]; unreadable: number } {
+    const conversations: Conversation[] = [];
+    let unreadable = 0;
+    for (const name of this.names()) {
+      const c = this.read(name);
+      if (c) conversations.push(c);
+      else unreadable++;
+    }
+    return { conversations, unreadable };
+  }
+
+  /** Save changes to a conversation that was read from the store. */
+  update(c: Conversation): void {
+    this.save(c);
   }
 
   private create(): Conversation {
@@ -103,6 +141,12 @@ export class Conversations {
     this.save(c);
     return c;
   }
+}
+
+/** Local YYYY-MM-DD and HH:MM of an ISO datetime. */
+export function localStamp(iso: string): { date: string; time: string } {
+  const d = new Date(iso);
+  return { date: todayISO(d), time: `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}` };
 }
 
 /** What the page shows: the turns without the tool steps. */
@@ -153,11 +197,17 @@ export function historyMessages(c: Conversation, o: HistoryOptions = {}): ChatMe
   const complete = exchanges.filter((e) => e.at(-1)?.role === "assistant");
   const kept: ChatMessage[][] = [];
   let size = 0;
-  for (const e of complete.reverse()) {
+  for (const e of [...complete].reverse()) {
     const s = JSON.stringify(e).length;
     if (kept.length && (kept.length >= maxExchanges || size + s > maxChars)) break;
     kept.unshift(e);
     size += s;
+  }
+  // Say what was left out, so the model looks it up instead of assuming the conversation began here.
+  const dropped = complete.length - kept.length;
+  if (dropped && kept[0]?.[0].role === "user") {
+    const note = `(${dropped} earlier exchange${dropped === 1 ? " in this conversation is" : "s in this conversation are"} not repeated here; get_conversations can look ${dropped === 1 ? "it" : "them"} up.)`;
+    kept[0][0] = { role: "user", content: `${note}\n\n${kept[0][0].content}` };
   }
   return kept.flat();
 }

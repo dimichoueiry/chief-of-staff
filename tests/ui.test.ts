@@ -268,6 +268,7 @@ describe("ui server (scripted model)", () => {
       today: THU,
       allowSpeech: false,
       llm: { provider, spec: { provider: "openai", model: "gpt-test" } },
+      backgroundSummaries: false,
       openRunner: async () => {},
       slateLoader: async () => ({ boards: [], live: true }),
     });
@@ -332,6 +333,37 @@ describe("ui server (scripted model)", () => {
     expect(replayed[2]).toMatchObject({ role: "tool", results: [{ id: "h1_c1", content: expect.stringContaining("Calendar 2026-09-18") }] });
     const visible = await (await fetch(`${base}/api/conversation`)).json();
     expect(visible.turns.every((t: Record<string, unknown>) => !("steps" in t))).toBe(true);
+  });
+
+  it("puts earlier conversations in memory and lets the model search them", async () => {
+    queue.push(reply({ text: "Go with the pro tier at $29." }));
+    await post({ text: "which pricing tier should fampy launch with?" });
+    await post({}, "/api/conversation/new");
+
+    queue.push(
+      reply({ stop: "tool_use", toolCalls: [{ id: "s1", name: "get_conversations", input: { query: "pricing tier" } }] }),
+      reply({ text: "The pro tier, at $29." }),
+    );
+    const r = await (await post({ text: "what did we decide about pricing?" })).json();
+    expect(r.text).toBe("The pro tier, at $29.");
+    const [first, second] = requests.slice(-2);
+    expect(first.messages).toEqual([{ role: "user", content: "what did we decide about pricing?" }]);
+    expect(first.context).toMatch(/# Earlier conversations \(last 7 days, newest first\)\n.*\n- \d{4}-\d{2}-\d{2} \w{3} \d{2}:\d{2}–\d{2}:\d{2}: They said "which pricing tier should fampy launch with\?"\. Last reply: Go with the pro tier at \$29\./);
+    const found = second.messages.at(-1);
+    expect(found?.role === "tool" && found.results[0].content).toMatch(/^1 exchange matching "pricing tier" in 1 conversation \(searched 1 saved conversation\)\.\n\n.*\nThey said: which pricing tier should fampy launch with\?\nYou replied: Go with the pro tier at \$29\./);
+    expect(r.changes).toBe(0); // the conversation being answered is saved after its reply, so it is not searched yet
+  });
+
+  it("leaves searches that could mean memory to the model, and keeps web searches and plain opens instant", async () => {
+    queue.push(reply({ text: "You picked Tauri." }), reply({ text: "Here's the board." }), reply({ text: "Searching." }));
+    for (const text of ["search our past conversations for the framework", "open the board we talked about yesterday", "look up the pricing decision"]) {
+      expect((await (await post({ text })).json()).model).toBe("openai:gpt-test");
+    }
+    expect(requests).toHaveLength(3);
+    for (const text of ["google tauri menubar", "search the web for tauri", "look up tauri pricing online", "open slate"]) {
+      expect((await (await post({ text })).json())).toMatchObject({ kind: "action", model: "rules" });
+    }
+    expect(requests).toHaveLength(3);
   });
 
   it("keeps a failed reply in the conversation so 'try again' has something to refer to", async () => {

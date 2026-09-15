@@ -5,7 +5,9 @@ import { dirname, relative } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { Command } from "commander";
+import { Conversations, conversationsDir } from "../brain/conversation.js";
 import { runIntent, providerFor, RefusedError } from "../brain/loop.js";
+import { renderRecall, searchConversations, summarizeEnded, summaryText } from "../brain/recall.js";
 import {
   MODEL_INTENTS, NoModelError, PROVIDERS, PROVIDER_ORDER, explainNotReady, formatSpec, parseModelSpec,
   presets, providerConfigured, readModelSettings, resolveModel, setModel, settingsFile, type ModelIntent,
@@ -201,6 +203,12 @@ program
 
 // ---------- model intents ----------
 
+/** What the pill's earlier conversations add to a one-off terminal question. */
+function recallFor(cfg: Config) {
+  const conversations = new Conversations(conversationsDir(), cfg.conversationIdleMinutes);
+  return { recall: renderRecall(conversations, { today: today() }), actions: { conversations } };
+}
+
 async function runAndPrint(intent: ModelIntent, message?: string, project?: string): Promise<void> {
   needModel(intent);
   const cfg = config();
@@ -214,6 +222,7 @@ async function runAndPrint(intent: ModelIntent, message?: string, project?: stri
       project,
       today: today(),
       modelFlag: modelFlag(),
+      ...recallFor(cfg),
       onText: (t) => {
         streamed = true;
         process.stdout.write(t);
@@ -250,6 +259,59 @@ program
   .argument("<sentence...>", "one sentence; it gets filed to the right place")
   .description("file a sentence: project, reminder, note or journal")
   .action((s: string[]) => runAndPrint("capture", s.join(" ")));
+
+// ---------- conversations ----------
+
+const conversationsCmd = program
+  .command("conversations")
+  .description("earlier conversations from the pill, with their summaries")
+  .option("--days <n>", "how many days back", "7")
+  .action((o: { days: string }) => {
+    const cfg = config();
+    const store = new Conversations(conversationsDir(), cfg.conversationIdleMinutes);
+    const days = Math.max(1, Number(o.days) || 7);
+    const since = addDays(today(), -(days - 1));
+    const { conversations, unreadable } = store.list();
+    const active = store.current().id;
+    const shown = conversations.filter((c) => c.turns.some((t) => t.role === "user") && todayISO(new Date(c.updatedAt)) >= since);
+    if (!shown.length) console.log(`No conversations in the last ${days} day${days === 1 ? "" : "s"}.`);
+    for (const c of shown) {
+      const start = new Date(c.startedAt);
+      const label = `${todayISO(start)} ${start.toTimeString().slice(0, 5)}`;
+      const said = c.turns.filter((t) => t.role === "user").length;
+      console.log(`${bold(label)}  ${dim(`${said} message${said === 1 ? "" : "s"}${c.id === active ? " · in progress" : c.summary ? ` · ${c.summary.model}` : " · not summarised yet"}`)}`);
+      console.log(`  ${summaryText(c)}`);
+    }
+    if (unreadable) console.log(dim(`${unreadable} damaged file${unreadable === 1 ? "" : "s"} in ${store.dir} could not be read.`));
+    console.log(dim(`${conversations.length} saved in ${store.dir}`));
+  });
+
+conversationsCmd
+  .command("search")
+  .argument("[words...]", "keywords; leave out to list by date")
+  .option("--from <date>", "first day, YYYY-MM-DD")
+  .option("--to <date>", "last day, YYYY-MM-DD")
+  .option("--limit <n>", "results to show", "8")
+  .description("search every saved conversation")
+  .action((words: string[], o: { from?: string; to?: string; limit: string }) => {
+    for (const d of [o.from, o.to]) if (d && !isISODate(d)) fail(`Dates are YYYY-MM-DD, got "${d}".`);
+    const store = new Conversations(conversationsDir(), config().conversationIdleMinutes);
+    console.log(searchConversations(store, { query: words.join(" ") || undefined, from: o.from, to: o.to, limit: Math.max(1, Number(o.limit) || 8) }));
+  });
+
+conversationsCmd
+  .command("summarize")
+  .description("write summaries for ended conversations now (the app does this after each message)")
+  .option("--limit <n>", "most model calls to make", "10")
+  .action(async (o: { limit: string }) => {
+    const cfg = config();
+    const store = new Conversations(conversationsDir(), cfg.conversationIdleMinutes);
+    let llm = null;
+    if (modelReady("ask")) llm = providerFor("ask", modelFlag());
+    else console.log(dim("No model: only short conversations are summarised (from their own words)."));
+    const r = await summarizeEnded(store, llm, { limit: Math.max(1, Number(o.limit) || 10) });
+    console.log(`${r.summarized} summarised${r.failed ? `, ${r.failed} failed (retried in 6 hours)` : ""}${r.waiting ? `, ${r.waiting} still waiting` : ""}.`);
+  });
 
 // ---------- wrap ----------
 
@@ -861,7 +923,7 @@ program
     const cfg = config();
     await syncTouches(cfg);
     try {
-      const r = await runIntent({ config: cfg, intent: "ask", message: question, today: today(), modelFlag: modelFlag() });
+      const r = await runIntent({ config: cfg, intent: "ask", message: question, today: today(), modelFlag: modelFlag(), ...recallFor(cfg) });
       console.log(`${bold("Chief of staff:")} ${r.text}`);
       await speakAndReport(r.text);
     } catch (err) {

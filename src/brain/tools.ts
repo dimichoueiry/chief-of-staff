@@ -9,6 +9,8 @@ import { basename, join } from "node:path";
 import { promisify } from "node:util";
 import type { Config } from "../config.js";
 import type { ToolSpec } from "./llm/types.js";
+import { Conversations } from "./conversation.js";
+import { searchConversations } from "./recall.js";
 import type { Intent } from "../core/context.js";
 import { Journal } from "../core/journal.js";
 import { Ledger, PROJECT_STATUSES, findProject, type Project, type ProjectPatch } from "../core/ledger.js";
@@ -131,6 +133,21 @@ export const TOOLS: Record<string, ToolSpec> = {
       required: ["name", "target"],
     },
   },
+  get_conversations: {
+    name: "get_conversations",
+    description:
+      "Search every earlier conversation with the user by keywords and/or dates. Use it when they refer to something discussed before " +
+      "that isn't in this conversation or in the earlier-conversation summaries in memory (\"what did we decide yesterday\", \"that framework we talked about\"). " +
+      "Without keywords, lists the conversations in the date range with their summaries.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: s('Keywords, e.g. "pricing tier" or "tauri"'),
+        from: s("First day, YYYY-MM-DD (optional)"),
+        to: s("Last day, YYYY-MM-DD, inclusive (optional)"),
+      },
+    },
+  },
   get_git_log: {
     name: "get_git_log",
     description: "Recent commits for a project's folder (by its path field or a folder named like the project).",
@@ -152,8 +169,8 @@ export function toolsFor(intent: Intent): ToolSpec[] {
     "silence-check": [],
     ask: ALL,
     capture: [...WRITES, "get_project", "get_calendar"],
-    focus: ["get_project", "upsert_project", "get_git_log", "get_calendar", "open"],
-    wrap: ["get_project", "append_journal", "touch_project", "upsert_project", "get_git_log"],
+    focus: ["get_project", "upsert_project", "get_git_log", "get_calendar", "open", "get_conversations"],
+    wrap: ["get_project", "append_journal", "touch_project", "upsert_project", "get_git_log", "get_conversations"],
   };
   return names[intent].map((n) => TOOLS[n]);
 }
@@ -184,7 +201,11 @@ export class ToolRuntime {
     readonly config: Config,
     readonly today: string = todayISO(),
     readonly calendarProvider?: CalendarProvider,
-    readonly actions: { run?: Runner; slate?: () => Promise<{ boards: SlateBoard[]; live: boolean; reason?: string }> } = {},
+    readonly actions: {
+      run?: Runner;
+      slate?: () => Promise<{ boards: SlateBoard[]; live: boolean; reason?: string }>;
+      conversations?: Conversations;
+    } = {},
   ) {
     this.shortcuts = new Shortcuts(config.selfhubDir);
     this.ledger = new Ledger(config.selfhubDir);
@@ -320,6 +341,17 @@ export class ToolRuntime {
         }
         const { created } = await this.shortcuts.set(name, target);
         return `${created ? "Saved" : "Updated"} shortcut "${name}" → ${target}`;
+      }
+      case "get_conversations": {
+        const from = this.str(input, "from");
+        const to = this.str(input, "to");
+        for (const [k, v] of [["from", from], ["to", to]]) if (v && !isISODate(v)) throw new Error(`"${k}" must be YYYY-MM-DD, got "${v}"`);
+        if (from && to && to < from) throw new Error(`"to" (${to}) is before "from" (${from})`);
+        return searchConversations(this.actions.conversations ?? new Conversations(), {
+          query: this.str(input, "query") || undefined,
+          from: from || undefined,
+          to: to || undefined,
+        });
       }
       case "get_git_log": {
         const projectName = this.str(input, "project", true);

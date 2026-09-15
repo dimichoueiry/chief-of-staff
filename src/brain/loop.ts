@@ -36,6 +36,8 @@ export interface RunOptions {
   onTool?: (name: string, input: Record<string, unknown>) => void;
   /** Earlier messages in this conversation, oldest first (see conversation.ts). */
   history?: ChatMessage[];
+  /** Summaries of earlier conversations, added to memory (see recall.ts). */
+  recall?: string;
   effort?: Effort;
   maxTurns?: number;
   context?: ContextBundle;
@@ -90,7 +92,8 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
   const maxTurns = opts.maxTurns ?? 12;
 
   const instructions = `${PERSONA}\n\n# Task\n${await loadPrompt(intent)}`;
-  const memory = `# Memory\n${renderContext(context)}`;
+  const recall = intent === "brief" ? "" : (opts.recall ?? "");
+  const memory = `# Memory\n${renderContext(context)}${recall ? `\n\n${recall}` : ""}`;
   const userMessage = (opts.message ?? "").trim() || DEFAULT_MESSAGES[intent];
   if (!userMessage) throw new Error(`Intent "${intent}" needs a message.`);
   const history = intent === "brief" ? [] : (opts.history ?? []);

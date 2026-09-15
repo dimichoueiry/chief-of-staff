@@ -96,7 +96,28 @@ filed, and what it opened (even the instant "open …" requests that never touch
 - Conversations are saved in `~/.cos/conversations`, so restarting the app doesn't lose the thread.
   Only the most recent exchanges that fit a size budget are sent to the model.
 
-Anything worth keeping beyond the conversation still goes into selfhub (ledger, reminders, notes) through the tools.
+### And earlier conversations
+
+When a conversation ends, the model writes a few lines about it: what you talked about, what was
+decided, what it filed or opened, and what was left open. Short conversations are kept in their own
+words instead, with no model call. Every new message carries the summaries from the last 7 days,
+so "what did we decide about pricing yesterday?" just works.
+
+For anything a summary leaves out, or anything older, the model searches every saved conversation
+by keywords and dates (`get_conversations`), and quotes what was actually said. When there is more
+than fits, it is told how much it isn't seeing, never a silent cut.
+
+```bash
+cos conversations                     # the last 7 days, with summaries
+cos conversations search tauri        # every saved conversation, any date
+cos conversations search --from 2026-09-01 --to 2026-09-07
+cos conversations summarize           # summarise ended conversations now (the app does it after each message)
+```
+
+"Search …" or "look up …" without "the web", "Google" or "online", and anything that refers back
+("the board we talked about yesterday"), goes to the model, which can search memory or the web.
+
+Anything worth keeping for good still goes into selfhub (ledger, reminders, notes) through the tools.
 
 `cos menubar open` relaunches it; `cos menubar uninstall` removes the app and the login item.
 Logs live in `~/.cos/logs`.
@@ -232,4 +253,5 @@ examples/     a sample selfhub for demos and tests
 | Voice: `say` for speech, whisper.cpp for listening, typed fallback | done; `cos say brief`, `cos talk` |
 | Native menubar shell: floating pill, double-tap Control, ⌥Space, native on-device listening | done; `cos menubar install` |
 | Conversation memory in the pill: follow-ups, saved threads, live progress, formatted replies | done, tested (scripted model and headless browser) |
+| Memory across conversations: summaries of the last 7 days in every request, search over all past conversations, `cos conversations` | done, tested; verified live on OpenRouter |
 | Wake word, phone notifications, autonomy epic | not yet |

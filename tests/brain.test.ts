@@ -101,7 +101,8 @@ describe("ToolRuntime", () => {
   it("gives the brief no tools and each intent only its own", () => {
     expect(toolsFor("brief")).toEqual([]);
     expect(toolsFor("capture").map((t) => t.name)).not.toContain("get_git_log");
-    expect(toolsFor("focus").map((t) => t.name)).toEqual(["get_project", "upsert_project", "get_git_log", "get_calendar", "open"]);
+    expect(toolsFor("focus").map((t) => t.name)).toEqual(["get_project", "upsert_project", "get_git_log", "get_calendar", "open", "get_conversations"]);
+    expect(toolsFor("ask").map((t) => t.name)).toContain("get_conversations");
     expect(toolsFor("capture").map((t) => t.name)).toContain("add_shortcut");
     expect(toolsFor("ask").map((t) => t.name)).toContain("get_calendar");
     expect(toolsFor("ask")[0].parameters).toMatchObject({ type: "object" });
@@ -166,8 +167,13 @@ describe("runIntent (scripted provider)", () => {
     ]);
 
     const brief = scripted([reply({ text: "{}" })]);
-    await runIntent({ config: cfg(), intent: "brief", today: TODAY, calendarProvider: noneProvider, llm: brief.llm, history });
+    await runIntent({ config: cfg(), intent: "brief", today: TODAY, calendarProvider: noneProvider, llm: brief.llm, history, recall: "# Earlier conversations\n- x" });
     expect(brief.requests[0].messages).toHaveLength(1); // the morning brief never carries a chat
+    expect(brief.requests[0].context).not.toContain("Earlier conversations");
+
+    const withRecall = scripted([reply({ text: "Yes." })]);
+    await runIntent({ config: cfg(), intent: "ask", message: "did we pick a tier?", today: TODAY, calendarProvider: noneProvider, llm: withRecall.llm, recall: "# Earlier conversations (last 7 days, newest first)\n- picked the pro tier" });
+    expect(withRecall.requests[0].context).toMatch(/# Memory[\s\S]*# Earlier conversations \(last 7 days, newest first\)\n- picked the pro tier$/);
   });
 
   it("asks for a JSON brief with no tools and normalises a prose-wrapped answer", async () => {

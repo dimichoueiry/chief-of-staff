@@ -13,7 +13,8 @@ import {
 import { Conversations, conversationsDir, historyMessages, visibleTurns, type Conversation } from "../brain/conversation.js";
 import type { LLMProvider, ChatMessage } from "../brain/llm/types.js";
 import type { ModelSpec } from "../brain/llm/registry.js";
-import { runIntent } from "../brain/loop.js";
+import { providerFor, runIntent } from "../brain/loop.js";
+import { renderRecall, summarizeEnded } from "../brain/recall.js";
 import type { Brief } from "../brain/schema.js";
 import type { Config } from "../config.js";
 import { buildContext } from "../core/context.js";
@@ -61,6 +62,8 @@ export interface UiOptions {
   llm?: { provider: LLMProvider; spec: ModelSpec };
   /** Where conversations are kept (tests). */
   conversations?: Conversations;
+  /** Summarise ended conversations in the background after each message (default true). */
+  backgroundSummaries?: boolean;
 }
 
 /** What the pill says while a tool runs. */
@@ -91,6 +94,14 @@ interface PillReply {
 
 /** "open slate", "pull up my gmail", "launch cursor", "search for …": handled without a model. */
 const OPEN_SHAPE = /^(?:(?:please\s+)?(?:open|launch|pull up|bring up|go to|show me)\s+.+|(?:search(?: the web| google)?(?: for)?|google|look up)\s+.+)$/i;
+
+/**
+ * With a model available, the instant rules step aside when a request could mean memory rather than the web:
+ * "search for …" / "look up …" without saying web or Google, and anything that refers back to what was said.
+ */
+const PLAIN_SEARCH = /^(?:please\s+)?(?:search|look up)\b/i;
+const WEB_SEARCH = /^(?:please\s+)?(?:google\b|search (?:the web|google|online)\b)|\b(?:on|in) (?:google|the web)\s*[.?!]?$|\bonline\s*[.?!]?$/i;
+const REFERS_BACK = /\b(?:we|our|us|i said|i told you|you said|talked|discussed|decided|mentioned|conversations?|remember|earlier|yesterday|last (?:time|week))\b/i;
 
 const confirmView = (p: PendingOpen) => ({ id: p.id, label: p.action.label, url: p.action.kind === "url" ? p.action.url : null });
 
@@ -169,6 +180,24 @@ export function createUiServer(o: UiOptions): Server {
   const openRunner = o.openRunner ?? macOpen;
   const boards = o.slateLoader ?? (() => slateBoards());
   let pillQueue: Promise<unknown> = Promise.resolve();
+  let summarizing = false;
+
+  /** Write summaries for conversations that just ended, without holding up the reply. */
+  function summarizeSoon(): void {
+    if (o.backgroundSummaries === false || summarizing) return;
+    summarizing = true;
+    let llm: { provider: LLMProvider; spec: ModelSpec } | null = null;
+    try {
+      llm = o.llm ?? (ready("ask") ? providerFor("ask", o.modelFlag) : null);
+    } catch {
+      /* no model: short conversations are still recorded from their own words */
+    }
+    summarizeEnded(conversations, llm)
+      .catch((err) => console.error(`conversation summaries: ${(err as Error).message}`))
+      .finally(() => {
+        summarizing = false;
+      });
+  }
 
   /** One message in the pill: remembered with its reply, and answered with the conversation so far. */
   async function pill(b: Record<string, unknown>, emit: Emit): Promise<{ status: number; body: Record<string, unknown> }> {
@@ -198,6 +227,7 @@ export function createUiServer(o: UiOptions): Server {
       { role: "user", text: said },
       { role: "assistant", text: reply.text, model: reply.model, kind: reply.kind, steps: reply.steps?.length ? reply.steps : undefined },
     );
+    summarizeSoon();
     const { steps: _steps, ...shown } = reply;
     return { status: 200, body: { ...shown, conversation: convo.id, user: said } };
   }
@@ -207,7 +237,8 @@ export function createUiServer(o: UiOptions): Server {
       runIntent({
         config, intent, project, message: text, today: today(), modelFlag: o.modelFlag, llm: o.llm,
         history: historyMessages(convo),
-        actions: { run: openRunner, slate: boards },
+        recall: renderRecall(conversations, { today: today(), excludeId: convo.id }),
+        actions: { run: openRunner, slate: boards, conversations },
         onTool: (name) => emit({ type: "status", text: DOING[name] ?? "Updating your memory…" }),
         onText: (delta) => emit({ type: "text", delta }),
       });
@@ -226,7 +257,8 @@ export function createUiServer(o: UiOptions): Server {
       };
     }
 
-    if (mode !== "capture" && OPEN_SHAPE.test(text)) {
+    const forModel = ready("ask") && ((PLAIN_SEARCH.test(text) && !WEB_SEARCH.test(text)) || REFERS_BACK.test(text));
+    if (mode !== "capture" && OPEN_SHAPE.test(text) && !forModel) {
       const opened = await openOrQueue(
         {
           target: text.replace(/^please\s+/i, "").replace(/^(?:pull up|bring up|show me)\s+/i, "open "),
@@ -332,6 +364,7 @@ export function createUiServer(o: UiOptions): Server {
       }
       case "POST /api/conversation/new": {
         const c = conversations.startNew();
+        summarizeSoon();
         return json(res, 200, { id: c.id, turns: visibleTurns(c) });
       }
       case "POST /api/actions/confirm": {

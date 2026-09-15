@@ -102,9 +102,15 @@ describe("history sent to the model", () => {
     const turns: Conversation["turns"] = [];
     for (let i = 1; i <= 6; i++) turns.push({ role: "user", text: `question ${i}`, at }, { role: "assistant", text: "a".repeat(200), at });
     const bySize = historyMessages(convo(turns), { maxChars: 900 }); // each exchange is about 290 characters
-    expect(bySize.filter((m) => m.role === "user").map((m) => m.role === "user" && m.content)).toEqual(["question 4", "question 5", "question 6"]);
+    expect(bySize.filter((m) => m.role === "user").map((m) => m.role === "user" && m.content)).toEqual([
+      "(3 earlier exchanges in this conversation are not repeated here; get_conversations can look them up.)\n\nquestion 4",
+      "question 5",
+      "question 6",
+    ]);
     const byCount = historyMessages(convo(turns), { maxExchanges: 2 });
     expect(byCount).toHaveLength(4);
+    expect(byCount[0].role === "user" && byCount[0].content).toMatch(/^\(4 earlier exchanges/);
+    expect(historyMessages(convo(turns)).every((m) => m.role !== "user" || !m.content.startsWith("("))).toBe(true); // nothing left out, no note
     // A single exchange bigger than the budget is still kept: the last thing said matters most.
     expect(historyMessages(convo(turns.slice(0, 2)), { maxChars: 10 })).toHaveLength(2);
   });
