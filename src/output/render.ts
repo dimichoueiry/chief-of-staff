@@ -1,6 +1,18 @@
 /** One brief, rendered for whatever surface is asking. Mirrors the UI design: greeting, focus, schedule, decisions, reminders, nudges. */
 import type { Brief } from "../brain/schema.js";
-import { longDate } from "../util/dates.js";
+import { longDate, parseISO } from "../util/dates.js";
+
+/** "Thu Sep 17" */
+function shortDay(dateISO: string): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(dateISO)
+    ? parseISO(dateISO).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })
+    : dateISO;
+}
+
+/** "Thursday" */
+function weekday(dateISO: string): string {
+  return /^\d{4}-\d{2}-\d{2}$/.test(dateISO) ? parseISO(dateISO).toLocaleDateString("en-US", { weekday: "long" }) : dateISO;
+}
 
 export type Target = "terminal" | "markdown" | "speech" | "notification";
 
@@ -36,6 +48,11 @@ export function renderBriefTerminal(b: Brief): string {
     if (s.free) out.push(`  ${amber("▌")}${s.start}–${s.end}  ${amber("Free block")}${s.plan ? dim(`  → ${s.plan}`) : ""}`);
     else out.push(`  ${dim("│")}${s.start}–${s.end}  ${s.title}`);
   }
+  if (b.upcoming.length) {
+    out.push("");
+    out.push(amber("COMING UP"));
+    for (const u of b.upcoming) out.push(`  ${dim(shortDay(u.date).padEnd(12))}${u.time.padEnd(9)}${u.title}`);
+  }
   if (b.decisions.length) {
     out.push("");
     out.push(coral("NEEDS A DECISION"));
@@ -69,6 +86,10 @@ export function renderBriefMarkdown(b: Brief): string {
   out.push("", "### Schedule");
   if (!b.schedule.length) out.push("_Nothing on the calendar._");
   for (const s of b.schedule) out.push(s.free ? `- **${s.start}–${s.end} Free block**${s.plan ? ` → ${s.plan}` : ""}` : `- ${s.start}–${s.end} ${s.title}`);
+  if (b.upcoming.length) {
+    out.push("", "### Coming up");
+    for (const u of b.upcoming) out.push(`- ${shortDay(u.date)} · ${u.time} · ${u.title}`);
+  }
   if (b.decisions.length) {
     out.push("", "### Needs a decision");
     for (const d of b.decisions) out.push(`- **${d.question}**${d.reason ? ` — ${d.reason}` : ""} (${d.options.join(" / ")})`);
@@ -121,6 +142,10 @@ export function renderBriefSpeech(b: Brief): string {
   const events = b.schedule.filter((x) => !x.free);
   if (events.length) s.push(sentence(`On the calendar: ${events.map((e) => `${e.title} at ${spokenTime(e.start)}`).join(", ")}`));
   else s.push("Your calendar is clear.");
+  if (b.upcoming.length) {
+    const said = b.upcoming.slice(0, 3).map((u) => `${u.title} ${weekday(u.date)}${u.time && u.time !== "all day" ? ` at ${spokenTime(u.time)}` : ""}`);
+    s.push(sentence(`Coming up: ${said.join(", ")}`));
+  }
   if (b.decisions.length) {
     s.push(b.decisions.length === 1 ? "One decision." : `${COUNTS[b.decisions.length] ?? b.decisions.length} decisions.`);
     s.push(...b.decisions.map((d) => sentence(d.question)));

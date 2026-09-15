@@ -22,8 +22,9 @@ import { decide, isChoice } from "../logic/decide.js";
 import { scribe } from "../logic/scribe.js";
 import { loadLastBrief, saveBrief } from "../output/notify.js";
 import { renderBriefSpeech } from "../output/render.js";
+import { eventsInRange } from "../sensors/calendar.js";
 import { applyActivity, scanActivity } from "../sensors/git.js";
-import { todayISO } from "../util/dates.js";
+import { addDays, todayISO } from "../util/dates.js";
 import { reloadHomeEnv } from "../util/env.js";
 import { speak, stopSpeaking } from "../voice/tts.js";
 
@@ -139,6 +140,12 @@ export function createUiServer(o: UiOptions): Server {
             .filter((p) => ["active", "parked"].includes(normalizeStatus(p.status)))
             .map((p) => ({ name: p.name, status: normalizeStatus(p.status), next: p.next ?? "", idle: daysIdle(p, today()), cadence: p.cadence ?? "" })),
         );
+      }
+      case "GET /api/calendar": {
+        const from = url.searchParams.get("from") ?? today();
+        const to = url.searchParams.get("to") ?? addDays(from, 6);
+        const r = await eventsInRange(from, to);
+        return json(res, r.error ? 422 : 200, { from, to, provider: r.provider, error: r.error ?? null, events: r.events });
       }
       case "GET /api/models":
         return json(res, 200, modelsState());

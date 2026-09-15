@@ -47,6 +47,7 @@ cos focus drawcal            # top 3 highest-leverage moves for one project
 cos capture "starting a project: fampy academy course"
 cos wrap                     # end-of-day two-line journal
 cos silence-check            # projects untouched 14+ days: keep / park / kill
+cos calendar --days 14       # your calendar as the assistant sees it
 cos ui                       # the pill + brief in a local window
 cos say brief                # read the brief aloud
 ```
@@ -185,7 +186,7 @@ examples/     a sample selfhub for demos and tests
 |---|---|
 | Memory contract: ledger, journal, reminders, notes, git-commit-on-write | done, tested |
 | Context assembler with cadence / silence / parked-review flags | done, tested |
-| Sensors: calendar via EventKit or icalBuddy, git activity → last touched | done, tested (EventKit needs one-time Calendar permission) |
+| Sensors: calendar via EventKit or icalBuddy for any date range (today plus the next 7 days in memory, any other range on request), git activity → last touched | done, tested (EventKit needs one-time Calendar permission) |
 | Brief: rule-based (offline) and model (structured output, lenient fallback) | done, tested; model path needs any provider key |
 | Brain: one tool-use loop, prompt templates, write tools | done, tested with a scripted provider |
 | Model-agnostic: Anthropic, OpenAI, OpenRouter, OpenAI-compatible; per-intent choice, `cos models`, menubar Model menu | done, adapters tested against recorded shapes; no live call made yet |

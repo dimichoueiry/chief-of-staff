@@ -14,8 +14,9 @@ import { Journal } from "../core/journal.js";
 import { Ledger, PROJECT_STATUSES, findProject, type Project, type ProjectPatch } from "../core/ledger.js";
 import { Notes } from "../core/notes.js";
 import { Reminders } from "../core/reminders.js";
+import { eventsInRange, formatAgenda, type CalendarProvider } from "../sensors/calendar.js";
 import { scanActivity } from "../sensors/git.js";
-import { addDays, isISODate, todayISO } from "../util/dates.js";
+import { addDays, daysBetween, isISODate, todayISO } from "../util/dates.js";
 
 const exec = promisify(execFile);
 
@@ -92,6 +93,17 @@ export const TOOLS: Record<string, ToolSpec> = {
       required: ["text"],
     },
   },
+  get_calendar: {
+    name: "get_calendar",
+    description:
+      "Read the user's calendar (read-only) for any date range: further ahead than the days already in memory, past events, or to find free time. " +
+      "Dates are YYYY-MM-DD, to is inclusive, at most 92 days per call.",
+    parameters: {
+      type: "object",
+      properties: { from: s("First day, YYYY-MM-DD"), to: s("Last day, YYYY-MM-DD (inclusive); defaults to from") },
+      required: ["from"],
+    },
+  },
   get_git_log: {
     name: "get_git_log",
     description: "Recent commits for a project's folder (by its path field or a folder named like the project).",
@@ -112,8 +124,8 @@ export function toolsFor(intent: Intent): ToolSpec[] {
     brief: [],
     "silence-check": [],
     ask: ALL,
-    capture: [...WRITES, "get_project"],
-    focus: ["get_project", "upsert_project", "get_git_log"],
+    capture: [...WRITES, "get_project", "get_calendar"],
+    focus: ["get_project", "upsert_project", "get_git_log", "get_calendar"],
     wrap: ["get_project", "append_journal", "touch_project", "upsert_project", "get_git_log"],
   };
   return names[intent].map((n) => TOOLS[n]);
@@ -141,6 +153,7 @@ export class ToolRuntime {
   constructor(
     readonly config: Config,
     readonly today: string = todayISO(),
+    readonly calendarProvider?: CalendarProvider,
   ) {
     this.ledger = new Ledger(config.selfhubDir);
     this.journal = new Journal(config.selfhubDir);
@@ -238,6 +251,15 @@ export class ToolRuntime {
         const date = this.date(input, "date", this.today);
         await this.journal.append(date, text);
         return `Journal ${date} updated.`;
+      }
+      case "get_calendar": {
+        const from = this.date(input, "from");
+        const to = this.date(input, "to", from);
+        if (to < from) throw new Error(`"to" (${to}) is before "from" (${from})`);
+        if (daysBetween(from, to) >= 92) throw new Error("at most 92 days per call; split the range into smaller pieces");
+        const r = await eventsInRange(from, to, this.calendarProvider);
+        if (r.error) throw new Error(`calendar unavailable: ${r.error}`);
+        return `Calendar ${from} to ${to} (source: ${r.provider})\n${formatAgenda(r.events, from, to)}`;
       }
       case "get_git_log": {
         const projectName = this.str(input, "project", true);

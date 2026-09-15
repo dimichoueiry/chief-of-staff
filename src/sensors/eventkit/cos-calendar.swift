@@ -1,6 +1,9 @@
-// Prints today's calendar events as JSON, read through EventKit so every
-// account added to macOS Calendar (Google, iCloud, Exchange) comes back from
-// one source. Usage: cos-calendar [YYYY-MM-DD]
+// Prints calendar events as JSON, read through EventKit so every account added
+// to macOS Calendar (Google, iCloud, Exchange) comes back from one source.
+//
+// Usage: cos-calendar [FROM] [TO]     dates as YYYY-MM-DD, TO inclusive
+//   no arguments   today
+//   FROM only      that one day
 import EventKit
 import Foundation
 
@@ -18,22 +21,47 @@ guard granted else {
   exit(2)
 }
 
-var day = Date()
-if CommandLine.arguments.count > 1 {
-  let f = DateFormatter()
-  f.dateFormat = "yyyy-MM-dd"
-  f.timeZone = TimeZone.current
-  if let d = f.date(from: CommandLine.arguments[1]) { day = d }
-}
-let cal = Calendar.current
-let start = cal.startOfDay(for: day)
-let end = cal.date(byAdding: .day, value: 1, to: start)!
-let events = store.events(matching: store.predicateForEvents(withStart: start, end: end, calendars: nil))
+let parser = DateFormatter()
+parser.dateFormat = "yyyy-MM-dd"
+parser.timeZone = TimeZone.current
+parser.locale = Locale(identifier: "en_US_POSIX")
 
+func day(_ index: Int) -> Date? {
+  guard CommandLine.arguments.count > index else { return nil }
+  guard let d = parser.date(from: CommandLine.arguments[index]) else {
+    FileHandle.standardError.write("bad date \(CommandLine.arguments[index]); use YYYY-MM-DD\n".data(using: .utf8)!)
+    exit(64)
+  }
+  return d
+}
+
+let cal = Calendar.current
+let from = cal.startOfDay(for: day(1) ?? Date())
+let lastDay = cal.startOfDay(for: day(2) ?? from)
+guard lastDay >= from else {
+  FileHandle.standardError.write("TO is before FROM\n".data(using: .utf8)!)
+  exit(64)
+}
+let end = cal.date(byAdding: .day, value: 1, to: lastDay)!
+
+// EventKit only searches up to four years per predicate; walk the range in yearly windows.
+var events: [EKEvent] = []
+var windowStart = from
+while windowStart < end {
+  let windowEnd = min(cal.date(byAdding: .year, value: 1, to: windowStart)!, end)
+  events += store.events(matching: store.predicateForEvents(withStart: windowStart, end: windowEnd, calendars: nil))
+  windowStart = windowEnd
+}
+
+var seen = Set<String>()
 let iso = ISO8601DateFormatter()
 iso.formatOptions = [.withInternetDateTime]
 var out: [[String: Any]] = []
 for e in events.sorted(by: { $0.startDate < $1.startDate }) {
+  // An event that spans a window boundary is returned twice.
+  let key = "\(e.calendarItemIdentifier)|\(e.startDate.timeIntervalSince1970)"
+  if seen.contains(key) { continue }
+  seen.insert(key)
   out.append([
     "title": e.title ?? "",
     "start": iso.string(from: e.startDate),

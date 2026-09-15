@@ -8,6 +8,7 @@ Rules for the fields:
 - schedule: today's calendar events in order, plus the free blocks between them (title "Free block", free true) with plan set to the focus item you placed there, or "".
 - decisions: one entry per project flagged SILENT or parked-for-review. question names the project and the days idle and asks keep / park / kill (parked: keep / kill). reason is the project's why.
 - reminders: every due and upcoming reminder in the context, overdue true when its date is today or earlier.
+- upcoming: up to 8 notable events from "Calendar, coming days", in date order: date YYYY-MM-DD, time HH:MM or "all day", title. Skip routine repeats (daily standups) unless they matter; keep anything that affects the week's plan.
 - nudges: one sentence per project flagged DUE TODAY, in the voice of a chief of staff: "It's Thursday. You said Thursdays are for MLGuerrilla. 15 days idle. Next: record the intro video."
 
 A cadence due today outranks everything except a deadline that is today or passed. Do not put more than one multi-day item in focus.

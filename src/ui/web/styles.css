@@ -71,6 +71,10 @@ body {
 .schedule li.free .plan { color: var(--accent); }
 .schedule .time { font-variant-numeric: tabular-nums; }
 
+.upcoming { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.upcoming li { display: grid; grid-template-columns: 96px 64px 1fr; gap: 8px; padding: 5px 10px; font-size: 13.5px; color: #c3c8d2; border-left: 3px solid #3a404c; }
+.upcoming .day { color: var(--muted); }
+.upcoming .time { color: var(--muted); font-variant-numeric: tabular-nums; }
 .decisions { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .decisions li { background: #211c1b; border: 1px solid #3a2e29; border-radius: 12px; padding: 12px 14px; display: grid; gap: 6px; }
 .decisions .q { font-weight: 600; }

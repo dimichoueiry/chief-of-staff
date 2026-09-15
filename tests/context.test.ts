@@ -32,6 +32,8 @@ describe("buildContext on the sample selfhub", () => {
     expect(text).toContain("## Fampy Nails academy — parked");
     expect(text).toContain("# Focus project\ndrawcal");
     expect(text).toContain("No events. The day is free.");
+    expect(text).toContain("# Calendar, coming days (2026-09-18 to 2026-09-23)");
+    expect(text).toContain("use the get_calendar tool");
     expect(text).toContain("# 2026-09-13");
   });
 });

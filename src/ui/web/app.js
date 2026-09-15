@@ -73,6 +73,17 @@ function renderBrief(data) {
     );
   }
 
+  const upcoming = $("upcoming");
+  upcoming.replaceChildren();
+  const coming = brief.upcoming || [];
+  $("upcoming-wrap").hidden = !coming.length;
+  for (const u of coming) {
+    const day = /^\d{4}-\d{2}-\d{2}$/.test(u.date)
+      ? new Date(`${u.date}T12:00:00`).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })
+      : u.date;
+    upcoming.append(el("li", {}, el("span", { class: "day" }, day), el("span", { class: "time" }, u.time), el("span", {}, u.title)));
+  }
+
   const decisions = $("decisions");
   decisions.replaceChildren();
   $("decisions-wrap").hidden = !brief.decisions.length;

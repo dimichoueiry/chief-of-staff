@@ -74,7 +74,7 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
   const context =
     opts.context ??
     (await buildContext({ config, intent, project: opts.project, today: opts.today, calendarProvider: opts.calendarProvider }));
-  const runtime = new ToolRuntime(config, context.today);
+  const runtime = new ToolRuntime(config, context.today, opts.calendarProvider);
   const tools = toolsFor(intent);
   const maxTurns = opts.maxTurns ?? 12;
 

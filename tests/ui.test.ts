@@ -154,6 +154,14 @@ describe("ui server (offline)", () => {
     expect(stop).toEqual({ ok: true, stopped: false });
   });
 
+  it("reads a calendar range and reports bad ranges", async () => {
+    const week = await (await fetch(`${base}/api/calendar?from=2026-09-17&to=2026-09-23`)).json();
+    expect(week).toMatchObject({ from: "2026-09-17", to: "2026-09-23", provider: "none", error: null, events: [] });
+    const defaulted = await (await fetch(`${base}/api/calendar`)).json();
+    expect(defaulted).toMatchObject({ from: THU, to: "2026-09-23" });
+    expect((await fetch(`${base}/api/calendar?from=2026-09-23&to=2026-09-17`)).status).toBe(422);
+  });
+
   it("lists presets and providers, and saves a model choice the next request picks up", async () => {
     const before = await (await fetch(`${base}/api/models`)).json();
     expect(before.default).toBeNull();

@@ -10,9 +10,11 @@ const THU = "2026-09-17";
 const withEvents: CalendarProvider = {
   name: "fixture",
   available: async () => true,
-  eventsOn: async () => [
+  eventsBetween: async () => [
     { title: "Standup", start: `${THU}T10:00:00`, end: `${THU}T10:30:00`, allDay: false },
     { title: "Lunch w/ Marwan", start: `${THU}T13:00:00`, end: `${THU}T14:00:00`, allDay: false },
+    { title: "Dentist", start: "2026-09-18T09:30:00", end: "2026-09-18T10:30:00", allDay: false },
+    { title: "Conference", start: "2026-09-21T00:00:00", end: "2026-09-22T00:00:00", allDay: true },
   ],
 };
 
@@ -57,6 +59,12 @@ describe("rule-based brief", () => {
     ]);
     // Leftover gaps stay visible as free.
     expect(brief.schedule.filter((s) => s.free && !s.plan).map((s) => `${s.start}–${s.end}`)).toEqual(["11:30–13:00", "17:00–18:00"]);
+    // Other days never leak into today's schedule; they show up as coming up.
+    expect(brief.schedule.map((s) => s.title)).not.toContain("Dentist");
+    expect(brief.upcoming).toEqual([
+      { date: "2026-09-18", time: "09:30", title: "Dentist" },
+      { date: "2026-09-21", time: "all day", title: "Conference" },
+    ]);
     expect(brief.reminders).toEqual([
       { date: "2026-09-19", text: "email the UIUC advisor about the spring course", overdue: false },
     ]);

@@ -8,6 +8,8 @@ import { normalizeStatus, type Project } from "../core/ledger.js";
 import { daysBetween, longDate } from "../util/dates.js";
 import { daysIdle, describeCadence } from "./cadence.js";
 import { buildSchedule, freeBlocks, planDay } from "./dayplan.js";
+import { eventDays, hhmm } from "../sensors/calendar.js";
+import { addDays } from "../util/dates.js";
 
 export function greetingFor(name: string, now: Date = new Date()): string {
   const h = now.getHours();
@@ -123,6 +125,12 @@ export function buildBrief(ctx: ContextBundle, now: Date = new Date()): Brief {
   for (const pl of placements) pl.item.when = `${pl.block.start}–${pl.block.end}`;
   const schedule = buildSchedule(ctx.calendar, placements);
   const decisions = buildDecisions(ctx);
+  const tomorrow = addDays(ctx.today, 1);
+  const upcoming = ctx.upcoming
+    .map((e) => ({ date: eventDays(e, tomorrow, ctx.upcomingThrough)[0], time: e.allDay ? "all day" : hhmm(e.start), title: e.title }))
+    .filter((u) => u.date)
+    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
+    .slice(0, 8);
   const reminders = [
     ...ctx.remindersDue.map((r) => ({ date: r.date, text: r.text, overdue: true })),
     ...ctx.remindersUpcoming.map((r) => ({ date: r.date, text: r.text, overdue: false })),
@@ -143,6 +151,7 @@ export function buildBrief(ctx: ContextBundle, now: Date = new Date()): Brief {
     schedule,
     decisions,
     reminders,
+    upcoming,
     nudges: buildNudges(ctx),
   };
 }

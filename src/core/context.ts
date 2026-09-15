@@ -1,14 +1,14 @@
 /**
  * Assemble the exact slice of memory a request needs: identity, the ledger,
- * recent journal, today's calendar, reminders and notes, plus computed flags
+ * recent journal, the calendar for today and the coming days, reminders and notes, plus computed flags
  * (cadence due, silent, parked-for-review). One bundle, prompt-ready.
  */
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 import type { Config } from "../config.js";
 import { cadenceDueToday, daysIdle, describeCadence, isSilent, parkedDueForReview } from "../logic/cadence.js";
-import { formatEvent, todayEvents, type CalendarEvent, type CalendarProvider } from "../sensors/calendar.js";
-import { longDate, todayISO, weekdayName } from "../util/dates.js";
+import { eventDays, eventsInRange, formatAgenda, formatEvent, type CalendarEvent, type CalendarProvider } from "../sensors/calendar.js";
+import { addDays, longDate, todayISO, weekdayName } from "../util/dates.js";
 import { Journal, type JournalEntry } from "./journal.js";
 import { Ledger, findProject, normalizeStatus, type Project } from "./ledger.js";
 import { Notes, type Note } from "./notes.js";
@@ -24,7 +24,11 @@ export interface ContextBundle {
   identity: string;
   projects: Project[];
   journal: JournalEntry[];
+  /** Events touching today. */
   calendar: CalendarEvent[];
+  /** Events on the days after today, through upcomingThrough. */
+  upcoming: CalendarEvent[];
+  upcomingThrough: string;
   calendarProvider: string;
   calendarError?: string;
   remindersDue: Reminder[];
@@ -80,7 +84,7 @@ export async function buildContext(opts: ContextOptions): Promise<ContextBundle>
     readIdentity(dir),
     new Ledger(dir).read(),
     new Journal(dir).entries(config.journalDays, today),
-    todayEvents(today, opts.calendarProvider),
+    eventsInRange(today, addDays(today, config.calendarDays - 1), opts.calendarProvider),
     new Reminders(dir).due(today),
     new Reminders(dir).upcoming(7, today),
     new Notes(dir).recent(config.journalDays, today),
@@ -93,7 +97,9 @@ export async function buildContext(opts: ContextOptions): Promise<ContextBundle>
     identity,
     projects,
     journal,
-    calendar: cal.events,
+    calendar: cal.events.filter((e) => eventDays(e, today, today).length > 0),
+    upcoming: cal.events.filter((e) => eventDays(e, addDays(today, 1), addDays(today, config.calendarDays - 1)).length > 0),
+    upcomingThrough: addDays(today, config.calendarDays - 1),
     calendarProvider: cal.provider,
     calendarError: cal.error,
     remindersDue,
@@ -156,6 +162,15 @@ export function renderContext(ctx: ContextBundle): string {
   else if (!ctx.calendar.length) cal += "No events. The day is free.";
   else cal += ctx.calendar.map(formatEvent).join("\n");
   out.push(cal);
+
+  if (!ctx.calendarError && ctx.upcomingThrough > ctx.today) {
+    const tomorrow = addDays(ctx.today, 1);
+    out.push(
+      `# Calendar, coming days (${tomorrow} to ${ctx.upcomingThrough})\n` +
+        (ctx.upcoming.length ? formatAgenda(ctx.upcoming, tomorrow, ctx.upcomingThrough) : "No events.") +
+        "\nFor dates outside this window, use the get_calendar tool when you have it.",
+    );
+  }
 
   const rem: string[] = [];
   if (ctx.remindersDue.length) rem.push("Due now:\n" + ctx.remindersDue.map((r) => `- ${r.date} · ${r.text}`).join("\n"));

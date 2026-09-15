@@ -26,14 +26,14 @@ import { notify, saveBrief } from "../output/notify.js";
 import { bold, dim, renderBrief, renderBriefNotification, renderBriefSpeech, type Target } from "../output/render.js";
 import { join, resolve } from "node:path";
 import * as launchd from "../scheduler/launchd.js";
-import { formatEvent, todayEvents } from "../sensors/calendar.js";
+import { eventsInRange, formatAgenda } from "../sensors/calendar.js";
 import { pickStt } from "../voice/stt.js";
 import {
   DEFAULT_VOICE, OPENAI_VOICES, activeTts, isKnownVoice, readVoiceSettings, saveVoiceSettings, speak, voiceSettingsFile,
   type TtsProvider,
 } from "../voice/tts.js";
 import { applyActivity, scanActivity } from "../sensors/git.js";
-import { isISODate, todayISO } from "../util/dates.js";
+import { addDays, isISODate, todayISO } from "../util/dates.js";
 import { homeEnvFile, parseEnv, syncProjectEnv } from "../util/env.js";
 import { deployRuntime } from "./deploy.js";
 import { buildMenubar, installLoginItem, openMenubar, restartMenubar, uninstallMenubar } from "./menubar.js";
@@ -384,12 +384,16 @@ program
 
 program
   .command("calendar")
-  .description("today's events as the sensor sees them")
-  .action(async () => {
-    const r = await todayEvents(today());
-    console.log(`source: ${r.provider}${r.error ? `  (error: ${r.error})` : ""}`);
-    if (!r.events.length) console.log("no events");
-    for (const e of r.events) console.log(formatEvent(e));
+  .description("your calendar as the assistant sees it")
+  .option("--days <n>", "how many days starting today", "7")
+  .option("--from <date>", "first day, YYYY-MM-DD")
+  .option("--to <date>", "last day, YYYY-MM-DD (inclusive)")
+  .action(async (o: { days: string; from?: string; to?: string }) => {
+    const from = o.from ?? today();
+    const to = o.to ?? addDays(from, Math.max(1, Number(o.days) || 7) - 1);
+    const r = await eventsInRange(from, to);
+    console.log(dim(`${from} to ${to} · source: ${r.provider}${r.error ? ` · error: ${r.error}` : ""}`));
+    if (!r.error) console.log(formatAgenda(r.events, from, to));
   });
 
 program

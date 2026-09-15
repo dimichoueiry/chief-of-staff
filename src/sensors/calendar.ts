@@ -1,9 +1,10 @@
 /**
  * Read-only calendar sensor. We never build a calendar; we read the one macOS
- * already aggregates. Providers, tried in order unless COS_CALENDAR pins one:
+ * already aggregates, for any date range. Providers, tried in order unless
+ * COS_CALENDAR pins one:
  *   - icalbuddy  (if the `icalBuddy` CLI is installed)
  *   - eventkit   (a tiny Swift helper compiled on first use with swiftc)
- *   - none       (all day free)
+ *   - none       (no events)
  */
 import { execFile } from "node:child_process";
 import { access, mkdir, stat } from "node:fs/promises";
@@ -11,7 +12,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { todayISO } from "../util/dates.js";
+import { addDays, daysBetween, isISODate, parseISO, todayISO } from "../util/dates.js";
 
 const exec = promisify(execFile);
 
@@ -28,8 +29,12 @@ export interface CalendarEvent {
 export interface CalendarProvider {
   name: string;
   available(): Promise<boolean>;
-  eventsOn(dateISO: string): Promise<CalendarEvent[]>;
+  /** Events overlapping FROM..TO, both YYYY-MM-DD and inclusive. */
+  eventsBetween(fromISO: string, toISO: string): Promise<CalendarEvent[]>;
 }
+
+/** Longest range one lookup may cover. */
+export const MAX_RANGE_DAYS = 366;
 
 // ---------- icalBuddy ----------
 
@@ -39,24 +44,19 @@ const ICALBUDDY_ARGS = [
   "-ps", "| · |", "-df", "%Y-%m-%d", "-tf", "%H:%M", "-b", "",
 ];
 
-/** Parse lines like `2026-09-14 at 10:00 - 10:30 · Standup` or `2026-09-14 · Holiday`. */
-export function parseIcalBuddy(output: string, dateISO: string): CalendarEvent[] {
+/** Parse lines like `2026-09-14 at 10:00 - 10:30 · Standup` or `2026-09-14 · Holiday`, keeping those inside FROM..TO. */
+export function parseIcalBuddy(output: string, fromISO: string, toISO: string = fromISO): CalendarEvent[] {
   const events: CalendarEvent[] = [];
   const re = /^(\d{4}-\d{2}-\d{2})(?:\s+at\s+(\d{2}:\d{2}))?(?:\s*-\s*(?:(\d{4}-\d{2}-\d{2})\s+at\s+)?(\d{2}:\d{2}))?\s*·\s*(.+?)\s*$/;
-    for (const raw of output.split(/\r?\n/)) {
+  for (const raw of output.split(/\r?\n/)) {
     const m = re.exec(raw.trim());
     if (!m) continue;
     const [, date, startT, endDate, endT, title] = m;
-    if (date !== dateISO) continue;
+    if (date < fromISO || date > toISO) continue;
     if (!startT) {
       events.push({ title, start: `${date}T00:00:00`, end: `${date}T23:59:59`, allDay: true });
     } else {
-      events.push({
-        title,
-        start: `${date}T${startT}:00`,
-        end: `${endDate ?? date}T${endT ?? startT}:00`,
-        allDay: false,
-      });
+      events.push({ title, start: `${date}T${startT}:00`, end: `${endDate ?? date}T${endT ?? startT}:00`, allDay: false });
     }
   }
   return events;
@@ -72,9 +72,9 @@ export const icalBuddyProvider: CalendarProvider = {
       return false;
     }
   },
-  async eventsOn(dateISO) {
-    const { stdout } = await exec("icalBuddy", [...ICALBUDDY_ARGS, `eventsFrom:${dateISO}`, `to:${dateISO}`]);
-    return parseIcalBuddy(stdout, dateISO);
+  async eventsBetween(fromISO, toISO) {
+    const { stdout } = await exec("icalBuddy", [...ICALBUDDY_ARGS, `eventsFrom:${fromISO}`, `to:${toISO}`], { maxBuffer: 16 * 1024 * 1024 });
+    return parseIcalBuddy(stdout, fromISO, toISO);
   },
 };
 
@@ -96,10 +96,7 @@ async function exists(p: string): Promise<boolean> {
 
 /** Compile the Swift helper if it is missing or older than its source. */
 export async function ensureEventKitHelper(bin: string = HELPER_BIN): Promise<string> {
-  const [srcStat, binStat] = await Promise.all([
-    stat(HELPER_SRC),
-    stat(bin).catch(() => null),
-  ]);
+  const [srcStat, binStat] = await Promise.all([stat(HELPER_SRC), stat(bin).catch(() => null)]);
   if (binStat && binStat.mtimeMs >= srcStat.mtimeMs) return bin;
   await mkdir(dirname(bin), { recursive: true });
   await exec("swiftc", [
@@ -133,9 +130,9 @@ export const eventKitProvider: CalendarProvider = {
       return false;
     }
   },
-  async eventsOn(dateISO) {
+  async eventsBetween(fromISO, toISO) {
     const bin = await ensureEventKitHelper();
-    const { stdout } = await exec(bin, [dateISO], { timeout: 20_000 });
+    const { stdout } = await exec(bin, [fromISO, toISO], { timeout: 30_000, maxBuffer: 32 * 1024 * 1024 });
     return parseEventKit(stdout);
   },
 };
@@ -143,7 +140,7 @@ export const eventKitProvider: CalendarProvider = {
 export const noneProvider: CalendarProvider = {
   name: "none",
   available: async () => true,
-  eventsOn: async () => [],
+  eventsBetween: async () => [],
 };
 
 // ---------- selection ----------
@@ -167,14 +164,22 @@ export async function pickProvider(
   return noneProvider;
 }
 
-/** Today's events through the best available provider. Never throws: a broken provider means "no events". */
-export async function todayEvents(
-  dateISO: string = todayISO(),
-  provider?: CalendarProvider,
-): Promise<{ events: CalendarEvent[]; provider: string; error?: string }> {
+export interface CalendarRead {
+  events: CalendarEvent[];
+  provider: string;
+  error?: string;
+}
+
+/** Events between two dates (inclusive) through the best available provider. Never throws: a broken provider means "no events" plus an error. */
+export async function eventsInRange(fromISO: string, toISO: string, provider?: CalendarProvider): Promise<CalendarRead> {
+  if (!isISODate(fromISO) || !isISODate(toISO)) return { events: [], provider: provider?.name ?? "none", error: "dates must be YYYY-MM-DD" };
+  if (toISO < fromISO) return { events: [], provider: provider?.name ?? "none", error: "the end date is before the start date" };
+  if (daysBetween(fromISO, toISO) >= MAX_RANGE_DAYS) {
+    return { events: [], provider: provider?.name ?? "none", error: `ranges are limited to ${MAX_RANGE_DAYS} days` };
+  }
   const p = provider ?? (await pickProvider());
   try {
-    const events = await p.eventsOn(dateISO);
+    const events = await p.eventsBetween(fromISO, toISO);
     events.sort((a, b) => a.start.localeCompare(b.start));
     return { events, provider: p.name };
   } catch (err) {
@@ -182,10 +187,63 @@ export async function todayEvents(
   }
 }
 
+/** One day's events. */
+export function todayEvents(dateISO: string = todayISO(), provider?: CalendarProvider): Promise<CalendarRead> {
+  return eventsInRange(dateISO, dateISO, provider);
+}
+
+// ---------- formatting ----------
+
+/** Local calendar date (YYYY-MM-DD) an event starts on. Datetimes without an offset are already local. */
+export function eventDate(e: CalendarEvent): string {
+  return todayISO(new Date(e.start));
+}
+
+/** Local date of an event's last moment (ends are exclusive: an all-day event ending at midnight belongs to the day before). */
+function lastDate(e: CalendarEvent): string {
+  const start = new Date(e.start).getTime();
+  const end = new Date(e.end).getTime();
+  return todayISO(new Date(Math.max(start, end - 1)));
+}
+
+/** Days an event touches inside FROM..TO (multi-day events appear on each day); empty when it lies outside. */
+export function eventDays(e: CalendarEvent, fromISO: string, toISO: string): string[] {
+  const start = eventDate(e);
+  const end = lastDate(e);
+  if (end < fromISO || start > toISO) return [];
+  const first = start < fromISO ? fromISO : start;
+  const last = end > toISO ? toISO : end;
+  const days: string[] = [];
+  for (let d = first; d <= last; d = addDays(d, 1)) days.push(d);
+  return days;
+}
+
+/** "Thu Sep 17" */
+export function dayLabel(dateISO: string): string {
+  return parseISO(dateISO).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+}
+
 /** "10:00–10:30  Standup" style line for a prompt or the terminal. */
 export function formatEvent(e: CalendarEvent): string {
-  if (e.allDay) return `all day      ${e.title}`;
-  return `${hhmm(e.start)}–${hhmm(e.end)}  ${e.title}`;
+  const where = e.location ? `  (${e.location})` : "";
+  if (e.allDay) return `all day      ${e.title}${where}`;
+  return `${hhmm(e.start)}–${hhmm(e.end)}  ${e.title}${where}`;
+}
+
+/** Events grouped under day headings, for prompts, tools and the terminal. */
+export function formatAgenda(events: CalendarEvent[], fromISO: string, toISO: string): string {
+  const byDay = new Map<string, CalendarEvent[]>();
+  for (const e of events) {
+    for (const d of eventDays(e, fromISO, toISO)) {
+      if (!byDay.has(d)) byDay.set(d, []);
+      byDay.get(d)!.push(e);
+    }
+  }
+  if (!byDay.size) return "No events.";
+  return [...byDay.keys()]
+    .sort()
+    .map((d) => `${dayLabel(d)} (${d})\n${byDay.get(d)!.map((e) => `- ${formatEvent(e)}`).join("\n")}`)
+    .join("\n");
 }
 
 export function hhmm(iso: string): string {

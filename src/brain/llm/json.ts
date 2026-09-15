@@ -49,6 +49,7 @@ export function normalizeBrief(raw: unknown, fallback: Pick<Brief, "greeting" | 
       }))
       .filter((d) => d.question),
     reminders: arr(o.reminders).map((r) => ({ date: str(r.date), text: str(r.text), overdue: r.overdue === true })).filter((r) => r.text),
+    upcoming: arr(o.upcoming).map((u) => ({ date: str(u.date), time: str(u.time), title: str(u.title) })).filter((u) => u.title).slice(0, 8),
     nudges: Array.isArray(o.nudges) ? o.nudges.filter((n): n is string => typeof n === "string" && Boolean(n.trim())) : [],
   };
 }

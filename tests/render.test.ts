@@ -36,6 +36,10 @@ const brief: Brief = {
     },
   ],
   reminders: [{ date: "2026-09-19", text: "email the advisor", overdue: false }],
+  upcoming: [
+    { date: "2026-09-18", time: "09:30", title: "Dentist" },
+    { date: "2026-09-21", time: "all day", title: "Conference" },
+  ],
   nudges: ["It's Thursday. You said Thursdays are for MLGuerrilla."],
 };
 
@@ -49,6 +53,8 @@ describe("render", () => {
     expect(out).toContain("▌10:30–13:30  Free block  → Record the intro video");
     expect(out).toContain('cos decide "nuonc_rag" keep|park|kill');
     expect(out).toContain("· 2026-09-19  email the advisor");
+    expect(out).toContain("COMING UP");
+    expect(out).toContain("Fri, Sep 18 09:30    Dentist");
   });
 
   it("markdown: headings and numbered focus", () => {
@@ -58,6 +64,7 @@ describe("render", () => {
       "1. **Record the intro video** — MLGuerrilla · you said Thursdays · idle 15 days _(half day, 10:30–13:30)_",
     );
     expect(md).toContain("- **10:30–13:30 Free block** → Record the intro video");
+    expect(md).toContain("### Coming up\n- Fri, Sep 18 · 09:30 · Dentist\n- Mon, Sep 21 · all day · Conference");
   });
 
   it("speech: natural sentences, spoken times, single terminal periods", () => {
@@ -71,6 +78,7 @@ describe("render", () => {
     expect(s).not.toContain("..");
     expect(s).toContain("On the calendar: Standup at 10 a.m.");
     expect(s).toContain("One decision. nuonc_rag untouched 24 days — keep, park, or kill?");
+    expect(s).toContain("Coming up: Dentist Friday at 9:30 a.m., Conference Monday.");
   });
 
   it("notification: title and a one-line body", () => {

@@ -32,6 +32,12 @@ export interface BriefReminder {
   overdue: boolean;
 }
 
+export interface UpcomingItem {
+  date: string; // YYYY-MM-DD
+  time: string; // HH:MM or "all day"
+  title: string;
+}
+
 export interface Brief {
   greeting: string;
   date: string;
@@ -40,6 +46,8 @@ export interface Brief {
   schedule: ScheduleItem[];
   decisions: Decision[];
   reminders: BriefReminder[];
+  /** Notable events in the coming days. */
+  upcoming: UpcomingItem[];
   nudges: string[];
 }
 
@@ -49,7 +57,7 @@ const bool = { type: "boolean" } as const;
 export const BRIEF_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["greeting", "date", "headline", "focus", "schedule", "decisions", "reminders", "nudges"],
+  required: ["greeting", "date", "headline", "focus", "schedule", "decisions", "reminders", "upcoming", "nudges"],
   properties: {
     greeting: str,
     date: str,
@@ -89,6 +97,16 @@ export const BRIEF_SCHEMA = {
         additionalProperties: false,
         required: ["date", "text", "overdue"],
         properties: { date: str, text: str, overdue: bool },
+      },
+    },
+    upcoming: {
+      type: "array",
+      maxItems: 8,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["date", "time", "title"],
+        properties: { date: str, time: str, title: str },
       },
     },
     nudges: { type: "array", items: str },

@@ -75,10 +75,34 @@ describe("ToolRuntime", () => {
     expect((await rt.execute("get_git_log", { project: "unknown" })).result).toContain("No folder found");
   });
 
+  it("reads any calendar range through get_calendar and rejects bad ranges", async () => {
+    const asked: string[] = [];
+    const provider = {
+      name: "fixture",
+      available: async () => true,
+      eventsBetween: async (from: string, to: string) => {
+        asked.push(`${from}..${to}`);
+        return [{ title: "Board meeting", start: "2026-10-05T14:00:00", end: "2026-10-05T15:00:00", allDay: false }];
+      },
+    };
+    const rt = new ToolRuntime(loadConfig({ COS_SELFHUB: dir, COS_PROJECT_ROOTS: "/nonexistent" }), TODAY, provider);
+    const r = await rt.execute("get_calendar", { from: "2026-10-01", to: "2026-10-31" });
+    expect(r.isError).toBe(false);
+    expect(r.result).toContain("Calendar 2026-10-01 to 2026-10-31 (source: fixture)");
+    expect(r.result).toContain("Mon, Oct 5 (2026-10-05)\n- 14:00–15:00  Board meeting");
+    expect(asked).toEqual(["2026-10-01..2026-10-31"]);
+    expect((await rt.execute("get_calendar", { from: "2026-10-05" })).result).toContain("Board meeting");
+    expect(asked.at(-1)).toBe("2026-10-05..2026-10-05");
+    expect((await rt.execute("get_calendar", { from: "2026-10-31", to: "2026-10-01" })).isError).toBe(true);
+    expect((await rt.execute("get_calendar", { from: "2026-01-01", to: "2026-12-31" })).result).toMatch(/at most 92 days/);
+    expect((await rt.execute("get_calendar", { from: "next friday" })).isError).toBe(true);
+  });
+
   it("gives the brief no tools and each intent only its own", () => {
     expect(toolsFor("brief")).toEqual([]);
     expect(toolsFor("capture").map((t) => t.name)).not.toContain("get_git_log");
-    expect(toolsFor("focus").map((t) => t.name)).toEqual(["get_project", "upsert_project", "get_git_log"]);
+    expect(toolsFor("focus").map((t) => t.name)).toEqual(["get_project", "upsert_project", "get_git_log", "get_calendar"]);
+    expect(toolsFor("ask").map((t) => t.name)).toContain("get_calendar");
     expect(toolsFor("ask")[0].parameters).toMatchObject({ type: "object" });
   });
 });

@@ -14,6 +14,8 @@ export interface Config {
   silenceDays: number;
   /** Journal days loaded into context. */
   journalDays: number;
+  /** Calendar days loaded into context, starting today. */
+  calendarDays: number;
 }
 
 function expandHome(p: string): string {
@@ -48,5 +50,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     name: env.COS_NAME || "",
     silenceDays: Number(env.COS_SILENCE_DAYS) || 14,
     journalDays: Number(env.COS_JOURNAL_DAYS) || 7,
+    calendarDays: Math.min(31, Math.max(1, Number(env.COS_CALENDAR_DAYS) || 7)),
   };
 }
