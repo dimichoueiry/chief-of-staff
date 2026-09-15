@@ -32,8 +32,8 @@ import * as launchd from "../scheduler/launchd.js";
 import { eventsInRange, formatAgenda } from "../sensors/calendar.js";
 import { pickStt } from "../voice/stt.js";
 import {
-  DEFAULT_VOICE, LISTEN_PAUSE, OPENAI_VOICES, activeTts, isKnownVoice, readVoiceSettings, saveVoiceSettings, speak, voiceSettingsFile,
-  type TtsProvider,
+  CUE_MODES, DEFAULT_VOICE, LISTEN_PAUSE, OPENAI_VOICES, activeTts, isKnownVoice, readVoiceSettings, saveVoiceSettings, speak, voiceSettingsFile,
+  type CueMode, type TtsProvider,
 } from "../voice/tts.js";
 import { activityRoots, applyActivity, scanActivity } from "../sensors/git.js";
 import { addDays, isISODate, todayISO } from "../util/dates.js";
@@ -945,6 +945,7 @@ const voiceCmd = program
     console.log(`  provider  ${s.provider}${s.provider === "auto" ? dim("  (OpenAI when a key is set, otherwise the Mac voice)") : ""}`);
     console.log(`  speed     ${s.speed}`);
     console.log(`  pause     ${s.listenPause}s of quiet ends what you say ${dim("(cos voice pause <seconds>)")}`);
+    console.log(`  cues      ${s.cues} ${dim("(cos voice cues both|turn|off)")}`);
     console.log(`  style     ${dim(s.instructions)}`);
     console.log("");
     console.log(`${bold("Voices")}  ${OPENAI_VOICES.map((v) => (v === s.voice ? `[${v}]` : v)).join("  ")}`);
@@ -1004,6 +1005,17 @@ voiceCmd
   });
 
 voiceCmd
+  .command("cues")
+  .argument("<mode>", "both | turn | off")
+  .description("chimes in a conversation: a quiet one as a reply starts and one when it's your turn (both), only the second (turn), or none")
+  .action((mode: string) => {
+    if (!(CUE_MODES as readonly string[]).includes(mode)) fail(`cues must be ${CUE_MODES.join(", ")}`);
+    saveVoiceSettings({ cues: mode as CueMode });
+    const heard = { both: "a quiet cue as a reply starts, and a chime when it's your turn", turn: "a chime when it's your turn", off: "no chimes" }[mode as CueMode];
+    console.log(`Cues → ${mode}: ${heard}. Hear them: cos voice test`);
+  });
+
+voiceCmd
   .command("test")
   .argument("[text...]", "what to say")
   .option("--voice <voice>", "try a voice without saving it")
@@ -1013,8 +1025,9 @@ voiceCmd
     const settings = { ...readVoiceSettings(), ...(o.voice ? { voice: o.voice } : {}) };
     const text = words.join(" ").trim() || `Good morning${loadConfig().name ? `, ${loadConfig().name}` : ""}. Three things today. First, record the intro video. Second, reply to the design review before lunch. Third, park anything you haven't touched in two weeks.`;
     console.log(dim(`Speaking with ${activeTts(settings) === "openai" ? `OpenAI voice ${settings.voice}` : "the Mac voice"}…`));
-    const r = await speak(text, { settings, onFallback: (why) => console.error(dim(`OpenAI voice failed (${why}); used the Mac voice.`)) });
-    if (!r.fellBack) console.log(dim("Done."));
+    // Played as in a conversation, with the cues you have set.
+    const r = await speak(text, { settings, cues: { start: true, turn: true }, onFallback: (why) => console.error(dim(`OpenAI voice failed (${why}); used the Mac voice.`)) });
+    if (!r.fellBack) console.log(dim(r.cued.length ? `Done (with the ${r.cued.join(" and ")} cue${r.cued.length > 1 ? "s" : ""}).` : "Done."));
   });
 
 voiceCmd

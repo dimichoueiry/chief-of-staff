@@ -45,7 +45,7 @@ import type { Shell } from "../actions/terminal.js";
 import { findFolders, formatFolderSearch } from "../actions/folders.js";
 import { Shortcuts } from "../actions/shortcuts.js";
 import { slateBoards, type SlateBoard } from "../actions/slate.js";
-import { speak, stopSpeaking } from "../voice/tts.js";
+import { speak, stopSpeaking, type SpeakOptions, type SpeakResult } from "../voice/tts.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const WEB_DIR = join(here, "web");
@@ -67,6 +67,8 @@ export interface UiOptions {
   offline?: boolean;
   /** Set to false in tests so nothing is spoken. */
   allowSpeech?: boolean;
+  /** Speak through this instead of the speakers (tests). */
+  speaker?: (text: string, o: SpeakOptions) => Promise<SpeakResult>;
   /** Replace `open` and the Slate board list (tests). */
   openRunner?: Runner;
   slateLoader?: () => Promise<{ boards: SlateBoard[]; live: boolean; reason?: string }>;
@@ -652,9 +654,12 @@ export function createUiServer(o: UiOptions): Server {
         const b = await body(req);
         const text = String(b.text ?? "").trim();
         if (!text) return json(res, 400, { error: "empty" });
-        if (o.allowSpeech === false) return json(res, 200, { ok: true, muted: true });
-        const spoken = await speak(markdownToSpeech(text));
-        return json(res, 200, { ok: true, engine: spoken.engine, fellBack: spoken.fellBack ?? null, stopped: spoken.stopped });
+        const speaker = o.speaker ?? (o.allowSpeech === false ? null : speak);
+        if (!speaker) return json(res, 200, { ok: true, muted: true });
+        // Cues are for voice conversations: the pill asks for them, read-aloud buttons don't.
+        const asked = (b.cues ?? {}) as { start?: unknown; turn?: unknown };
+        const spoken = await speaker(markdownToSpeech(text), { cues: { start: asked.start === true, turn: asked.turn === true } });
+        return json(res, 200, { ok: true, engine: spoken.engine, fellBack: spoken.fellBack ?? null, stopped: spoken.stopped, cued: spoken.cued });
       }
       case "POST /api/speak/stop":
         return json(res, 200, { ok: true, stopped: stopSpeaking() });

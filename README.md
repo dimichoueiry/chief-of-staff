@@ -72,8 +72,9 @@ npm run cos -- menubar install   # builds ~/Applications/Chief of Staff.app, ope
   level decides, not the recogniser, so thinking pauses mid-sentence don't cut you off. It waits 1.5 s longer
   when you trail off ("and…", "so um"), and a talk can run two minutes. Double-tap again to send right away.
   `cos voice pause 3.5` changes the pause (1 to 10 seconds).
-- **Hands-free follow-ups.** After a spoken reply the mic opens again on its own ("Your turn…"), so you
-  can just keep talking. It closes after 8 quiet seconds, on Esc, or when you say "thanks" or "that's all"
+- **Hands-free follow-ups.** After a spoken reply a soft two-note chime plays and the mic opens again on
+  its own ("Your turn…"), so you can just keep talking. The chime comes after the last word has played, never
+  over it, and a quieter single note marks the start of a spoken reply. It closes after 8 quiet seconds, on Esc, or when you say "thanks" or "that's all"
   (which also hides the pill). Double-tapping Control while it talks cuts it off and listens. Replies to
   typed questions, and "open …" requests, don't reopen the mic.
 - **⌥Space** anywhere: the pill appears for typing.
@@ -179,6 +180,7 @@ cos voice use cedar               # keep it
 cos voice style "upbeat and brisk, like a coach"
 cos voice speed 1.1
 cos voice provider say            # force the Mac voice (auto | openai | say)
+cos voice cues turn               # chimes: both (start + your turn), turn, or off
 ```
 
 Settings are saved in `~/.cos/voice.json` and apply to the next thing it says, including in the menubar app.

@@ -257,6 +257,33 @@ describe("ui server (offline)", () => {
     expect((await post({ id: "nope", title: "x" }, "/api/conversation/rename")).status).toBe(404);
   });
 
+  it("passes the pill's cue requests to the voice and reports which cues played", async () => {
+    const heard: unknown[] = [];
+    const server = createUiServer({
+      config: loadConfig({ COS_SELFHUB: dir, COS_PROJECT_ROOTS: "/nonexistent" }), today: THU, offline: true,
+      speaker: async (text, o) => {
+        heard.push([text, o.cues]);
+        const cued = (["start", "turn"] as const).filter((c) => o.cues?.[c]);
+        return { engine: "say", pieces: 1, stopped: false, cued };
+      },
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const speakIt = async (b: unknown) => (await fetch(`${url}/api/speak`, { method: "POST", body: JSON.stringify(b) })).json();
+    try {
+      expect(await speakIt({ text: "**Done.** Next?", cues: { start: true, turn: true } })).toMatchObject({ ok: true, stopped: false, cued: ["start", "turn"] });
+      expect(await speakIt({ text: "Read aloud." })).toMatchObject({ cued: [] });
+      expect(await speakIt({ text: "Odd.", cues: { start: "yes", turn: 1 } })).toMatchObject({ cued: [] });
+      expect(heard).toEqual([
+        ["Done. Next?", { start: true, turn: true }],
+        ["Read aloud.", { start: false, turn: false }],
+        ["Odd.", { start: false, turn: false }],
+      ]);
+    } finally {
+      server.close();
+    }
+  });
+
   it("lets the menubar use any model: tries it first, keeps it in the list, changes nothing when it fails", async () => {
     const tried: string[] = [];
     const server = createUiServer({

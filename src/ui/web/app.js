@@ -144,20 +144,24 @@ function markStale() {
   if (offline && root.dataset.view !== "pill") loadBrief(true);
 }
 
-/** Speak, and resolve true only if it played to the end (not stopped, dismissed or talked over). */
-async function speakText(text) {
-  if (!text) return false;
+/**
+ * Speak, and resolve { cued } only if it played to the end (not stopped, dismissed or talked over), else null.
+ * In a conversation, cues.start asks for a quiet cue as the voice begins and cues.turn for a chime after
+ * the last word. The server plays them in line with the voice, so this resolves after the chime has ended.
+ */
+async function speakText(text, cues = {}) {
+  if (!text) return null;
   setState("speaking", "Reading it to you…");
-  let finished = false;
+  let spoken = null;
   try {
-    const r = await post("/api/speak", { text });
-    finished = !r.stopped && !r.error && pill.dataset.state === "speaking";
+    const r = await post("/api/speak", { text, cues });
+    if (!r.stopped && !r.error && pill.dataset.state === "speaking") spoken = { cued: r.cued || [] };
   } catch {
     /* no voice this time */
   } finally {
     if (pill.dataset.state === "speaking") setState("idle");
   }
-  return finished;
+  return spoken;
 }
 
 // ---------- hands-free follow-ups ----------
@@ -170,14 +174,16 @@ const DONE_TALKING = new RegExp(String.raw`^(?:(?:ok(?:ay)?|great|perfect|cool|g
 let followUp = false;
 let followUpTimer = null;
 
-function listenForReply() {
+/** spoken: what speakText returned. After the turn chime the voice is long over, so the mic opens almost at once. */
+function listenForReply(spoken) {
   followUp = true;
-  // A short gap so the mic doesn't catch the end of the voice; Esc or typing in the gap wins.
+  // A short gap so the mic doesn't catch the end of the voice or chime; Esc or typing in the gap wins.
+  const gap = spoken && spoken.cued.includes("turn") ? 120 : 300;
   followUpTimer = setTimeout(() => {
     if (!followUp || pill.dataset.state !== "idle" || input.value) return endFollowUp();
     if (SHELL) toShell({ type: "listen" });
     else browserListen();
-  }, 300);
+  }, gap);
 }
 
 function endFollowUp() {
@@ -612,9 +618,12 @@ async function send(body, thinking, fromVoice = false) {
   refreshTitleSoon();
   busy = false;
   setState("idle");
-  // Spoken questions get spoken replies, then the mic reopens for the answer.
-  // Typed ones stay quiet unless you press read aloud. Opening something ends the exchange.
-  if (fromVoice && r.text && (await speakText(r.text)) && !["action", "confirm"].includes(r.kind)) listenForReply();
+  // Spoken questions get spoken replies, then a chime and the mic reopens for the answer.
+  // Typed ones stay quiet unless you press read aloud. Opening something ends the exchange, so no chime.
+  if (!fromVoice || !r.text) return;
+  const expectsReply = !["action", "confirm"].includes(r.kind);
+  const spoken = await speakText(r.text, { start: true, turn: expectsReply });
+  if (spoken && expectsReply) listenForReply(spoken);
 }
 
 async function submit(text, fromVoice = false) {
@@ -633,7 +642,8 @@ async function submit(text, fromVoice = false) {
     input.value = "";
     await newConversation();
     flash("New chat");
-    if (fromVoice && (await speakText("New chat."))) listenForReply();
+    const spoken = fromVoice && (await speakText("New chat.", { turn: true }));
+    if (spoken) listenForReply(spoken);
     return;
   }
   if (LIST_CHATS.test(t)) {
@@ -648,7 +658,8 @@ async function submit(text, fromVoice = false) {
     if (r) {
       input.value = "";
       flash(`Back in “${r.title || "that chat"}”`);
-      if (fromVoice && (await speakText(`Back in ${r.title || "that chat"}.`))) listenForReply();
+      const spoken = fromVoice && (await speakText(`Back in ${r.title || "that chat"}.`, { turn: true }));
+      if (spoken) listenForReply(spoken);
       return;
     }
     // No chat matches: it may mean something else ("open the Slack chat"), so ask as usual.

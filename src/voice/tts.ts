@@ -9,6 +9,10 @@
  * at a time and played in order, so speech starts after the first piece instead
  * of after the whole answer. stopSpeaking() silences playback and cancels
  * pending synthesis immediately.
+ *
+ * In a voice conversation the voice can be wrapped in cues (see cues.ts): a quiet
+ * one as it starts and a chime after the last word, before the mic opens. Cues play
+ * through the same playback, so they never overlap the voice and stop with it.
  */
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -17,11 +21,15 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import OpenAI from "openai";
 import { cosHome } from "../util/home.js";
+import { cueFile, cueSeconds, type CueName } from "./cues.js";
 
 // ---------- settings ----------
 
 export const OPENAI_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse", "marin", "cedar"] as const;
 export type TtsProvider = "auto" | "openai" | "say";
+/** both: a quiet cue as a reply starts and a chime when it's your turn; turn: only the chime; off: none. */
+export type CueMode = "both" | "turn" | "off";
+export const CUE_MODES: readonly CueMode[] = ["both", "turn", "off"];
 
 export interface VoiceSettings {
   provider: TtsProvider;
@@ -36,6 +44,8 @@ export interface VoiceSettings {
   sayVoice: string;
   /** Seconds of quiet that end what you're saying in the menubar app (1 to 10). */
   listenPause: number;
+  /** Chimes around the voice in a conversation. */
+  cues: CueMode;
 }
 
 export const LISTEN_PAUSE = { min: 1, max: 10 } as const;
@@ -50,6 +60,7 @@ export const DEFAULT_VOICE: VoiceSettings = {
   speed: 1,
   sayVoice: "",
   listenPause: 2.5,
+  cues: "both",
 };
 
 export function voiceSettingsFile(): string {
@@ -73,6 +84,7 @@ export function readVoiceSettings(env: NodeJS.ProcessEnv = process.env, file: st
   if (env.COS_VOICE) fromEnv.sayVoice = env.COS_VOICE;
   const merged = { ...DEFAULT_VOICE, ...fromEnv, ...saved };
   if (!["auto", "openai", "say"].includes(merged.provider)) merged.provider = "auto";
+  if (!CUE_MODES.includes(merged.cues)) merged.cues = DEFAULT_VOICE.cues;
   merged.speed = Math.min(4, Math.max(0.25, Number(merged.speed) || 1));
   merged.listenPause = Math.min(LISTEN_PAUSE.max, Math.max(LISTEN_PAUSE.min, Number(merged.listenPause) || DEFAULT_VOICE.listenPause));
   return merged;
@@ -145,8 +157,8 @@ export function chunkText(text: string, max = 400): string[] {
 export interface SpeechEngine {
   /** mp3 bytes for one piece of text. */
   synthesize(text: string, s: VoiceSettings, signal: AbortSignal): Promise<Buffer>;
-  /** Play an audio file; resolves when playback ends. */
-  play(file: string, track: (child: ChildProcess) => void): Promise<void>;
+  /** Play an audio file, or only its first `seconds`; resolves when playback ends. */
+  play(file: string, track: (child: ChildProcess) => void, seconds?: number): Promise<void>;
   /** Speak with the built-in macOS voice. */
   say(text: string, s: VoiceSettings, track: (child: ChildProcess) => void): Promise<void>;
 }
@@ -170,7 +182,7 @@ export const systemEngine: SpeechEngine = {
     );
     return Buffer.from(await res.arrayBuffer());
   },
-  play: (file, track) => run("afplay", [file], track),
+  play: (file, track, seconds) => run("afplay", [...(seconds ? ["-t", seconds.toFixed(3)] : []), file], track),
   say: (text, s, track) => run("say", [...(s.sayVoice ? ["-v", s.sayVoice] : []), ...(process.env.COS_SPEECH_RATE ? ["-r", process.env.COS_SPEECH_RATE] : []), text], track),
 };
 
@@ -213,6 +225,10 @@ export interface SpeakOptions {
   /** How many pieces to synthesise ahead of the one playing. */
   lookahead?: number;
   onFallback?: (reason: string) => void;
+  /** Which cues this speech wants, if the voice settings allow them: start as it begins, turn after the last word. */
+  cues?: Partial<Record<CueName, boolean>>;
+  /** Where a cue's sound is. */
+  cueFile?: (name: CueName) => Promise<string>;
 }
 
 export interface SpeakResult {
@@ -220,6 +236,8 @@ export interface SpeakResult {
   pieces: number;
   fellBack?: string;
   stopped: boolean;
+  /** The cues that played to the end. */
+  cued: CueName[];
 }
 
 export async function speak(text: string, o: SpeakOptions = {}): Promise<SpeakResult> {
@@ -228,17 +246,32 @@ export async function speak(text: string, o: SpeakOptions = {}): Promise<SpeakRe
   stopSpeaking();
   const pb = new Playback();
   current = pb;
-  const finish = (r: SpeakResult): SpeakResult => {
+  const cued: CueName[] = [];
+  const finish = (r: Omit<SpeakResult, "cued">): SpeakResult => {
     if (current === pb) current = null;
-    return { ...r, stopped: pb.stopped };
+    return { ...r, stopped: pb.stopped, cued };
+  };
+  /** Play a cue to its end. A missing or broken cue never costs the voice. */
+  const cue = async (name: CueName) => {
+    if (!o.cues?.[name] || s.cues === "off" || (s.cues === "turn" && name !== "turn") || pb.stopped) return;
+    try {
+      await engine.play(await (o.cueFile ?? cueFile)(name), pb.track, cueSeconds(name));
+      if (!pb.stopped) cued.push(name);
+    } catch {
+      /* speak without it */
+    }
   };
 
   if (activeTts(s) === "say") {
-    await engine.say(text, s, pb.track);
+    await cue("start");
+    if (!pb.stopped) await engine.say(text, s, pb.track);
+    await cue("turn");
     return finish({ engine: "say", pieces: 1, stopped: false });
   }
 
   const pieces = chunkText(text);
+  // The start cue plays while the first piece is synthesised, so it adds no wait; the voice waits for it to end.
+  const starting = pieces.length ? cue("start") : Promise.resolve();
   const dir = await mkdtemp(join(tmpdir(), "cos-tts-"));
   const lookahead = o.lookahead ?? 2;
   const pending: Promise<string>[] = [];
@@ -265,12 +298,16 @@ export async function speak(text: string, o: SpeakOptions = {}): Promise<SpeakRe
         // Keep talking: finish with the built-in voice rather than going silent.
         const reason = (err as Error).message.split("\n")[0];
         o.onFallback?.(reason);
-        await engine.say(pieces.slice(i).join(" "), s, pb.track);
+        await starting;
+        if (!pb.stopped) await engine.say(pieces.slice(i).join(" "), s, pb.track);
+        await cue("turn");
         return finish({ engine: i === 0 ? "say" : "openai", pieces: pieces.length, fellBack: reason, stopped: false });
       }
+      if (i === 0) await starting;
       if (pb.stopped) break;
       await engine.play(file, pb.track);
     }
+    await cue("turn");
     return finish({ engine: "openai", pieces: pieces.length, stopped: false });
   } finally {
     pb.controller.abort();
