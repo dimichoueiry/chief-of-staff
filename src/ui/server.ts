@@ -10,7 +10,7 @@ import {
   MODEL_INTENTS, PROVIDERS, PROVIDER_ORDER, formatSpec, parseModelSpec, presets, providerConfigured,
   readModelSettings, resolveModel, setModel, type ModelIntent,
 } from "../brain/llm/registry.js";
-import { Conversations, conversationsDir, eventsSinceReply, historyMessages, visibleTurns, withEvents, type Conversation } from "../brain/conversation.js";
+import { Conversations, conversationsDir, eventsSinceReply, historyMessages, visibleTurns, withEvents, type Conversation, type Turn } from "../brain/conversation.js";
 import type { LLMProvider, ChatMessage } from "../brain/llm/types.js";
 import type { ModelSpec } from "../brain/llm/registry.js";
 import { providerFor, runIntent } from "../brain/loop.js";
@@ -28,7 +28,10 @@ import { scribe } from "../logic/scribe.js";
 import { loadLastBrief, saveBrief } from "../output/notify.js";
 import { markdownToSpeech, renderBriefSpeech } from "../output/render.js";
 import { eventsInRange } from "../sensors/calendar.js";
-import { applyActivity, scanActivity } from "../sensors/git.js";
+import { activityRoots, applyActivity, scanActivity } from "../sensors/git.js";
+import { readAccess } from "../actions/access.js";
+import { findBookmarks, formatBookmarks, readBookmarks, type BookmarkRead } from "../actions/bookmarks.js";
+import { readConsent } from "../actions/consent.js";
 import { addDays, todayISO } from "../util/dates.js";
 import { reloadHomeEnv } from "../util/env.js";
 import type { Access } from "../actions/access.js";
@@ -71,11 +74,15 @@ export interface UiOptions {
   conversations?: Conversations;
   /** Summarise ended conversations in the background after each message (default true). */
   backgroundSummaries?: boolean;
-  /** How commands run, where Agent Grid is, and what's allowed (tests). */
+  /** How commands run, where Agent Grid is, what's allowed, and where favorites come from (tests). */
   shell?: Shell;
   agentGrid?: AgentGrid;
   access?: () => Access;
+  bookmarks?: () => Promise<BookmarkRead>;
 }
+
+/** How long a finished action counts as "just done", so the same one isn't queued again. */
+const RECENT_MS = 15 * 60_000;
 
 /** What the pill says while a tool runs. */
 const DOING: Record<string, string> = {
@@ -105,6 +112,7 @@ interface PillReply {
   model?: string;
   changes?: number;
   confirm?: ConfirmView[];
+  done?: { kind: string; detail: string }[];
   where?: string;
   project?: string;
   steps?: ChatMessage[];
@@ -121,9 +129,6 @@ const PLAIN_SEARCH = /^(?:please\s+)?(?:search|look up)\b/i;
 const WEB_SEARCH = /^(?:please\s+)?(?:google\b|search (?:the web|google|online)\b)|\b(?:on|in) (?:google|the web)\s*[.?!]?$|\bonline\s*[.?!]?$/i;
 const REFERS_BACK = /\b(?:we|our|us|i said|i told you|you said|talked|discussed|decided|mentioned|conversations?|remember|earlier|yesterday|last (?:time|week))\b/i;
 
-/** A short yes or no to the last reply's pending actions: the user's own OK, never the model's. */
-const AFFIRM = /^(?:(?:yes|yeah|yep|yup|sure|ok(?:ay)?|alright|go ahead|do it|run it|start it|send it|open it|confirm(?:ed)?|approved?|please do|go for it|sounds good|let'?s do it|let'?s go|perfect)[\s,.!]*)+(?:please|thanks?|thank you)?[.!]*$/i;
-const DENY = /^(?:no|nope|nah|cancel|don'?t|do not|stop|never ?mind|not now|hold on|wait)(?:[\s,.!]+(?:thanks?|thank you|don'?t|do it|run it|cancel(?: it)?|that))*[\s.!]*$/i;
 
 /** What goes into the conversation about something that was done: the result, with any cut stated. */
 function outcome(text: string, max = 3_000): string {
@@ -139,6 +144,15 @@ export function createUiServer(o: UiOptions): Server {
   const { config } = o;
   const today = () => o.today ?? todayISO();
 
+  let activityAt = 0;
+  /** Move "last touched" forward from git commits: the brief always, conversations at most every 10 minutes. */
+  async function syncActivity(force = false): Promise<void> {
+    if (!force && Date.now() - activityAt < 10 * 60_000) return;
+    activityAt = Date.now();
+    const ledger = new Ledger(config.selfhubDir);
+    await applyActivity(ledger, await scanActivity(activityRoots(config.projectRoots, await ledger.read())));
+  }
+
   /** Settings are re-read on every request, so a switch in the menubar applies immediately. */
   function ready(intent: ModelIntent): boolean {
     if (o.offline) return false;
@@ -151,7 +165,7 @@ export function createUiServer(o: UiOptions): Server {
   }
 
   async function freshBrief(): Promise<{ brief: Brief; source: string }> {
-    await applyActivity(new Ledger(config.selfhubDir), await scanActivity(config.projectRoots));
+    await syncActivity(true);
     const rules = async (why: string) => {
       const ctx = await buildContext({ config, intent: "brief", today: today() });
       return { brief: buildBrief(ctx), source: why ? `rules (${why})` : "rules" };
@@ -204,6 +218,8 @@ export function createUiServer(o: UiOptions): Server {
   const conversations = o.conversations ?? new Conversations(conversationsDir(), config.conversationIdleMinutes);
   const openRunner = o.openRunner ?? macOpen;
   const boards = o.slateLoader ?? (() => slateBoards());
+  const bookmarks = o.bookmarks ?? (() => readBookmarks());
+  const access = () => (o.access ?? readAccess)();
   const deps = { run: openRunner, shell: o.shell, agentGrid: o.agentGrid };
   let pillQueue: Promise<unknown> = Promise.resolve();
   let summarizing = false;
@@ -242,6 +258,7 @@ export function createUiServer(o: UiOptions): Server {
 
     const convo = conversations.current();
     emit({ type: "start", conversation: convo.id, user: said });
+    await syncActivity().catch(() => undefined);
     let reply: PillReply;
     try {
       // "yes" or "no" to what the last reply was waiting on: do it (or drop it) first, then answer with the result in hand.
@@ -259,36 +276,50 @@ export function createUiServer(o: UiOptions): Server {
         role: "assistant", text: reply.text, model: reply.model, kind: reply.kind,
         steps: reply.steps?.length ? reply.steps : undefined,
         confirm: reply.confirm?.length ? reply.confirm : undefined,
+        actionsDone: reply.done?.length ? reply.done : undefined,
       },
     );
     summarizeSoon();
-    const { steps: _steps, ...shown } = reply;
+    const { steps: _steps, done: _done, ...shown } = reply;
     return { status: 200, body: { ...shown, conversation: convo.id, user: said } };
   }
 
-  async function settlePending(convo: Conversation, said: string, emit: Emit): Promise<string[]> {
-    const yes = AFFIRM.test(said);
-    const no = !yes && DENY.test(said);
-    if (!yes && !no) return [];
+  /** What the last reply left waiting that can still be done. */
+  function awaiting(convo: Conversation): ConfirmView[] {
     const last = [...convo.turns].reverse().find((t) => t.role === "assistant");
-    const waiting = (last?.confirm ?? []).filter((c) => isPending(c.id));
-    const events: string[] = [];
+    return (last?.confirm ?? []).filter((c) => isPending(c.id));
+  }
+
+  /** Actions carried out in this conversation in the last few minutes. */
+  function recentlyDone(convo: Conversation): { kind: string; detail: string }[] {
+    const since = Date.now() - RECENT_MS;
+    return convo.turns.filter((t) => new Date(t.at).getTime() >= since).flatMap((t) => [...(t.done ? [t.done] : []), ...(t.actionsDone ?? [])]);
+  }
+
+  /** A clear yes or no to what's waiting is carried out here; anything else goes to the model, which has confirm_pending. */
+  async function settlePending(convo: Conversation, said: string, emit: Emit): Promise<string[]> {
+    const waiting = awaiting(convo);
+    if (!waiting.length) return [];
+    const consent = readConsent(said);
+    if (consent === "unclear") return [];
+    const turns: Omit<Turn, "at">[] = [];
     for (const c of waiting) {
       const p = take(c.id);
       if (!p) continue;
-      if (no) {
-        events.push(`They said no, so this was not done: ${p.label}.`);
+      if (consent === "no") {
+        turns.push({ role: "event", text: `They said no, so this was not done: ${p.label}.` });
         continue;
       }
-      emit({ type: "status", text: p.kind === "command" ? "Running it…" : p.kind === "agent-start" ? "Starting the agent…" : "On it…" });
+      emit({ type: "status", text: p.kind === "command" ? "Running it…" : p.kind === "agent-start" ? "Starting the agent…" : p.kind === "agent-message" ? "Sending it…" : "On it…" });
       try {
-        events.push(`They said yes and it is already done (do not do it again): ${p.label}. Result: ${outcome(await performPending(p, deps))}`);
+        const out = await performPending(p, deps);
+        turns.push({ role: "event", text: `They said yes and it is already done (do not do it again): ${p.label}. Result: ${outcome(out)}`, done: { kind: p.kind, detail: p.detail } });
       } catch (err) {
-        events.push(`They said yes, but ${p.label} failed: ${(err as Error).message}`);
+        turns.push({ role: "event", text: `They said yes, but ${p.label} failed: ${(err as Error).message}` });
       }
     }
-    if (events.length) conversations.append(convo, ...events.map((text) => ({ role: "event" as const, text })));
-    return events;
+    if (turns.length) conversations.append(convo, ...turns);
+    return turns.map((t) => t.text);
   }
 
   async function respond(text: string, mode: string, focusOn: string | undefined, convo: Conversation, emit: Emit, modelText = text): Promise<PillReply> {
@@ -297,12 +328,15 @@ export function createUiServer(o: UiOptions): Server {
         config, intent, project, message: modelText, today: today(), modelFlag: o.modelFlag, llm: o.llm,
         history: historyMessages(convo),
         recall: renderRecall(conversations, { today: today(), excludeId: convo.id }),
-        actions: { run: openRunner, slate: boards, conversations, shell: o.shell, agentGrid: o.agentGrid, access: o.access },
+        actions: {
+          run: openRunner, slate: boards, conversations, shell: o.shell, agentGrid: o.agentGrid, access: o.access,
+          awaiting: awaiting(convo), recentlyDone: recentlyDone(convo), bookmarks,
+        },
         onTool: (name) => emit({ type: "status", text: DOING[name] ?? "Updating your memory…" }),
         onText: (delta) => emit({ type: "text", delta }),
       });
     const fromModel = (kind: PillReply["kind"], r: Awaited<ReturnType<typeof runIntent>>, extra: Partial<PillReply> = {}): PillReply => ({
-      kind, text: r.text, model: r.model, changes: changes(r.toolCalls), confirm: r.pending.map(confirmView), steps: r.steps, ...extra,
+      kind, text: r.text, model: r.model, changes: changes(r.toolCalls), confirm: r.pending.map(confirmView), done: r.done, steps: r.steps, ...extra,
     });
 
     if (focusOn) {
@@ -324,8 +358,10 @@ export function createUiServer(o: UiOptions): Server {
           shortcuts: await new Shortcuts(config.selfhubDir).list(),
           projects: await new Ledger(config.selfhubDir).read(),
           boards,
+          bookmarks,
         },
         openRunner,
+        { confirmLinks: access().links !== "auto" },
       );
       if (opened.status === "opened") return { kind: "action", text: opened.message, model: "rules" };
       if (opened.status === "confirm") return { kind: "confirm", text: opened.message, confirm: [confirmView(opened.pending)], model: "rules" };
@@ -372,6 +408,12 @@ export function createUiServer(o: UiOptions): Server {
         const to = url.searchParams.get("to") ?? addDays(from, 6);
         const r = await eventsInRange(from, to);
         return json(res, r.error ? 422 : 200, { from, to, provider: r.provider, error: r.error ?? null, events: r.events });
+      }
+      case "GET /api/bookmarks": {
+        const q = (url.searchParams.get("q") ?? "").trim();
+        const read = await bookmarks();
+        const matches = q ? findBookmarks(read.bookmarks, q) : [];
+        return json(res, 200, { total: read.bookmarks.length, browsers: read.browsers, blocked: read.blocked, matches, text: formatBookmarks(read, matches, q) });
       }
       case "GET /api/folders": {
         const name = (url.searchParams.get("name") ?? "").trim();
@@ -442,7 +484,7 @@ export function createUiServer(o: UiOptions): Server {
         }
         try {
           const text = await performPending(p, deps);
-          conversations.append(conversations.current(), { role: "event", text: `They tapped ${p.verb} and it is already done (do not do it again): ${p.label}. Result: ${outcome(text)}` });
+          conversations.append(conversations.current(), { role: "event", text: `They tapped ${p.verb} and it is already done (do not do it again): ${p.label}. Result: ${outcome(text)}`, done: { kind: p.kind, detail: p.detail } });
           return json(res, 200, { ok: true, text });
         } catch (err) {
           conversations.append(conversations.current(), { role: "event", text: `They confirmed, but ${p.label} failed: ${(err as Error).message}` });

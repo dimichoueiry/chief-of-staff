@@ -56,6 +56,8 @@ export interface RunResult {
   model: string;
   /** Things the model wants to do that wait for the user's OK. */
   pending: Pending[];
+  /** Actions carried out in this run, so a later message doesn't repeat them. */
+  done: { kind: string; detail: string }[];
   /** The tool calls and results of this run, without provider-specific data, for the conversation record. */
   steps: ChatMessage[];
 }
@@ -161,6 +163,7 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
     stopReason: last.stop,
     model: formatSpec(spec),
     pending: runtime.pending,
+    done: runtime.done,
     steps: messages
       .slice(firstNew)
       .flatMap((m): ChatMessage[] => {

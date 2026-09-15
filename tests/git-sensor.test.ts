@@ -58,3 +58,18 @@ describe("git activity sensor", () => {
     expect((await ledger.find("old"))?.lastTouched).toBe("2026-06-01");
   });
 });
+
+describe("activityRoots", () => {
+  it("adds each project's own folder to the places searched for commits, once", async () => {
+    const { activityRoots } = await import("../src/sensors/git.js");
+    const projects = [
+      { name: "ML Guerilla", status: "active", path: "~/Documents/GitHub/mlguerilla", extra: [] },
+      { name: "drawcal", status: "active", path: "/Users/x/Desktop/drawcal", extra: [] },
+      { name: "no path", status: "active", extra: [] },
+    ];
+    const roots = activityRoots(["/Users/x/Desktop", "/Users/x/Desktop/drawcal"], projects as never);
+    expect(roots).toHaveLength(3);
+    expect(roots[2]).toMatch(/\/Documents\/GitHub\/mlguerilla$/);
+    expect(roots[2].startsWith("~")).toBe(false);
+  });
+});

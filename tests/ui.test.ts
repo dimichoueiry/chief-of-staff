@@ -12,6 +12,7 @@ import { Notes } from "../src/core/notes.js";
 import { Reminders } from "../src/core/reminders.js";
 import { decide } from "../src/logic/decide.js";
 import { resolveDate, scribe } from "../src/logic/scribe.js";
+import { saveAccess } from "../src/actions/access.js";
 import { createUiServer } from "../src/ui/server.js";
 import { makeTmpSelfhub } from "./helpers/tmp-selfhub.js";
 
@@ -102,6 +103,10 @@ describe("ui server (offline)", () => {
         opened.push(args);
       },
       slateLoader: async () => ({ boards: [{ id: "a1", name: "Chief of Staff — UI/UX", projectName: null, updatedAt: 1 }], live: true }),
+      bookmarks: async () => ({
+        bookmarks: [{ name: "Campuswire", url: "https://campuswire.com/c/G53D5855E/feed", folder: "Favorites Bar / UIUC", browser: "Edge", app: "Microsoft Edge", profile: "Profile 2" }],
+        blocked: [], browsers: ["Edge"],
+      }),
     });
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -161,12 +166,20 @@ describe("ui server (offline)", () => {
     expect(stop).toEqual({ ok: true, stopped: false });
   });
 
-  it("opens Slate boards instantly from the pill and asks before opening a web address", async () => {
+  it("opens Slate boards, favorites and web pages instantly from the pill, and asks first only when links are set to ask", async () => {
     const post = (b: unknown, path = "/api/pill") => fetch(`${base}${path}`, { method: "POST", body: JSON.stringify(b) });
     const slate = await (await post({ text: "open slate board chief of staff ui" })).json();
     expect(slate).toMatchObject({ kind: "action", text: "Opened Slate board “Chief of Staff — UI/UX”." });
     expect(opened).toEqual([["https://slate-iota-lac.vercel.app/board/a1"]]);
 
+    const page = await (await post({ text: "open http://localhost:3000/modules/m6" })).json();
+    expect(page).toMatchObject({ kind: "action", text: "Opened http://localhost:3000/modules/m6." });
+    const fav = await (await post({ text: "open campus wire from my UIC folder in my favorites" })).json();
+    expect(fav.text).toMatch(/^Opened “Campuswire” from your Edge favorites/);
+    expect(opened.at(-1)!.at(-1)).toBe("https://campuswire.com/c/G53D5855E/feed");
+    opened.splice(1);
+
+    saveAccess({ links: "ask" }); // COS_HOME is a temp folder in these tests
     const link = await (await post({ text: "open https://example.com/page" })).json();
     expect(link.kind).toBe("confirm");
     expect(opened).toHaveLength(1);
@@ -273,7 +286,7 @@ describe("ui server (scripted model)", () => {
       backgroundSummaries: false,
       openRunner: async () => {},
       slateLoader: async () => ({ boards: [], live: true }),
-      access: () => ({ terminal: "ask", agents: "ask" }),
+      access: () => ({ terminal: "ask", agents: "ask", links: "auto" }),
       shell: async (command) => {
         ran.push(command);
         return { exitCode: 0, timedOut: false, output: command.startsWith("brew") ? "ffmpeg 7.1 installed" : "ok" };
@@ -419,6 +432,45 @@ describe("ui server (scripted model)", () => {
     queue.push(reply({ text: "Built." }));
     await say("how did that go?");
     expect(JSON.stringify(requests.at(-1)!.messages)).toContain("They tapped Run and it is already done (do not do it again): npm run build. Result:");
+  });
+
+  it("hears a natural yes by voice, hands anything unclear to the model's confirm_pending, and never queues a repeat", async () => {
+    const say = async (text: string) => (await post({ text })).json();
+
+    queue.push(
+      reply({ stop: "tool_use", toolCalls: [{ id: "a1", name: "run_command", input: { command: "brew install ffmpeg" } }] }),
+      reply({ text: "Should I install ffmpeg with Homebrew?" }),
+    );
+    await say("install ffmpeg");
+    queue.push(reply({ text: "Installed." }));
+    await say("Yeah, you can run that");
+    expect(ran).toEqual(["brew install ffmpeg"]);
+    const told = requests.at(-1)!;
+    expect(told.messages.at(-1)).toMatchObject({ role: "user", content: expect.stringMatching(/^\(Since your last reply: They said yes and it is already done/) });
+
+    // The model tries to queue the exact same command again right after: refused as already done.
+    queue.push(
+      reply({ stop: "tool_use", toolCalls: [{ id: "a2", name: "run_command", input: { command: "brew install ffmpeg" } }] }),
+      reply({ text: "It's already installed." }),
+    );
+    const again = await say("install ffmpeg");
+    expect(again.confirm).toEqual([]);
+    expect(JSON.stringify(requests.at(-1)!.messages.at(-1))).toContain("already done a moment ago");
+
+    // Unclear answers go to the model, which confirms first.
+    queue.push(
+      reply({ stop: "tool_use", toolCalls: [{ id: "a3", name: "run_command", input: { command: "npm run build" } }] }),
+      reply({ text: "Should I build it?" }),
+    );
+    await say("build it");
+    queue.push(
+      reply({ stop: "tool_use", toolCalls: [{ id: "a4", name: "confirm_pending", input: { decision: "yes" } }] }),
+      reply({ text: "Built, and I'll check the output next time." }),
+    );
+    await say("yes and then tell me if it worked");
+    expect(ran).toEqual(["brew install ffmpeg", "npm run build"]);
+    const convo = await (await fetch(`${base}/api/conversation`)).json();
+    expect(convo.turns.at(-1)).toMatchObject({ role: "assistant", actionsDone: [{ kind: "command", detail: "$ npm run build\nin ~" }] });
   });
 
   it("keeps a failed reply in the conversation so 'try again' has something to refer to", async () => {

@@ -35,7 +35,7 @@ import {
   DEFAULT_VOICE, LISTEN_PAUSE, OPENAI_VOICES, activeTts, isKnownVoice, readVoiceSettings, saveVoiceSettings, speak, voiceSettingsFile,
   type TtsProvider,
 } from "../voice/tts.js";
-import { applyActivity, scanActivity } from "../sensors/git.js";
+import { activityRoots, applyActivity, scanActivity } from "../sensors/git.js";
 import { addDays, isISODate, todayISO } from "../util/dates.js";
 import { homeEnvFile, parseEnv, syncProjectEnv } from "../util/env.js";
 import { deployRuntime } from "./deploy.js";
@@ -110,7 +110,8 @@ async function modelError(err: unknown): Promise<never> {
 
 /** Keep 'last touched' honest before anything reads the ledger. */
 async function syncTouches(cfg: Config, quiet = true): Promise<void> {
-  const touched = await applyActivity(new Ledger(cfg.selfhubDir), await scanActivity(cfg.projectRoots));
+  const ledger = new Ledger(cfg.selfhubDir);
+  const touched = await applyActivity(ledger, await scanActivity(activityRoots(cfg.projectRoots, await ledger.read())));
   if (!quiet) {
     if (!touched.length) console.log("Nothing new in git.");
     for (const t of touched) console.log(`touched ${t.project} → ${t.date}  (${t.path})`);
@@ -278,11 +279,13 @@ const accessCmd = program
     };
     console.log(`${bold("terminal")}  ${a.terminal}  ${dim(explain[a.terminal])}`);
     console.log(`${bold("agents")}    ${a.agents}  ${dim(a.agents === "ask" ? "can list and read agents; starting or messaging one waits for your OK" : explain[a.agents])}`);
+    console.log(`${bold("links")}     ${a.links}  ${dim(a.links === "auto" ? "web pages it finds or builds open straight away" : a.links === "ask" ? "web pages it finds or builds wait for your OK" : "it never opens web pages it came up with")}`);
+    console.log(dim("An OK can be spoken: \"yeah, send it\" or \"no\" works as well as the button."));
     console.log(dim(`Change: cos access terminal auto | cos access agents ask   (saved in ${accessFile()})`));
     console.log(dim(`Every command it runs is logged in ~/.cos/logs/terminal.log`));
   });
 
-for (const what of ["terminal", "agents"] as const) {
+for (const what of ["terminal", "agents", "links"] as const) {
   accessCmd
     .command(what)
     .argument("<mode>", ACCESS_MODES.join(" | "))

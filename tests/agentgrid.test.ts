@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Access } from "../src/actions/access.js";
 import { AgentGrid, findConnection, findSession, formatSessions, formatTranscript, type AgentSession } from "../src/actions/agentgrid.js";
-import { take } from "../src/actions/pending.js";
+import { confirmView, take } from "../src/actions/pending.js";
 import { performPending } from "../src/actions/perform.js";
 import type { Shell } from "../src/actions/terminal.js";
 import { ToolRuntime } from "../src/brain/tools.js";
@@ -143,7 +143,7 @@ describe("Agent Grid client", () => {
       });
 
     it("reads agents freely; starting and messaging wait for an OK in ask mode and run in auto; off refuses", async () => {
-      const ask = runtime({ terminal: "ask", agents: "ask" });
+      const ask = runtime({ terminal: "ask", agents: "ask", links: "auto" });
       expect((await ask.execute("get_agents", {})).result).toMatch(/^3 sessions: 1 need you/);
       expect((await ask.execute("get_agent_output", { session: "quiz" })).result).toContain("Should answers be multiple choice");
 
@@ -159,13 +159,40 @@ describe("Agent Grid client", () => {
       expect(await performPending(p, { agentGrid: new AgentGrid(() => ({ base, token: "tok" })) })).toBe("Sent to Module 6 quiz.");
       expect(fake.calls.at(-1)).toBe('POST /api/chat {"sessionId":"bbbb2222-blocked","message":"multiple choice"}');
 
-      const auto = runtime({ terminal: "ask", agents: "auto" });
+      const auto = runtime({ terminal: "ask", agents: "auto", links: "auto" });
       expect((await auto.execute("start_agent", { task: "fix it", folder: "~/Desktop/drawcal" })).result).toBe("Started claude in drawcal.");
       expect((await auto.execute("start_agent", { task: "x", folder: "/etc" })).isError).toBe(true);
 
-      const off = runtime({ terminal: "off", agents: "off" });
+      const off = runtime({ terminal: "off", agents: "off", links: "auto" });
       expect((await off.execute("get_agents", {})).result).toMatch(/Agent Grid access is off/);
       expect((await off.execute("run_command", { command: "ls" })).result).toMatch(/Terminal access is off/);
+    });
+
+    it("never queues the same thing twice, and lets the model carry out what's waiting only as its first step", async () => {
+      const ask = runtime({ terminal: "ask", agents: "ask", links: "auto" });
+      await ask.execute("message_agent", { session: "quiz", message: "multiple choice" });
+      const waiting = ask.pending.map(confirmView);
+
+      // The next message: the same request again is recognised, not queued a second time.
+      const next = new ToolRuntime(loadConfig({ COS_SELFHUB: selfhub, COS_PROJECT_ROOTS: "/nonexistent" }), "2026-09-15", undefined, {
+        agentGrid: new AgentGrid(() => ({ base, token: "tok" })), access: () => ({ terminal: "ask", agents: "ask", links: "auto" }), awaiting: waiting,
+      });
+      expect((await next.execute("message_agent", { session: "quiz", message: "multiple choice" })).result).toMatch(/already waiting for their OK/);
+      expect(next.pending).toHaveLength(0);
+
+      // confirm_pending after reading anything else is refused, and nothing is sent.
+      expect((await next.execute("confirm_pending", { decision: "yes" })).isError).toBe(true);
+      expect(fake.calls.some((c) => c.startsWith("POST /api/chat"))).toBe(false);
+
+      const fresh = new ToolRuntime(loadConfig({ COS_SELFHUB: selfhub, COS_PROJECT_ROOTS: "/nonexistent" }), "2026-09-15", undefined, {
+        agentGrid: new AgentGrid(() => ({ base, token: "tok" })), access: () => ({ terminal: "ask", agents: "ask", links: "auto" }), awaiting: waiting,
+      });
+      const r = await fresh.execute("confirm_pending", { decision: "yes" });
+      expect(r.result).toBe("Done, as they said (already done: do not do it again): message to Module 6 quiz. Result: Sent to Module 6 quiz.");
+      expect(fake.calls.filter((c) => c.startsWith("POST /api/chat"))).toHaveLength(1);
+      expect(fresh.done).toEqual([{ kind: "agent-message", detail: waiting[0].detail }]);
+      expect((await fresh.execute("confirm_pending", { decision: "yes" })).result).toMatch(/^Nothing is waiting/);
+      expect((await fresh.execute("message_agent", { session: "quiz", message: "multiple choice" })).result).toMatch(/already done a moment ago/);
     });
 
     it("runs safe commands, queues changes (or runs them in auto), always queues risky ones, refuses blocked", async () => {
@@ -174,15 +201,15 @@ describe("Agent Grid client", () => {
         ran.push(command);
         return { exitCode: 0, timedOut: false, output: `ran ${command}` };
       };
-      const ask = runtime({ terminal: "ask", agents: "ask" }, shell);
+      const ask = runtime({ terminal: "ask", agents: "ask", links: "auto" }, shell);
       expect((await ask.execute("run_command", { command: "ls ~" })).result).toMatch(/^\$ ls ~\n\(in ~; exit 0;/);
-      expect((await ask.execute("run_command", { command: "mkdir -p ~/cos-tools" })).result).toMatch(/^Not run yet \(mkdir can change things\)/);
+      expect((await ask.execute("run_command", { command: "mkdir -p ~/cos-tools" })).result).toMatch(/^Not run yet \(mkdir can change things\)\. Ask them/);
       expect(ask.pending[0]).toMatchObject({ kind: "command", verb: "Run", detail: "$ mkdir -p ~/cos-tools\nin ~" });
       expect((await ask.execute("run_command", { command: "sudo ls" })).result).toMatch(/^Error: Refused: never runs: it needs an administrator password/);
       expect((await ask.execute("run_command", { command: "ls", cwd: "~/definitely-not-here-xyz" })).isError).toBe(true);
       expect(ran).toEqual(["ls ~"]);
 
-      const auto = runtime({ terminal: "auto", agents: "ask" }, shell);
+      const auto = runtime({ terminal: "auto", agents: "ask", links: "auto" }, shell);
       await auto.execute("run_command", { command: "mkdir -p ~/cos-tools" });
       expect(ran.at(-1)).toBe("mkdir -p ~/cos-tools");
       expect((await auto.execute("run_command", { command: "rm -rf ~/cos-tools/tmp" })).result).toMatch(/^Not run yet \(it deletes files\)/);

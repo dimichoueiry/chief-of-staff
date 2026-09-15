@@ -27,6 +27,10 @@ export interface Turn {
   steps?: ChatMessage[];
   /** assistant: actions this reply left waiting for the user's OK. */
   confirm?: ConfirmView[];
+  /** event: an action that was carried out, so the same one isn't queued again. */
+  done?: { kind: string; detail: string };
+  /** assistant: actions this reply carried out itself (with their OK, or allowed on their own). */
+  actionsDone?: { kind: string; detail: string }[];
 }
 
 export interface Conversation {

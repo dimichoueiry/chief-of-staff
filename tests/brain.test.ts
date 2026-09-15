@@ -101,7 +101,7 @@ describe("ToolRuntime", () => {
   it("gives the brief no tools and each intent only its own", () => {
     expect(toolsFor("brief")).toEqual([]);
     expect(toolsFor("capture").map((t) => t.name)).not.toContain("get_git_log");
-    expect(toolsFor("focus").map((t) => t.name)).toEqual(["get_project", "upsert_project", "get_git_log", "get_calendar", "open", "get_conversations", "find_folder", "run_command", "get_agents", "start_agent", "get_agent_output"]);
+    expect(toolsFor("focus").map((t) => t.name)).toEqual(["get_project", "upsert_project", "get_git_log", "get_calendar", "open", "get_conversations", "find_folder", "run_command", "get_agents", "start_agent", "get_agent_output", "confirm_pending"]);
     expect(toolsFor("capture").map((t) => t.name)).not.toContain("run_command");
     expect(toolsFor("capture").map((t) => t.name)).toContain("find_folder");
     expect(toolsFor("ask").map((t) => t.name)).toContain("get_conversations");

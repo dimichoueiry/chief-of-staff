@@ -4,13 +4,15 @@
  *
  * Safety rules, enforced here rather than trusted to the model:
  * - Only http(s) web addresses. No file:, javascript:, or app-specific schemes.
- * - A web address the model came up with is never opened directly: it becomes a
- *   pending action you confirm. Your shortcuts, Slate, projects and searches open at once.
+ * - A web address the model came up with opens directly, unless links are set to ask
+ *   (`cos access links ask`): then it becomes a pending action you confirm.
+ * - Your favorites (Edge, Chrome, Brave, Arc) open in the browser they're saved in.
  * - Files open only from inside your home folder and only if they are documents or
  *   media. Scripts, installers and anything else that would run code are refused.
  * - Apps must be installed .app bundles found in the usual Applications folders.
  */
 import { execFile } from "node:child_process";
+import { blockedMessage, findBookmarks, type BookmarkRead } from "./bookmarks.js";
 import { queue, take, type Pending } from "./pending.js";
 import { stat } from "node:fs/promises";
 import { existsSync, readdirSync } from "node:fs";
@@ -24,7 +26,7 @@ import { findShortcut, type Shortcut } from "./shortcuts.js";
 const exec = promisify(execFile);
 
 export type OpenAction =
-  | { kind: "url"; url: string; label: string; trusted: boolean }
+  | { kind: "url"; url: string; label: string; trusted: boolean; /** Open in this browser, e.g. the one a bookmark came from. */ app?: string }
   | { kind: "path"; path: string; app?: string; label: string }
   | { kind: "app"; app: string; label: string };
 
@@ -103,6 +105,27 @@ export interface ResolveInput {
   projects: Project[];
   /** Loaded only when the target mentions Slate. */
   boards?: () => Promise<{ boards: SlateBoard[]; live: boolean; reason?: string }>;
+  /** Browser favorites; loaded only when nothing else matches or the target mentions favorites. */
+  bookmarks?: () => Promise<BookmarkRead>;
+}
+
+const MENTIONS_BOOKMARKS = /\b(favou?rites?|bookmarks?|bookmarked)\b/i;
+
+/** A saved bookmark to open, or why not: only a clear best match opens. */
+async function fromBookmarks(input: ResolveInput, raw: string): Promise<Resolution | null> {
+  if (!input.bookmarks) return null;
+  const read = await input.bookmarks();
+  const matches = findBookmarks(read.bookmarks, input.target);
+  const [best, next] = matches;
+  if (best && best.score >= 0.8 && !(next && next.url !== best.url && best.score - next.score < 0.05)) {
+    const app = input.app ?? best.app;
+    return { ok: true, action: { kind: "url", url: best.url, label: `“${best.name}” from your ${best.browser} favorites`, trusted: true, app } };
+  }
+  if (matches.length) {
+    return { ok: false, reason: `a few bookmarks could match "${raw}"`, candidates: matches.map((m) => `${m.name} (${m.browser} › ${m.folder})`) };
+  }
+  if (read.blocked.length) return { ok: false, reason: blockedMessage(read.blocked) };
+  return null;
 }
 
 export type Resolution =
@@ -120,6 +143,11 @@ export async function resolveOpen(input: ResolveInput): Promise<Resolution> {
   if (search) {
     const q = search[1].trim();
     return { ok: true, action: { kind: "url", url: `https://www.google.com/search?q=${encodeURIComponent(q)}`, label: `search for “${q}”`, trusted: true } };
+  }
+
+  if (MENTIONS_BOOKMARKS.test(input.target)) {
+    const saved = await fromBookmarks(input, raw);
+    if (saved) return saved;
   }
 
   const shortcut = findShortcut(input.shortcuts, raw);
@@ -151,7 +179,7 @@ export async function resolveOpen(input: ResolveInput): Promise<Resolution> {
   }
 
   const url = safeWebUrl(raw) ?? (/^[a-z0-9-]+(\.[a-z0-9-]+)+(\/\S*)?$/i.test(raw) ? safeWebUrl(`https://${raw}`) : null);
-  if (url) return { ok: true, action: { kind: "url", url, label: url, trusted: false } };
+  if (url) return { ok: true, action: { kind: "url", url, label: url, trusted: false, app: input.app } };
 
   const project = findProject(input.projects, raw.replace(/\s+(?:project|folder|repo)$/i, ""));
   if (project) {
@@ -169,6 +197,9 @@ export async function resolveOpen(input: ResolveInput): Promise<Resolution> {
 
   const app = findApp(raw);
   if (app) return { ok: true, action: { kind: "app", app, label: raw } };
+
+  const saved = MENTIONS_BOOKMARKS.test(input.target) ? null : await fromBookmarks(input, raw);
+  if (saved) return saved;
 
   return {
     ok: false,
@@ -189,8 +220,9 @@ export async function performOpen(action: OpenAction, run: Runner = macOpen): Pr
     case "url": {
       const url = safeWebUrl(action.url);
       if (!url) throw new Error("only http and https addresses can be opened");
-      await run([url]);
-      return `Opened ${action.label}.`;
+      const app = action.app ? findApp(action.app) : null;
+      await run(app ? ["-a", app, url] : [url]);
+      return `Opened ${action.label}${action.app && app ? ` in ${action.app}` : ""}.`;
     }
     case "path": {
       const checked = await checkPath(action.path);
@@ -224,14 +256,18 @@ export function takePending(id: string): { id: string; action: OpenAction } | nu
   return p && p.kind === "open" ? { id: p.id, action: p.payload as OpenAction } : null;
 }
 
-/** Resolve and either open now (trusted) or queue for confirmation (a web address from the model). */
+/**
+ * Resolve and open. A web address the model came up with opens at once unless
+ * links are set to ask (`cos access links ask`); then it waits for an OK.
+ */
 export async function openOrQueue(
   input: ResolveInput,
   run: Runner = macOpen,
+  o: { confirmLinks?: boolean } = {},
 ): Promise<{ status: "opened"; message: string } | { status: "confirm"; pending: PendingOpen; message: string } | { status: "failed"; message: string; candidates?: string[] }> {
   const r = await resolveOpen(input);
   if (!r.ok) return { status: "failed", message: r.reason, candidates: r.candidates };
-  if (r.action.kind === "url" && !r.action.trusted) {
+  if (r.action.kind === "url" && !r.action.trusted && o.confirmLinks) {
     const p = queueOpen(r.action);
     return { status: "confirm", pending: p, message: `Open ${r.action.url}?` };
   }

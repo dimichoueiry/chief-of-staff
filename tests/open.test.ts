@@ -111,13 +111,15 @@ describe("resolving what you asked for", () => {
 });
 
 describe("opening and confirming", () => {
-  it("opens trusted things at once and queues untrusted addresses for a one-time confirmation", async () => {
+  it("opens web pages at once, or queues them for a one-time confirmation when links are set to ask", async () => {
     const { run, calls } = recorder();
     const base = { shortcuts: [], projects: [], boards: loader };
     expect(await openOrQueue({ ...base, target: "slate" }, run)).toEqual({ status: "opened", message: "Opened Slate." });
     expect(calls).toEqual([[slateHomeUrl()]]);
+    expect(await openOrQueue({ ...base, target: "http://localhost:3000/modules/m6" }, run)).toEqual({ status: "opened", message: "Opened http://localhost:3000/modules/m6." });
+    calls.pop();
 
-    const q = await openOrQueue({ ...base, target: "https://example.com" }, run);
+    const q = await openOrQueue({ ...base, target: "https://example.com" }, run, { confirmLinks: true });
     expect(q.status).toBe("confirm");
     expect(calls).toHaveLength(1);
     const id = q.status === "confirm" ? q.pending.id : "";
@@ -161,13 +163,17 @@ describe("shortcuts store and the open tool", () => {
 
   it("lets the model open trusted things, queue web addresses, and save shortcuts safely", async () => {
     const { run, calls } = recorder();
-    const rt = new ToolRuntime(loadConfig({ COS_SELFHUB: dir, COS_PROJECT_ROOTS: "/nonexistent" }), "2026-09-17", undefined, { run, slate: loader });
+    const rt = new ToolRuntime(loadConfig({ COS_SELFHUB: dir, COS_PROJECT_ROOTS: "/nonexistent" }), "2026-09-17", undefined, {
+      run, slate: loader, access: () => ({ terminal: "ask", agents: "ask", links: "ask" }),
+      bookmarks: async () => ({ bookmarks: [], blocked: [], browsers: [] }),
+    });
     expect((await rt.execute("open", { target: "slate board build blueprint" })).result).toBe("Opened Slate board “Chief of Staff — Build Blueprint (for the coding agent)”.");
     expect(calls).toEqual([[slateBoardUrl("b2")]]);
 
     const queued = await rt.execute("open", { target: "https://totally-legit.example/login" });
     expect(queued.isError).toBe(false);
-    expect(queued.result).toMatch(/confirm/);
+    expect(queued.result).toMatch(/^Not opened yet: ask them "Should I open https:\/\/totally-legit\.example\/login\?"/);
+    expect((await rt.execute("open", { target: "https://totally-legit.example/login" })).result).toMatch(/already waiting/);
     expect(rt.pending).toHaveLength(1);
     expect(calls).toHaveLength(1);
 

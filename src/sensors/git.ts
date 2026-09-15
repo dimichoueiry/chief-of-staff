@@ -25,6 +25,11 @@ async function isDir(p: string): Promise<boolean> {
   }
 }
 
+/** The folders to look in for commits: the configured roots, plus every project's own path (wherever it lives). */
+export function activityRoots(roots: string[], projects: Project[]): string[] {
+  return [...new Set([...roots, ...projects.map((p) => p.path).filter((p): p is string => Boolean(p)).map(expandHome)])];
+}
+
 /** Every git repo that is a root itself or a direct child of a root, with its last commit time. */
 export async function scanActivity(roots: string[]): Promise<Activity[]> {
   const out: Activity[] = [];

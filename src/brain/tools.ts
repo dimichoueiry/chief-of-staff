@@ -19,7 +19,9 @@ import { Reminders } from "../core/reminders.js";
 import { readAccess, type Access, type AccessMode } from "../actions/access.js";
 import { AgentGrid, findSession, formatSessions, formatTranscript } from "../actions/agentgrid.js";
 import { openOrQueue, safeWebUrl, checkPath, macOpen, type Runner } from "../actions/open.js";
-import { queue, type Pending } from "../actions/pending.js";
+import { findBookmarks, formatBookmarks, readBookmarks, type BookmarkRead } from "../actions/bookmarks.js";
+import { isPending, queue, take, type ConfirmView, type Pending } from "../actions/pending.js";
+import { performPending } from "../actions/perform.js";
 import { classifyCommand, decide, formatResult, resolveCwd, runCommand, runVisible, tildePath, type CommandRequest, type Shell } from "../actions/terminal.js";
 import { findFolders, formatFolderSearch } from "../actions/folders.js";
 import { Shortcuts } from "../actions/shortcuts.js";
@@ -119,8 +121,8 @@ export const TOOLS: Record<string, ToolSpec> = {
     name: "open",
     description:
       "Open something on the user's Mac: Slate or a Slate board by name (\"slate\", \"slate board UI/UX\"), one of their shortcuts by name, " +
-      "a project's folder (optionally in an app such as Cursor or Terminal), an installed app, a web search (\"search for …\"), or a website. " +
-      "Web addresses you come up with are shown to the user to confirm before they open.",
+      "a project's folder (optionally in an app such as Cursor or Terminal), an installed app, one of their browser favorites by name " +
+      "(\"Campuswire from my UIUC favorites\", opened in the browser it's saved in), a web search (\"search for …\"), or a website (opens straight away).",
     parameters: {
       type: "object",
       properties: {
@@ -187,6 +189,22 @@ export const TOOLS: Record<string, ToolSpec> = {
       required: ["command"],
     },
   },
+  confirm_pending: {
+    name: "confirm_pending",
+    description:
+      "Carry out, or drop, what your last reply left waiting for their OK (a message to an agent, a command, a new agent, a web page), when their latest message answers it " +
+      "(\"yeah go ahead and send it\", \"no, leave it\"). Call it first, before any other tool, and decide only from what they said.",
+    parameters: {
+      type: "object",
+      properties: { decision: { type: "string", enum: ["yes", "no"], description: "yes to do it, no to drop it" } },
+      required: ["decision"],
+    },
+  },
+  find_bookmarks: {
+    name: "find_bookmarks",
+    description: "Search the user's browser favorites and bookmarks (Edge, Chrome, Brave, Arc) by name or folder, e.g. \"campuswire\" or \"UIUC\". To open one, use open with its name.",
+    parameters: { type: "object", properties: { query: s("Name or folder, as they said it") }, required: ["query"] },
+  },
   get_agents: {
     name: "get_agents",
     description:
@@ -251,7 +269,7 @@ export function toolsFor(intent: Intent): ToolSpec[] {
     "silence-check": [],
     ask: ALL,
     capture: [...WRITES, "get_project", "get_calendar", "find_folder"],
-    focus: ["get_project", "upsert_project", "get_git_log", "get_calendar", "open", "get_conversations", "find_folder", "run_command", "get_agents", "start_agent", "get_agent_output"],
+    focus: ["get_project", "upsert_project", "get_git_log", "get_calendar", "open", "get_conversations", "find_folder", "run_command", "get_agents", "start_agent", "get_agent_output", "confirm_pending"],
     wrap: ["get_project", "append_journal", "touch_project", "upsert_project", "get_git_log", "get_conversations"],
   };
   return names[intent].map((n) => TOOLS[n]);
@@ -277,6 +295,8 @@ export class ToolRuntime {
   readonly calls: ToolCall[] = [];
   /** Things the model asked to do that wait for the user's OK: web addresses, commands, agents. */
   readonly pending: Pending[] = [];
+  /** Actions carried out in this run (confirmed, or allowed to run on their own), so they aren't repeated. */
+  readonly done: { kind: string; detail: string }[] = [];
   readonly shortcuts: Shortcuts;
 
   constructor(
@@ -291,6 +311,11 @@ export class ToolRuntime {
       shell?: Shell;
       agentGrid?: AgentGrid;
       access?: () => Access;
+      /** What the previous reply left waiting for the user's OK (see confirm_pending). */
+      awaiting?: ConfirmView[];
+      /** Actions carried out recently in this conversation, so they aren't queued again. */
+      recentlyDone?: { kind: string; detail: string }[];
+      bookmarks?: () => Promise<BookmarkRead>;
     } = {},
   ) {
     this.shortcuts = new Shortcuts(config.selfhubDir);
@@ -408,13 +433,20 @@ export class ToolRuntime {
             shortcuts: await this.shortcuts.list(),
             projects: await this.ledger.read(),
             boards: this.actions.slate ?? (() => slateBoards()),
+            bookmarks: this.actions.bookmarks ?? (() => readBookmarks()),
           },
           this.actions.run ?? macOpen,
+          { confirmLinks: (this.actions.access ?? readAccess)().links !== "auto" },
         );
         if (r.status === "opened") return r.message;
         if (r.status === "confirm") {
+          const twice = this.repeated("open", r.pending.detail);
+          if (twice) {
+            take(r.pending.id);
+            return twice;
+          }
           this.pending.push(r.pending);
-          return `Not opened yet: the user sees a button to confirm opening ${r.pending.detail}. Tell them it's waiting for their OK.`;
+          return `Not opened yet: ask them "Should I open ${r.pending.detail}?". They can just say yes.`;
         }
         throw new Error(r.message + (r.candidates?.length ? `. Known: ${r.candidates.join(", ")}` : ""));
       }
@@ -460,15 +492,44 @@ export class ToolRuntime {
           visible: input.visible === true,
         };
         if (verdict === "confirm") {
-          this.pending.push(queue("command", req, {
-            label: command.length > 60 ? `${command.slice(0, 57)}…` : command,
-            detail: `$ ${command}\nin ${tildePath(req.cwd!)}${req.visible ? ", in a Terminal window" : ""}`,
-            verb: "Run",
-          }));
-          return `Not run yet (${reason}): the pill shows the command with a Run button, and they can also just say yes. Tell them in one short sentence what it will do.`;
+          const detail = `$ ${command}\nin ${tildePath(req.cwd!)}${req.visible ? ", in a Terminal window" : ""}`;
+          const twice = this.repeated("command", detail);
+          if (twice) return twice;
+          this.pending.push(queue("command", req, { label: command.length > 60 ? `${command.slice(0, 57)}…` : command, detail, verb: "Run" }));
+          return `Not run yet (${reason}). Ask them in one short sentence whether to do it, saying what it will do. They can just say yes.`;
         }
         if (req.visible) return runVisible(req, this.actions.run ?? macOpen);
         return formatResult(await runCommand(req, { shell: this.actions.shell }));
+      }
+      case "confirm_pending": {
+        if (this.calls.some((c) => c.name !== "confirm_pending")) {
+          throw new Error("confirm_pending has to come first in a reply, decided only from what they said. Nothing was done; ask them again.");
+        }
+        const waiting = (this.actions.awaiting ?? []).filter((v) => isPending(v.id));
+        if (!waiting.length) return "Nothing is waiting for their OK (it was already done, dropped, or it expired after 5 minutes).";
+        const yes = this.str(input, "decision", true) === "yes";
+        const lines: string[] = [];
+        for (const v of waiting) {
+          const p = take(v.id);
+          if (!p) continue;
+          if (!yes) {
+            lines.push(`Dropped, as they said: ${p.label}.`);
+            continue;
+          }
+          try {
+            const out = await performPending(p, { run: this.actions.run, shell: this.actions.shell, agentGrid: this.actions.agentGrid });
+            this.done.push({ kind: p.kind, detail: p.detail });
+            lines.push(`Done, as they said (already done: do not do it again): ${p.label}. Result: ${out}`);
+          } catch (err) {
+            lines.push(`They said yes, but it failed: ${p.label}: ${(err as Error).message}`);
+          }
+        }
+        return lines.join("\n");
+      }
+      case "find_bookmarks": {
+        const query = this.str(input, "query", true);
+        const read = await (this.actions.bookmarks ?? (() => readBookmarks()))();
+        return formatBookmarks(read, findBookmarks(read.bookmarks, query), query);
       }
       case "get_agents":
         this.agentsAllowed();
@@ -482,14 +543,18 @@ export class ToolRuntime {
         const engine = this.str(input, "engine") === "codex" ? "codex" : "claude";
         const job = { task, folder, engine, name: this.str(input, "name") || undefined, visible: input.visible === true } as const;
         if (mode === "ask") {
-          this.pending.push(queue("agent-start", job, {
-            label: `${engine} agent${job.name ? `: ${job.name}` : ""}`,
-            detail: `${engine} in ${folder ? tildePath(folder) : "~/Desktop (no project)"}${job.visible ? ", in a Terminal tab" : ""}\nTask: ${task}`,
-            verb: "Start agent",
-          }));
-          return "Not started yet: the pill shows the task with a Start agent button, and they can also just say yes. Tell them in one short sentence what the agent will do.";
+          const detail = `${engine} in ${folder ? tildePath(folder) : "~/Desktop (no project)"}${job.visible ? ", in a Terminal tab" : ""}\nTask: ${task}`;
+          const twice = this.repeated("agent-start", detail);
+          if (twice) return twice;
+          this.pending.push(queue("agent-start", job, { label: `${engine} agent${job.name ? `: ${job.name}` : ""}`, detail, verb: "Start agent" }));
+          return "Not started yet. Ask them in one short sentence whether to start it, saying what the agent will do. They can just say yes.";
         }
-        return this.grid().start(job);
+        const detail = `${engine} in ${folder ? tildePath(folder) : "~/Desktop (no project)"}${job.visible ? ", in a Terminal tab" : ""}\nTask: ${task}`;
+        const again = this.repeated("agent-start", detail);
+        if (again) return again;
+        const started = await this.grid().start(job);
+        this.done.push({ kind: "agent-start", detail });
+        return started;
       }
       case "get_agent_output": {
         this.agentsAllowed();
@@ -505,14 +570,17 @@ export class ToolRuntime {
         if ("error" in found) throw new Error(found.error);
         const message = this.str(input, "message", true);
         if (mode === "ask") {
-          this.pending.push(queue("agent-message", { sessionId: found.sessionId, title: found.title, message }, {
-            label: `message to ${found.title}`,
-            detail: `To ${found.title} (${found.sessionId.slice(0, 8)}):\n${message}`,
-            verb: "Send",
-          }));
-          return "Not sent yet: the pill shows the message with a Send button, and they can also just say yes.";
+          const detail = `To ${found.title} (${found.sessionId.slice(0, 8)}):\n${message}`;
+          const twice = this.repeated("agent-message", detail);
+          if (twice) return twice;
+          this.pending.push(queue("agent-message", { sessionId: found.sessionId, title: found.title, message }, { label: `message to ${found.title}`, detail, verb: "Send" }));
+          return `Not sent yet. Ask them "Should I send this to ${found.title}?" and read the message to them (word for word if it's short, otherwise its gist). They can just say yes.`;
         }
+        const detail = `To ${found.title} (${found.sessionId.slice(0, 8)}):\n${message}`;
+        const again = this.repeated("agent-message", detail);
+        if (again) return again;
         await grid.message(found.sessionId, message);
+        this.done.push({ kind: "agent-message", detail });
         return `Sent to ${found.title}.`;
       }
       case "get_git_log": {
@@ -528,6 +596,18 @@ export class ToolRuntime {
       default:
         throw new Error(`Unknown tool "${name}"`);
     }
+  }
+
+  /** Why not to queue this again, if it is already waiting or was just done; null when it's new. */
+  private repeated(kind: string, detail: string): string | null {
+    const same = (v: { kind: string; detail: string }) => v.kind === kind && v.detail === detail;
+    if (this.pending.some(same) || (this.actions.awaiting ?? []).some((v) => same(v) && isPending(v.id))) {
+      return "This exact thing is already waiting for their OK. Don't queue it again: if their latest message agrees, call confirm_pending; otherwise ask them once more.";
+    }
+    if ((this.actions.recentlyDone ?? []).some(same) || this.done.some(same)) {
+      return "This exact thing was already done a moment ago. Don't do it again unless they clearly ask for it to be repeated.";
+    }
+    return null;
   }
 
   private grid(): AgentGrid {

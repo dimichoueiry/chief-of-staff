@@ -174,9 +174,15 @@ searches Desktop, Documents, GitHub and the usual code folders for a close name 
 misheard is fine), picks the git repo that fits, and saves the project with its path in the same
 reply. It never asks you to type a path. `cos folders ml gorilla` shows what it would find.
 
-A web address the model comes up with on its own is never opened directly: the pill shows it
-with **Open** and **Cancel**. Only http(s) addresses open; files open only from your home folder,
-and never scripts or installers. `COS_SLATE_URL` points at a different Slate address if needed.
+Your browser favorites work too: "open Campuswire from my UIUC favorites" finds it in Edge, Chrome,
+Brave or Arc (any profile, misheard names included) and opens it in the browser it's saved in. macOS
+may block the app from reading another browser's data; it then says so, and turning on Chief of Staff
+under System Settings › Privacy & Security › Full Disk Access fixes it.
+
+Web pages open straight away, including ones the model looks up or builds the address for
+(`cos access links ask` makes those wait for an OK). Only http(s) addresses open; files open only
+from your home folder, and never scripts or installers. `COS_SLATE_URL` points at a different Slate
+address if needed.
 
 ## Terminal and coding agents
 
@@ -194,8 +200,11 @@ its own is decided by rules in the code, not by the model:
 | Risky | `rm`, `git push --force`, `kill`, reading `.env` or `~/.ssh`, `curl … \| sh` | waits for your OK | waits for your OK |
 | Never | `sudo`, erasing disks, deleting your home folder | refused | refused |
 
-When something waits, the pill shows the exact command with **Run** and **Cancel**, or you just
-say "yes" or "no". Only you can confirm; the model has no way to. API keys are stripped from the
+When something waits, it asks you out loud ("Should I send this to MLG-MAAC: …?") and the pill shows
+the exact command or message with a button. Answer however you like: "yeah, you can send that" and
+"no, leave it" are understood directly, and a mixed answer ("yes, but make it shorter") goes to the
+model, which may only act on what you said and only before doing anything else. The same thing is
+never queued twice or redone moments after it ran. API keys are stripped from the
 environment commands see, long output is saved in full under `~/.cos/terminal`, and every command
 is logged to `~/.cos/logs/terminal.log`. Long-running things (a dev server) open in a Terminal
 window you can watch.
