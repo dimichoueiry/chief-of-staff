@@ -1,78 +1,114 @@
-import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { createServer, type Server, type ServerResponse } from "node:http";
+import { mkdtemp, rm } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { AgentGrid, type AgentSession } from "../src/actions/agentgrid.js";
-import { AgentWatch, describeFinish, lastSaid, loadWatchState, saveWatchState, watchAgents, type AgentFinished } from "../src/actions/agentwatch.js";
+import { AgentGrid, SseParser, type AgentEvent } from "../src/actions/agentgrid.js";
+import { describeFinish, lastSaid, watchAgents, type AgentFinished } from "../src/actions/agentwatch.js";
 import { loadConfig } from "../src/config.js";
 import { createUiServer } from "../src/ui/server.js";
 import { makeTmpSelfhub } from "./helpers/tmp-selfhub.js";
 
 const home = homedir();
-const session = (over: Partial<AgentSession>): AgentSession => ({
-  sessionId: "aaaa1111-2222-3333", title: "Refactor auth", status: "working", project: "drawcal", cwd: `${home}/Desktop/drawcal`, engine: "claude", idleSeconds: 5, ...over,
+const event = (over: Partial<AgentEvent>): AgentEvent => ({
+  id: "run1-1", type: "status", sessionId: "aaaa1111-2222-3333", title: "Refactor auth", engine: "claude", cwd: `${home}/Desktop/drawcal`, project: "drawcal",
+  from: "working", to: "done", finished: true, at: "2026-09-15T18:40:12", ...over,
 });
 
-describe("AgentWatch", () => {
-  it("announces a session once when it stops working, whatever it settles into", () => {
-    const w = new AgentWatch();
-    expect(w.observe([session({})])).toEqual([]); // the first look only records
-    expect(w.observe([session({})])).toEqual([]);
-    expect(w.observe([session({ status: "done" })]).map((s) => s.status)).toEqual(["done"]);
-    expect(w.observe([session({ status: "done" })])).toEqual([]); // seen again: nothing new
-    expect(w.observe([session({ status: "done", idleSeconds: 900 })])).toEqual([]);
-    // Back to work and finished again is a second finish.
-    expect(w.observe([session({ status: "working" })])).toEqual([]);
-    expect(w.observe([session({ status: "blocked" })]).map((s) => s.status)).toEqual(["blocked"]);
-    expect(w.observe([session({ status: "working" })])).toEqual([]);
-    expect(w.observe([session({ status: "failed" })]).map((s) => s.status)).toEqual(["failed"]);
-  });
+const tick = (ms = 10) => new Promise((r) => setTimeout(r, ms));
+async function until(ok: () => boolean, ms = 3_000): Promise<void> {
+  for (let i = 0; i < ms / 10 && !ok(); i++) await tick();
+  expect(ok()).toBe(true);
+}
 
-  it("does not announce sessions that were never seen working, unknown statuses, or stale finishes", () => {
-    const w = new AgentWatch();
-    w.observe([session({ sessionId: "a", status: "working" }), session({ sessionId: "b", status: "idle" })]);
-    expect(w.observe([session({ sessionId: "a", status: "unknown" }), session({ sessionId: "b", status: "done" })])).toEqual([]);
-    expect(w.observe([session({ sessionId: "a", status: "done" })])).toEqual([]); // unknown → done: it wasn't seen working
-
-    const stale = new AgentWatch({ a: "working" });
-    expect(stale.observe([session({ sessionId: "a", status: "done", idleSeconds: 3 * 3600 })])).toEqual([]);
-    const restored = new AgentWatch({ a: "working" });
-    expect(restored.observe([session({ sessionId: "a", status: "done", idleSeconds: 60 })]).map((s) => s.sessionId)).toEqual(["a"]);
-  });
-
-  it("forgets sessions that are gone, and its state round-trips through a file", async () => {
-    const dir = await mkdtemp(join(tmpdir(), "cos-watch-"));
-    try {
-      const w = new AgentWatch();
-      w.observe([session({ sessionId: "a" }), session({ sessionId: "b", status: "done" })]);
-      w.observe([session({ sessionId: "a" })]);
-      expect(w.state).toEqual({ a: "working" });
-      const file = join(dir, "agent-watch.json");
-      saveWatchState(w.state, file);
-      expect(JSON.parse(await readFile(file, "utf8"))).toEqual({ a: "working" });
-      expect(loadWatchState(file)).toEqual({ a: "working" });
-      expect(loadWatchState(join(dir, "missing.json"))).toEqual({});
-    } finally {
-      await rm(dir, { recursive: true, force: true });
+/** A stand-in for Agent Grid with an event stream: token-gated, replaying by Last-Event-ID, dropped on demand. */
+function fakeAgentGrid(token = "tok") {
+  const log: AgentEvent[] = [];
+  const open = new Set<ServerResponse>();
+  const lastIds: string[] = [];
+  let transcripts = 0;
+  let streamRoute = true;
+  const server: Server = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://x");
+    const send = (status: number, data: unknown) => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify(data));
+    };
+    if (req.headers["x-agentgrid-token"] !== token) return send(403, { error: "Bad or missing token." });
+    if (url.pathname === "/api/events" && streamRoute) {
+      lastIds.push(String(req.headers["last-event-id"] ?? ""));
+      res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" });
+      res.write("retry: 3000\n: connected run1\n\n");
+      const after = String(req.headers["last-event-id"] ?? "");
+      const n = after.startsWith("run1-") ? Number(after.slice(5)) : 0;
+      for (const e of log) if (Number(e.id.slice(5)) > n) res.write(`id: ${e.id}\ndata: ${JSON.stringify(e)}\n\n`);
+      open.add(res);
+      res.on("close", () => open.delete(res));
+      return;
     }
+    if (url.pathname === "/api/transcript") {
+      transcripts++;
+      return send(200, { blocks: [{ kind: "user", text: "refactor" }, { kind: "assistant", text: "All done, tests pass." }] });
+    }
+    if (url.pathname === "/api/sessions") return send(200, { sessions: [] });
+    return send(404, { error: "No such route." });
+  });
+  return {
+    server,
+    lastIds,
+    get transcripts() {
+      return transcripts;
+    },
+    get connections() {
+      return open.size;
+    },
+    /** Something happened: streamed to every listener and kept for replay. */
+    emit(e: AgentEvent) {
+      log.push(e);
+      for (const res of open) res.write(`id: ${e.id}\ndata: ${JSON.stringify(e)}\n\n`);
+    },
+    ping() {
+      for (const res of open) res.write(": ping\n\n");
+    },
+    /** Agent Grid stopped: every stream ends. */
+    drop() {
+      for (const res of open) res.end();
+      open.clear();
+    },
+    /** An older Agent Grid without the route. */
+    withoutStream() {
+      streamRoute = false;
+    },
+  };
+}
+
+describe("SseParser", () => {
+  it("reassembles messages from chunks cut anywhere, skips comments, keeps the last id", () => {
+    const p = new SseParser();
+    expect(p.push("retry: 3000\n: connected\n\nid: r-1\nda")).toEqual([]);
+    expect(p.push('ta: {"a":1}\n\r\n')).toEqual([{ id: "r-1", event: undefined, data: '{"a":1}' }]);
+    expect(p.push("data: x\ndata: y\n\nevent: note\ndata:z\n\n")).toEqual([
+      { id: "r-1", event: undefined, data: "x\ny" },
+      { id: "r-1", event: "note", data: "z" },
+    ]);
+    expect(p.push(": ping\n\n\n")).toEqual([]);
   });
 });
 
 describe("describing a finish", () => {
   it("names the agent, where it ran, how it ended and its last words, cut to fit", () => {
-    const f: AgentFinished = { session: session({ status: "done" }), word: "done", lastSaid: "Moved the auth code into auth/ and all 42 tests pass." };
+    const f: AgentFinished = { event: event({}), word: "done", lastSaid: "Moved the auth code into auth/ and all 42 tests pass." };
     expect(describeFinish(f)).toEqual({
       title: "Refactor auth: done",
       body: "claude in ~/Desktop/drawcal. Moved the auth code into auth/ and all 42 tests pass.",
       line: 'Agent "Refactor auth" (claude in ~/Desktop/drawcal, id aaaa1111) finished: done. It last said: Moved the auth code into auth/ and all 42 tests pass.',
     });
-    const long = describeFinish({ session: session({ status: "blocked", engine: "codex", cwd: undefined, project: "mlg" }), word: "needs you", lastSaid: "x".repeat(400) });
+    const long = describeFinish({ event: event({ to: "blocked", engine: "codex", cwd: "", project: "mlg" }), word: "needs you", lastSaid: "x".repeat(400) });
     expect(long.title).toBe("Refactor auth: needs you");
     expect(long.body).toBe(`codex in mlg. ${"x".repeat(139)}…`);
     expect(long.line.endsWith(`It last said: ${"x".repeat(299)}…`)).toBe(true);
-    expect(describeFinish({ session: session({ status: "stopped", title: "", customName: "csv tool", cwd: undefined, project: undefined }), word: "stopped" })).toEqual({
+    expect(describeFinish({ event: event({ to: "stopped", title: "csv tool", cwd: "", project: "" }), word: "stopped" })).toEqual({
       title: "csv tool: stopped", body: "claude.", line: 'Agent "csv tool" (claude, id aaaa1111) finished: stopped.',
     });
   });
@@ -84,126 +120,165 @@ describe("describing a finish", () => {
   });
 });
 
-describe("watching Agent Grid", () => {
-  let dir: string;
-  let sessions: AgentSession[];
-  let reachable: boolean;
-  let transcripts: number;
-  const grid = () =>
-    new AgentGrid(
-      () => ({ base: "http://127.0.0.1:1", token: "t" }),
-      async (url) => {
-        if (!reachable) throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } });
-        const path = new URL(String(url)).pathname;
-        if (path === "/api/sessions") return Response.json({ sessions });
-        if (path === "/api/transcript") {
-          transcripts++;
-          return Response.json({ blocks: [{ kind: "user", text: "refactor" }, { kind: "assistant", text: "All done, tests pass." }] });
-        }
-        return Response.json({ error: "no" }, { status: 404 });
-      },
-    );
+describe("Agent Grid's event stream", () => {
+  let fake: ReturnType<typeof fakeAgentGrid>;
+  let base: string;
+  const grid = (token = "tok") => new AgentGrid(() => ({ base, token }));
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), "cos-watch-"));
-    sessions = [session({ sessionId: "a", status: "working" }), session({ sessionId: "b", title: "Quiz", status: "idle" })];
-    reachable = true;
-    transcripts = 0;
+    fake = fakeAgentGrid();
+    await new Promise<void>((r) => fake.server.listen(0, "127.0.0.1", r));
+    base = `http://127.0.0.1:${(fake.server.address() as AddressInfo).port}`;
   });
-  afterEach(() => rm(dir, { recursive: true, force: true }));
-
-  it("tells about each finish once, with the agent's last words, and remembers across restarts", async () => {
-    const told: string[] = [];
-    const file = join(dir, "agent-watch.json");
-    const w = watchAgents({ grid: grid(), everyMs: 60_000, stateFile: file, onFinished: (_f, said) => void told.push(said.line) });
-    await w.tick();
-    await w.tick();
-    expect(told).toEqual([]);
-    sessions[0] = session({ sessionId: "a", status: "done" });
-    await w.tick();
-    await w.tick();
-    expect(told).toEqual(['Agent "Refactor auth" (claude in ~/Desktop/drawcal, id a) finished: done. It last said: All done, tests pass.']);
-    expect(transcripts).toBe(1);
-    w.stop();
-
-    // The app restarts while an agent works, and it finishes before the next look: still told, once.
-    sessions[1] = session({ sessionId: "b", title: "Quiz", status: "working" });
-    await w.tick();
-    expect(loadWatchState(file)).toEqual({ a: "done", b: "working" });
-    const again = watchAgents({ grid: grid(), everyMs: 60_000, stateFile: file, onFinished: (_f, said) => void told.push(said.title) });
-    sessions[1] = session({ sessionId: "b", title: "Quiz", status: "blocked" });
-    await again.tick();
-    await again.tick();
-    expect(told.slice(1)).toEqual(["Quiz: needs you"]);
-    again.stop();
+  afterEach(async () => {
+    fake.drop();
+    fake.server.closeAllConnections(); // undici keeps idle sockets; closing would otherwise wait on them
+    await new Promise((r) => fake.server.close(r));
   });
 
-  it("waits quietly while Agent Grid is down or agents access is off, and never overlaps looks", async () => {
-    const told: string[] = [];
-    const logged: string[] = [];
-    let allowed = true;
-    const w = watchAgents({ grid: grid(), everyMs: 60_000, stateFile: null, allowed: () => allowed, log: (l) => logged.push(l), onFinished: (_f, said) => void told.push(said.title) });
-    await w.tick();
-    reachable = false;
-    await w.tick();
-    await w.tick();
-    expect(logged).toEqual(["agent watch paused: Agent Grid isn't running. Start it with `python3 -m agentgrid --web` from ~/AgentGrid."]);
-    reachable = true;
-    sessions[0] = session({ sessionId: "a", status: "done" });
-    allowed = false;
-    await w.tick();
-    expect(told).toEqual([]);
-    allowed = true;
-    await Promise.all([w.tick(), w.tick(), w.tick()]);
-    expect(logged.at(-1)).toBe("agent watch: Agent Grid is back");
-    expect(told).toEqual(["Refactor auth: done"]);
-    w.stop();
+  it("yields events as they come, ends when Agent Grid closes, and explains refusals", async () => {
+    const got: string[] = [];
+    let opened = false;
+    const reading = (async () => {
+      for await (const e of grid().events({ onOpen: () => (opened = true) })) got.push(`${e.id} ${e.title} ${e.from}→${e.to}`);
+    })();
+    await until(() => opened);
+    fake.emit(event({ id: "run1-1" }));
+    fake.ping();
+    fake.emit(event({ id: "run1-2", from: "done", to: "working", finished: false }));
+    await until(() => got.length === 2);
+    fake.drop();
+    await reading; // ended quietly
+    expect(got).toEqual(["run1-1 Refactor auth working→done", "run1-2 Refactor auth done→working"]);
+
+    // Reconnecting with the last id seen replays only what came after it.
+    const later: string[] = [];
+    fake.emit(event({ id: "run1-3", from: "working", to: "failed" }));
+    const again = (async () => {
+      for await (const e of grid().events({ lastEventId: "run1-1" })) later.push(e.id);
+    })();
+    await until(() => later.length === 2);
+    fake.drop();
+    await again;
+    expect(later).toEqual(["run1-2", "run1-3"]);
+    expect(fake.lastIds).toEqual(["", "run1-1"]);
+
+    await expect(grid("wrong").events().next()).rejects.toThrow(/rejected the key/);
+    fake.withoutStream();
+    await expect(grid().events().next()).rejects.toThrow(/has no event stream/);
   });
 
-  it("from the UI server: a notification and a line in the conversation, once, while it listens", async () => {
-    const { dir: selfhub, cleanup } = await makeTmpSelfhub();
-    const home = await mkdtemp(join(tmpdir(), "cos-home-"));
-    process.env.COS_HOME = home;
-    const told: string[] = [];
-    const stateFile = join(home, "agent-watch.json");
-    const server = createUiServer({
-      config: loadConfig({ COS_SELFHUB: selfhub, COS_PROJECT_ROOTS: "/nonexistent" }),
-      today: "2026-09-15", offline: true, allowSpeech: false, backgroundSummaries: false,
-      agentGrid: grid(),
-      agentWatch: {
-        everyMs: 20, stateFile,
-        notifier: async (title, body) => {
-          told.push(`${title} — ${body}`);
-          return true;
-        },
-      },
-    });
-    const until = async (ok: () => boolean) => {
-      for (let i = 0; i < 200 && !ok(); i++) await new Promise((r) => setTimeout(r, 10));
-      expect(ok()).toBe(true);
-    };
-    try {
-      await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
-      const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-      await until(() => existsSync(stateFile)); // the first look has recorded the fleet
-      sessions[0] = session({ sessionId: "a", status: "done" });
+  it("treats silence beyond the heartbeat as a drop, and stops at once when asked", async () => {
+    await expect(
+      (async () => {
+        for await (const _ of grid().events({ idleMs: 60 })) void _;
+      })(),
+    ).rejects.toThrow(/went quiet/);
+
+    const control = new AbortController();
+    let opened = false;
+    const reading = (async () => {
+      for await (const _ of grid().events({ signal: control.signal, onOpen: () => (opened = true) })) void _;
+    })();
+    await until(() => opened);
+    control.abort();
+    await reading; // no throw
+    await until(() => fake.connections === 0);
+  });
+
+  describe("watching for finishes", () => {
+    it("announces each finish once with the agent's last words, ignores the rest, and never repeats a replayed one", async () => {
+      const told: string[] = [];
+      const w = watchAgents({ grid: grid(), retryMs: 20, onFinished: (_f, said) => void told.push(said.line) });
+      await until(() => fake.connections === 1);
+      fake.emit(event({ id: "run1-1", from: "idle", to: "working", finished: false }));
+      fake.emit(event({ id: "run1-2" }));
+      fake.emit(event({ id: "run1-3", from: "working", to: "unknown", finished: false }));
       await until(() => told.length === 1);
-      await new Promise((r) => setTimeout(r, 120)); // several more looks
-      expect(told).toEqual(["Refactor auth: done — claude in ~/Desktop/drawcal. All done, tests pass."]);
-      const c = (await (await fetch(`${base}/api/conversation`)).json()) as { turns: { role: string; text: string }[] };
-      expect(c.turns.map((t) => [t.role, t.text])).toEqual([
-        ["event", 'Agent "Refactor auth" (claude in ~/Desktop/drawcal, id a) finished: done. It last said: All done, tests pass.'],
-      ]);
-      await new Promise<void>((r) => server.close(() => r()));
-      sessions[1] = session({ sessionId: "b", title: "Quiz", status: "working" });
-      await new Promise((r) => setTimeout(r, 80));
-      sessions[1] = session({ sessionId: "b", title: "Quiz", status: "done" });
-      await new Promise((r) => setTimeout(r, 80));
-      expect(told).toHaveLength(1); // closed: it stopped looking
-    } finally {
-      server.close();
-      delete process.env.COS_HOME;
-      await rm(home, { recursive: true, force: true });
-      await cleanup();
-    }
+      expect(told).toEqual(['Agent "Refactor auth" (claude in ~/Desktop/drawcal, id aaaa1111) finished: done. It last said: All done, tests pass.']);
+      expect(fake.transcripts).toBe(1);
+
+      // Agent Grid restarts: the stream drops, it reconnects from the last id, and a finish that landed meanwhile is told once.
+      fake.drop();
+      fake.emit(event({ id: "run1-4", title: "Quiz", to: "blocked" }));
+      await until(() => told.length === 2);
+      expect(told[1]).toMatch(/^Agent "Quiz" .* finished: needs you\./);
+      expect(fake.lastIds).toEqual(["", "run1-3"]);
+      await tick(50);
+      expect(told).toHaveLength(2);
+      w.stop();
+      await w.done;
+      await until(() => fake.connections === 0);
+    });
+
+    it("waits while Agent Grid is down, saying so once, and hangs up when agents access is off", async () => {
+      const logged: string[] = [];
+      let allowed = true;
+      const told: string[] = [];
+      const closed = createServer();
+      await new Promise<void>((r) => closed.listen(0, "127.0.0.1", r));
+      const gone = `http://127.0.0.1:${(closed.address() as AddressInfo).port}`;
+      await new Promise((r) => closed.close(r));
+      let where = gone;
+      const w = watchAgents({ grid: new AgentGrid(() => ({ base: where, token: "tok" })), retryMs: 20, allowed: () => allowed, log: (l) => logged.push(l), onFinished: (_f, said) => void told.push(said.title) });
+      await until(() => logged.length === 1);
+      await tick(60); // several more tries: no more lines
+      expect(logged).toEqual(["agent watch paused: Agent Grid isn't running. Start it with `python3 -m agentgrid --web` from ~/AgentGrid."]);
+      where = base; // it's back (the connection is read again on every try)
+      await until(() => fake.connections === 1);
+      expect(logged.at(-1)).toBe("agent watch: listening to Agent Grid again");
+
+      allowed = false;
+      fake.emit(event({ id: "run1-1" })); // arrives while off: not announced
+      await tick(30);
+      expect(told).toEqual([]);
+      w.stop();
+      await w.done;
+      await until(() => fake.connections === 0);
+      expect(fake.lastIds).toEqual([""]);
+    });
+
+    it("from the UI server: a notification and a line in the conversation, once, while it listens", async () => {
+      const { dir: selfhub, cleanup } = await makeTmpSelfhub();
+      const home = await mkdtemp(join(tmpdir(), "cos-home-"));
+      process.env.COS_HOME = home;
+      const told: string[] = [];
+      const server = createUiServer({
+        config: loadConfig({ COS_SELFHUB: selfhub, COS_PROJECT_ROOTS: "/nonexistent" }),
+        today: "2026-09-15", offline: true, allowSpeech: false, backgroundSummaries: false,
+        agentGrid: grid(),
+        agentWatch: {
+          retryMs: 20,
+          notifier: async (title, body) => {
+            told.push(`${title} — ${body}`);
+            return true;
+          },
+        },
+      });
+      try {
+        await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+        const port = (server.address() as AddressInfo).port;
+        await until(() => fake.connections === 1);
+        fake.emit(event({ id: "run1-1" }));
+        await until(() => told.length === 1);
+        fake.emit(event({ id: "run1-1" })); // the same event again: nothing
+        await tick(50);
+        expect(told).toEqual(["Refactor auth: done — claude in ~/Desktop/drawcal. All done, tests pass."]);
+        const c = (await (await fetch(`http://127.0.0.1:${port}/api/conversation`)).json()) as { turns: { role: string; text: string }[] };
+        expect(c.turns.map((t) => [t.role, t.text])).toEqual([
+          ["event", 'Agent "Refactor auth" (claude in ~/Desktop/drawcal, id aaaa1111) finished: done. It last said: All done, tests pass.'],
+        ]);
+        server.closeIdleConnections();
+        await new Promise<void>((r) => server.close(() => r()));
+        await until(() => fake.connections === 0);
+        fake.emit(event({ id: "run1-2", title: "Quiz" }));
+        await tick(50);
+        expect(told).toHaveLength(1); // closed: it stopped listening
+      } finally {
+        server.close();
+        delete process.env.COS_HOME;
+        await rm(home, { recursive: true, force: true });
+        await cleanup();
+      }
+    });
   });
 });

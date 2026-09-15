@@ -91,10 +91,10 @@ export interface UiOptions {
   modelTester?: (spec: ModelSpec) => Promise<{ ms: number; servedBy: string }>;
   /**
    * Tell them when an Agent Grid agent finishes: a notification, and a line in the conversation so the
-   * assistant knows too. Agent Grid is polled while the server listens; `cos ui` turns this on. Tests
-   * pass a fake Agent Grid and notifier, or leave it out.
+   * assistant knows too. Agent Grid's event stream is listened to while the server listens; `cos ui`
+   * turns this on. Tests pass a fake Agent Grid and notifier, or leave it out.
    */
-  agentWatch?: { everyMs?: number; stateFile?: string | null; notifier?: (title: string, body: string) => Promise<boolean> };
+  agentWatch?: { notifier?: (title: string, body: string) => Promise<boolean>; retryMs?: number };
 }
 
 /** How long a finished action counts as "just done", so the same one isn't queued again. */
@@ -718,8 +718,7 @@ export function createUiServer(o: UiOptions): Server {
     server.on("listening", () => {
       watcher = watchAgents({
         grid: o.agentGrid ?? new AgentGrid(),
-        everyMs: w.everyMs,
-        stateFile: w.stateFile,
+        retryMs: w.retryMs,
         allowed: () => access().agents !== "off",
         log: Log,
         onFinished: async (_f, said) => {
