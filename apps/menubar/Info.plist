@@ -13,7 +13,7 @@
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Chief of Staff listens when you double-tap Fn so you can talk to it.</string>
+  <string>Chief of Staff listens when you double-tap Control so you can talk to it.</string>
   <key>NSSpeechRecognitionUsageDescription</key>
   <string>Chief of Staff turns what you say into a question or a note.</string>
   <key>NSCalendarsFullAccessUsageDescription</key>

@@ -144,14 +144,46 @@ function markStale() {
   if (offline && root.dataset.view !== "pill") loadBrief(true);
 }
 
+/** Speak, and resolve true only if it played to the end (not stopped, dismissed or talked over). */
 async function speakText(text) {
-  if (!text) return;
+  if (!text) return false;
   setState("speaking", "Reading it to you…");
+  let finished = false;
   try {
-    await post("/api/speak", { text });
+    const r = await post("/api/speak", { text });
+    finished = !r.stopped && !r.error && pill.dataset.state === "speaking";
+  } catch {
+    /* no voice this time */
   } finally {
     if (pill.dataset.state === "speaking") setState("idle");
   }
+  return finished;
+}
+
+// ---------- hands-free follow-ups ----------
+// After a spoken reply the mic opens again for the answer. It closes if nothing is said
+// in FOLLOW_UP_WAIT_MS, on Esc, or when the reply is only "thanks" / "that's all".
+const FOLLOW_UP_WAIT_MS = 8000;
+// The whole reply must be a sign-off. A bare "ok" or "perfect" can mean yes, so those only count before one.
+const CLOSER = String.raw`(?:(?:no,?\s*)?thanks?(?: you)?(?: so much)?|thank you|that(?:['’]?s| is) (?:all|it)|never ?mind|nothing(?: else)?|stop|bye|goodbye|all good|i['’]?m good|we['’]?re (?:done|good))`;
+const DONE_TALKING = new RegExp(String.raw`^(?:(?:ok(?:ay)?|great|perfect|cool|got it)[,.!]?\s+)?${CLOSER}(?:[,.!]?\s*(?:and\s+)?${CLOSER})*(?:\s+for now)?[.!]*$`, "i");
+let followUp = false;
+let followUpTimer = null;
+
+function listenForReply() {
+  followUp = true;
+  // A short gap so the mic doesn't catch the end of the voice; Esc or typing in the gap wins.
+  followUpTimer = setTimeout(() => {
+    if (!followUp || pill.dataset.state !== "idle" || input.value) return endFollowUp();
+    if (SHELL) toShell({ type: "listen" });
+    else browserListen();
+  }, 300);
+}
+
+function endFollowUp() {
+  followUp = false;
+  clearTimeout(followUpTimer);
+  followUpTimer = null;
 }
 
 async function stopSpeaking() {
@@ -383,14 +415,21 @@ async function send(body, thinking, fromVoice = false) {
   if (r.changes) markStale();
   busy = false;
   setState("idle");
-  // Spoken questions get spoken replies; typed ones stay quiet unless you press read aloud.
-  if (fromVoice && r.text) await speakText(r.text);
+  // Spoken questions get spoken replies, then the mic reopens for the answer.
+  // Typed ones stay quiet unless you press read aloud. Opening something ends the exchange.
+  if (fromVoice && r.text && (await speakText(r.text)) && !["action", "confirm"].includes(r.kind)) listenForReply();
 }
 
 async function submit(text, fromVoice = false) {
   const t = text.trim();
   if (!t) {
     setState("idle");
+    return;
+  }
+  if (fromVoice && DONE_TALKING.test(t)) {
+    input.value = "";
+    setState("idle");
+    toShell({ type: "hide" });
     return;
   }
   input.value = "";
@@ -422,15 +461,19 @@ function browserListen() {
     for (const res of e.results) res.isFinal ? (finalText += res[0].transcript) : (interim += res[0].transcript);
     status.textContent = `“${finalText || interim}”`;
   };
+  // The browser ends recognition by itself after a silence, so follow-ups need no timer here.
   rec.onend = () => {
     rec = null;
+    endFollowUp();
     submit(finalText, true);
   };
   rec.onerror = () => {
     rec = null;
+    endFollowUp();
     setState("idle");
   };
-  setState("listening", "Listening…");
+  if (pill.dataset.state === "speaking") post("/api/speak/stop", {});
+  setState("listening", followUp ? "Your turn…" : "Listening…");
   rec.start();
 }
 
@@ -455,17 +498,33 @@ window.cosShell = {
     input.focus();
   },
   listening(on) {
-    if (on) setState("listening", "Listening…");
-    else if (pill.dataset.state === "listening") setState("idle");
+    if (!on) {
+      endFollowUp();
+      if (pill.dataset.state === "listening") setState("idle");
+      return;
+    }
+    // Talking over a reply stops it, so the mic doesn't hear the voice.
+    if (pill.dataset.state === "speaking") post("/api/speak/stop", {});
+    setState("listening", followUp ? "Your turn…" : "Listening…");
+    if (followUp) {
+      clearTimeout(followUpTimer);
+      followUpTimer = setTimeout(() => {
+        if (followUp && pill.dataset.state === "listening") toShell({ type: "stopListen" });
+      }, FOLLOW_UP_WAIT_MS);
+    }
   },
   transcript(text, final) {
+    // Once they start talking, the shell's pause detection decides when they're done.
+    if (text.trim()) clearTimeout(followUpTimer);
     if (!final) {
       status.textContent = `“${text}”`;
       return;
     }
+    endFollowUp();
     submit(text, true);
   },
   status(text) {
+    endFollowUp();
     setState("idle", text);
     setTimeout(() => {
       if (pill.dataset.state === "idle" && status.textContent === text) status.textContent = "";
@@ -479,6 +538,7 @@ window.cosShell = {
   },
   /** Hide for now; the conversation stays and is there next time. */
   dismiss() {
+    endFollowUp();
     if (pill.dataset.state === "speaking") post("/api/speak/stop", {});
     input.value = "";
     setState("idle");
