@@ -290,6 +290,29 @@ const LIST_CHATS = /^(?:please\s+)?(?:show|open|list|see)\s+(?:me\s+)?(?:my\s+|t
 const SWITCH_CHAT = /^(?:please\s+)?(?:(?:go|switch|jump|move|get)\s+(?:back\s+)?to|back to|open|continue|resume|pull up|bring up)\s+(?:the\s+|my\s+|our\s+)?(?:(?:chat|conversation|thread)\s+(?:about|on|for|called|named|where)\s+(.+?)|(.+?)\s+(?:chat|conversation|thread))[.!?]*$/i;
 let chatHidden = localStorage.getItem("cos.chatHidden") === "1";
 
+// ---------- compact: the pill as a small, see-through mic ----------
+// Kept across summons. Typing still works: the text field keeps focus while compact, so starting to type
+// (⌥Space, then type) opens the full bar for this time; it's compact again the next time the pill is summoned.
+const COMPACT_PILL = /^(?:please\s+)?(?:(?:(?:switch to|go|use)\s+)?(?:compact|mic[ -]only)(?:\s+(?:mode|view|pill|bar))?|make (?:it|the (?:pill|bar)) (?:smaller|compact|mic[ -]only))[.!]*$/i;
+const FULL_PILL = /^(?:please\s+)?(?:(?:(?:switch to|go|use)\s+)?(?:full|typing|expanded|big)\s+(?:mode|view|pill|bar)|expand(?:\s+(?:the\s+)?(?:pill|bar))?)[.!]*$/i;
+let pillCompact = localStorage.getItem("cos.pillCompact") === "1";
+let typingOpen = false;
+
+function setPillCompact(compact) {
+  pillCompact = compact;
+  typingOpen = false;
+  localStorage.setItem("cos.pillCompact", compact ? "1" : "0");
+  applyPillSize();
+}
+
+function applyPillSize() {
+  const compact = pillCompact && !typingOpen;
+  root.dataset.pill = compact ? "compact" : "full";
+  const size = $("pill-size");
+  size.title = compact ? "Expand to type" : "Compact: just the mic";
+  size.setAttribute("aria-label", size.title);
+}
+
 function setChatHidden(hidden) {
   chatHidden = hidden;
   localStorage.setItem("cos.chatHidden", hidden ? "1" : "0");
@@ -632,6 +655,12 @@ async function submit(text, fromVoice = false) {
     setState("idle");
     return;
   }
+  if (COMPACT_PILL.test(t) || FULL_PILL.test(t)) {
+    input.value = "";
+    setPillCompact(COMPACT_PILL.test(t));
+    setState("idle");
+    return;
+  }
   if (HIDE_CHAT.test(t) || SHOW_CHAT.test(t)) {
     input.value = "";
     setChatHidden(HIDE_CHAT.test(t));
@@ -780,6 +809,10 @@ window.cosShell = {
   /** Hide for now; the conversation stays and is there next time. */
   dismiss() {
     endFollowUp();
+    if (typingOpen) {
+      typingOpen = false;
+      applyPillSize();
+    }
     if (pill.dataset.state === "speaking") post("/api/speak/stop", {});
     input.value = "";
     setState("idle");
@@ -817,6 +850,18 @@ $("chats-filter").addEventListener("keydown", async (e) => {
   }
 });
 $("hide-chat").addEventListener("click", () => setChatHidden(true));
+$("pill-size").addEventListener("click", () => {
+  const expand = root.dataset.pill === "compact";
+  setPillCompact(!expand);
+  if (expand) input.focus();
+});
+// Typing while compact opens the full bar, with what's been typed so far.
+input.addEventListener("input", () => {
+  if (!pillCompact || typingOpen || !input.value) return;
+  typingOpen = true;
+  applyPillSize();
+});
+applyPillSize();
 $("show-chat").addEventListener("click", () => ($("show-chat").dataset.action === "list" ? openChats() : setChatHidden(false)));
 setChatHidden(chatHidden);
 $("mode").addEventListener("click", () => {
