@@ -81,9 +81,21 @@ npm run cos -- menubar install   # builds ~/Applications/Chief of Staff.app, ope
 - The ✦ menubar icon opens today's brief, focus on a project, the model picker, read aloud, and rebuild.
   If macOS hides the icon beside the notch, press ⌥Space and click the ✦ inside the pill: same menu.
 
-First run asks for three permissions: Accessibility (to see the Control key from any app),
-Microphone and Speech Recognition (to listen, on-device).
-Rebuilding the app changes its signature, so macOS may ask for these again.
+When it opens, it checks five macOS permissions and walks you through any that are off, one at a time:
+
+- **Accessibility**: double-tap Control from any app.
+- **Microphone** and **Speech Recognition**: listening, on-device.
+- **Screen & System Audio Recording**: "look at this".
+- **Full Disk Access**: opening your browser favorites. macOS has no prompt for this one, so setup opens
+  the list and shows the app in Finder to drag in.
+
+✦ › **Permissions** shows each with a check; click one that's off to set it up. Saying "open Full Disk
+Access" (or "Screen Recording", "Accessibility"…) opens that exact page.
+
+macOS ties these to the exact build of the app. After a rebuild the old switches still show "on" but do
+nothing, so `cos menubar build` clears them when the signature changes, and the app asks again when it
+opens. If a switch is on and the feature still says it's blocked, remove Chief of Staff from that list
+with −, add it back with +, and reopen the app.
 
 ### It remembers the conversation
 
@@ -135,7 +147,7 @@ permission prompt it may never show.
 
 After code changes, `npm run build && npm run cos -- menubar refresh` updates that copy and
 restarts the app without rebuilding it, so macOS permissions stay granted. Only Swift changes
-need `npm run cos -- menubar build`.
+need `npm run cos -- menubar build`, and that means going through the permissions again.
 
 Keys are read from `~/.cos/.env` by everything. Edit the project's `.env` if you prefer: it's
 copied there whenever it's newer, the next time any `cos` command runs from the project folder
@@ -179,9 +191,9 @@ misheard is fine), picks the git repo that fits, and saves the project with its 
 reply. It never asks you to type a path. `cos folders ml gorilla` shows what it would find.
 
 Your browser favorites work too: "open Campuswire from my UIUC favorites" finds it in Edge, Chrome,
-Brave or Arc (any profile, misheard names included) and opens it in the browser it's saved in. macOS
-may block the app from reading another browser's data; it then says so, and turning on Chief of Staff
-under System Settings › Privacy & Security › Full Disk Access fixes it.
+Brave or Arc (any profile, misheard names included) and opens it in the browser it's saved in. Reading
+Edge, Chrome and Brave needs Full Disk Access, which is part of the app's setup; without it, it says so
+and can open that page for you.
 
 Web pages open straight away, including ones the model looks up or builds the address for
 (`cos access links ask` makes those wait for an OK). Only http(s) addresses open; files open only
@@ -199,8 +211,8 @@ take one itself (`look_at_screen`). Follow-ups keep working by voice like any ot
 - Screenshots are never saved: the image goes to the model with that one message and is deleted.
   The conversation only records that you shared your screen.
 - Needs a model that takes images (gpt-5.4-mini, Claude Sonnet/Opus via OpenRouter do).
-- macOS permission: **Screen & System Audio Recording** for Chief of Staff. The first "look at this"
-  shows the prompt; `cos screen` says whether it's on. `cos access screen off` turns looking off.
+- macOS permission: **Screen & System Audio Recording** for Chief of Staff, part of the app's setup.
+  `cos screen` says whether it's on. `cos access screen off` turns looking off.
 
 ## Terminal and coding agents
 

@@ -17,6 +17,7 @@ export const APP_NAME = "Chief of Staff";
 export const APP_PATH = join(homedir(), "Applications", `${APP_NAME}.app`);
 export const SHELL_CONFIG = join(homedir(), ".cos", "menubar.json");
 export const LOGIN_LABEL = "com.chief-of-staff.menubar";
+export const BUNDLE_ID = "com.chief-of-staff.menubar";
 
 export interface BuildOptions {
   repoRoot: string;
@@ -48,6 +49,7 @@ export async function buildMenubar(o: BuildOptions): Promise<string> {
   const binary = join(stdout.trim(), "ChiefOfStaff");
 
   log(`assembling ${APP_PATH}`);
+  const before = await signature(APP_PATH);
   const contents = join(APP_PATH, "Contents");
   await rm(APP_PATH, { recursive: true, force: true });
   await mkdir(join(contents, "MacOS"), { recursive: true });
@@ -58,12 +60,33 @@ export async function buildMenubar(o: BuildOptions): Promise<string> {
   await writeFile(join(contents, "PkgInfo"), "APPL????");
   // Ad-hoc signature so Accessibility / Microphone grants stick to this bundle.
   await exec("codesign", ["--force", "--deep", "--sign", "-", APP_PATH]);
+  const after = await signature(APP_PATH);
+  if (before && after && before !== after) {
+    // macOS ties every permission to the exact build. After a rebuild the old switches still show "on"
+    // in System Settings but no longer apply, so clear them: the app then asks again, cleanly, when it opens.
+    try {
+      await exec("tccutil", ["reset", "All", BUNDLE_ID]);
+      log("new build: cleared the app's old macOS permissions (they stop applying after a rebuild); it asks again when it opens");
+    } catch (err) {
+      log(`couldn't clear the old permissions (${(err as Error).message.split("\n")[0]}); remove Chief of Staff from each Privacy & Security list and add it back`);
+    }
+  }
 
   await mkdir(join(homedir(), ".cos"), { recursive: true });
   // "repo" is where the app finds dist/cli/cos.js and runs it from: the deployed copy.
   await writeFile(SHELL_CONFIG, JSON.stringify({ node: o.node, repo: runtime.dir, port: o.port }, null, 2) + "\n");
   log(`wrote ${SHELL_CONFIG}`);
   return APP_PATH;
+}
+
+/** The app's code signature hash, which changes with every build that changes the code. */
+async function signature(app: string): Promise<string | null> {
+  try {
+    const { stderr } = await exec("codesign", ["-dv", "--verbose=4", app]); // CDHash only shows when verbose
+    return /CDHash=(\w+)/.exec(stderr)?.[1] ?? null;
+  } catch {
+    return null; // not built yet
+  }
 }
 
 export async function openMenubar(): Promise<void> {

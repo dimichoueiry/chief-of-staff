@@ -66,7 +66,7 @@ describe("browser favorites", () => {
     if (process.getuid?.() === 0) return;
     expect(r.blocked).toEqual(["Chrome"]);
     expect(formatBookmarks(r, [], "gmail")).toBe(
-      'No bookmark close to "gmail" among 3 bookmarks in Edge, Chrome.\nmacOS won\'t let Chief of Staff read Chrome\'s favorites. Turn on Chief of Staff in System Settings › Privacy & Security › Full Disk Access, then ask again.',
+      'No bookmark close to "gmail" among 3 bookmarks in Edge, Chrome.\nmacOS won\'t let Chief of Staff read Chrome\'s favorites. Turn on Chief of Staff in System Settings › Privacy & Security › Full Disk Access (say "open Full Disk Access" to go there), choose Quit & Reopen, then ask again. If Chief of Staff is already on there, that switch is from an older build: remove it with −, add it back with +, and reopen the app.',
     );
     const blockedOnly = await resolveOpen({ target: "open my gmail favorite", shortcuts: [], projects: [], bookmarks: async () => ({ bookmarks: [], blocked: ["Edge"], browsers: ["Edge"] }) });
     expect(blockedOnly).toMatchObject({ ok: false, reason: expect.stringMatching(/Full Disk Access/) });

@@ -3,7 +3,8 @@
  * (in Finder or an app like Cursor), an app, a web search, or a website.
  *
  * Safety rules, enforced here rather than trusted to the model:
- * - Only http(s) web addresses. No file:, javascript:, or app-specific schemes.
+ * - Only http(s) web addresses. No file:, javascript:, or app-specific schemes, except
+ *   System Settings' permission pages from a fixed list (permissions.ts).
  * - A web address the model came up with opens directly, unless links are set to ask
  *   (`cos access links ask`): then it becomes a pending action you confirm.
  * - Your favorites (Edge, Chrome, Brave, Arc) open in the browser they're saved in.
@@ -14,6 +15,7 @@
 import { execFile } from "node:child_process";
 import { blockedMessage, findBookmarks, type BookmarkRead } from "./bookmarks.js";
 import { queue, take, type Pending } from "./pending.js";
+import { PRIVACY_PANES, findPane, paneUrl } from "./permissions.js";
 import { stat } from "node:fs/promises";
 import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -28,7 +30,8 @@ const exec = promisify(execFile);
 export type OpenAction =
   | { kind: "url"; url: string; label: string; trusted: boolean; /** Open in this browser, e.g. the one a bookmark came from. */ app?: string }
   | { kind: "path"; path: string; app?: string; label: string }
-  | { kind: "app"; app: string; label: string };
+  | { kind: "app"; app: string; label: string }
+  | { kind: "settings"; anchor: string; label: string };
 
 // ---------- validation ----------
 
@@ -150,6 +153,9 @@ export async function resolveOpen(input: ResolveInput): Promise<Resolution> {
     if (saved) return saved;
   }
 
+  const pane = safeWebUrl(raw) ? null : findPane(raw);
+  if (pane) return { ok: true, action: { kind: "settings", anchor: pane.anchor, label: `System Settings › Privacy & Security › ${pane.name}` } };
+
   const shortcut = findShortcut(input.shortcuts, raw);
   if (shortcut) {
     const url = safeWebUrl(shortcut.target);
@@ -237,6 +243,12 @@ export async function performOpen(action: OpenAction, run: Runner = macOpen): Pr
     case "app": {
       if (!existsSync(action.app)) throw new Error("that app is no longer installed");
       await run(["-a", action.app]);
+      return `Opened ${action.label}.`;
+    }
+    case "settings": {
+      const pane = PRIVACY_PANES.find((p) => p.anchor === action.anchor);
+      if (!pane) throw new Error("that isn't a System Settings page it knows");
+      await run([paneUrl(pane)]);
       return `Opened ${action.label}.`;
     }
   }

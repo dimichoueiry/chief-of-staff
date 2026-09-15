@@ -8,7 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private let speech = SpeechListener()
   private let focusMenu = NSMenu()
   private let modelMenu = NSMenu()
-  private var talkKeyItem: NSMenuItem!
+  private let permissionsMenu = NSMenu()
+  private var permissionsItem: NSMenuItem!
   private var view = "pill"
   private var pageState = "idle"
   private var ready = false
@@ -34,11 +35,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     hotkeys.onDoubleTap = { [weak self] in self?.summon(listen: true) }
     hotkeys.onShortcut = { [weak self] in self?.summon(listen: false) }
     hotkeys.start()
-    let defaults = UserDefaults.standard
-    if !HotkeyMonitor.accessibilityTrusted(prompt: false) && !defaults.bool(forKey: "askedAccessibility") {
-      defaults.set(true, forKey: "askedAccessibility")
-      _ = HotkeyMonitor.accessibilityTrusted(prompt: true)
-    }
 
     speech.onPartial = { [weak self] text in self?.panel.eval("cosShell.transcript(\(Self.js(text)), false)") }
     speech.onFinal = { [weak self] text in self?.panel.eval("cosShell.transcript(\(Self.js(text)), true)") }
@@ -53,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       self.ready = true
       self.panel.load(URL(string: "\(config.baseURL)/?shell=1&mode=pill")!)
       Log.write("ready at \(config.baseURL)")
+      DispatchQueue.main.async { self.offerSetup() }
     }
   }
 
@@ -103,7 +100,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     menu.addItem(.separator())
     add(menu, "Rebuild the brief", #selector(rebuildBrief))
     add(menu, "Open in browser", #selector(openInBrowser))
-    talkKeyItem = add(menu, "Enable double-tap Control…", #selector(enableTalkKey))
+    permissionsItem = NSMenuItem(title: "Permissions", action: nil, keyEquivalent: "")
+    permissionsItem.submenu = permissionsMenu
+    menu.addItem(permissionsItem)
     menu.addItem(.separator())
     add(menu, "Quit Chief of Staff", #selector(quit), key: "q")
     statusItem.menu = menu
@@ -119,11 +118,92 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   func menuWillOpen(_ menu: NSMenu) {
     guard menu !== focusMenu, menu !== modelMenu else { return }
-    let trusted = HotkeyMonitor.accessibilityTrusted(prompt: false)
-    talkKeyItem.title = trusted ? "Double-tap Control to talk: on" : "Enable double-tap Control (Accessibility)…"
-    talkKeyItem.state = trusted ? .on : .off
+    refreshPermissionsMenu()
     refreshFocusMenu()
     refreshModelMenu()
+  }
+
+  // MARK: permissions
+
+  /// Each permission with a check when it's on. Clicking one that's off sets it up; one that's on opens its page.
+  private func refreshPermissionsMenu() {
+    permissionsMenu.removeAllItems()
+    let off = Permission.allCases.filter { !$0.granted }
+    permissionsItem.title = off.isEmpty ? "Permissions" : "Permissions (\(off.count) off)"
+    for p in Permission.allCases {
+      let item = NSMenuItem(title: "\(p.name): \(p.why)", action: #selector(fixPermission(_:)), keyEquivalent: "")
+      item.target = self
+      item.representedObject = p.rawValue
+      item.state = off.contains(p) ? .off : .on
+      permissionsMenu.addItem(item)
+    }
+    permissionsMenu.addItem(.separator())
+    let setup = NSMenuItem(title: "Set up what's off…", action: off.isEmpty ? nil : #selector(runSetup), keyEquivalent: "")
+    setup.target = self
+    setup.isEnabled = !off.isEmpty
+    permissionsMenu.addItem(setup)
+  }
+
+  @objc private func fixPermission(_ sender: NSMenuItem) {
+    guard let raw = sender.representedObject as? String, let p = Permission(rawValue: raw) else { return }
+    if p.granted { NSWorkspace.shared.open(p.settingsURL) } else { walk([p]) }
+  }
+
+  @objc private func runSetup() { walk(Permission.allCases.filter { !$0.granted }) }
+
+  /// Once per build (a rebuild clears macOS's switches): if anything is off, offer to go through it.
+  private func offerSetup() {
+    let defaults = UserDefaults.standard
+    guard defaults.string(forKey: "setupDoneForBuild") != Permission.build else { return }
+    let off = Permission.allCases.filter { !$0.granted }
+    guard !off.isEmpty else {
+      defaults.set(Permission.build, forKey: "setupDoneForBuild")
+      return
+    }
+    NSApp.activate(ignoringOtherApps: true)
+    let a = NSAlert()
+    a.messageText = off.count == 1 ? "One permission is off" : "\(off.count) permissions are off"
+    a.informativeText = off.map { "• \($0.name): \($0.why)" }.joined(separator: "\n")
+      + "\n\nSet up goes through them one at a time. They're also under ✦ › Permissions."
+    a.addButton(withTitle: "Set up")
+    a.addButton(withTitle: "Later")
+    let choice = a.runModal()
+    if choice == .alertFirstButtonReturn {
+      walk(off)
+    } else {
+      defaults.set(Permission.build, forKey: "setupDoneForBuild")
+    }
+  }
+
+  /// One permission at a time: macOS's prompt, or its page and a Next button once it's switched on.
+  private func walk(_ steps: [Permission]) {
+    guard let step = steps.first else {
+      let off = Permission.allCases.filter { !$0.granted }
+      // Anything still off (Screen Recording and Full Disk Access only count after a reopen) is offered again
+      // next launch; "Later" or "Stop" is what stops the asking for this build.
+      if off.isEmpty { UserDefaults.standard.set(Permission.build, forKey: "setupDoneForBuild") }
+      Log.write("permission setup finished; off: \(off.map(\.rawValue))")
+      return
+    }
+    let rest = Array(steps.dropFirst())
+    guard !step.granted else { walk(rest); return }
+    Log.write("permission setup: \(step.rawValue)")
+    step.request { [weak self] openedPage in
+      guard let self else { return }
+      guard openedPage else { self.walk(rest); return }
+      let a = NSAlert()
+      a.messageText = "Turn on \(step.name)"
+      a.informativeText = "For \(step.why). " + step.instructions
+      a.addButton(withTitle: rest.isEmpty ? "Done" : "Next")
+      a.addButton(withTitle: "Stop")
+      NSApp.activate(ignoringOtherApps: true)
+      if a.runModal() == .alertFirstButtonReturn {
+        self.walk(rest)
+      } else {
+        UserDefaults.standard.set(Permission.build, forKey: "setupDoneForBuild")
+        Log.write("permission setup stopped at \(step.rawValue)")
+      }
+    }
   }
 
   /// Presets from the server, a check on the model in use, dimmed when that provider has no key.
@@ -294,12 +374,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
 
   @objc private func openInBrowser() { NSWorkspace.shared.open(server.config.baseURL) }
-
-  @objc private func enableTalkKey() {
-    if HotkeyMonitor.accessibilityTrusted(prompt: true) {
-      alert("Double-tap Control is on.", "Tap Control twice, quickly, from any app to talk. Control used in a shortcut (⌃C, ⌃-click) never triggers it.")
-    }
-  }
 
   @objc private func quit() { NSApp.terminate(nil) }
 

@@ -823,7 +823,7 @@ menubar
     try {
       const app = await buildMenubar({ repoRoot: root, node: process.execPath, port: Number(o.port) || 4747, log: (l) => console.log(dim(l)) });
       console.log(`Built ${app}`);
-      console.log("Next: cos menubar open   (first run asks for Accessibility, Microphone and Speech permissions)");
+      console.log("Next: cos menubar open   (it walks you through any permission that's off: Accessibility, Microphone, Speech Recognition, Screen Recording, Full Disk Access)");
     } catch (err) {
       fail((err as Error).message);
     }

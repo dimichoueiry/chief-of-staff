@@ -12,6 +12,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { nameScore } from "./folders.js";
+import { STALE_SWITCH } from "./permissions.js";
 
 export interface Bookmark {
   name: string;
@@ -120,7 +121,7 @@ export function findBookmarks(bookmarks: Bookmark[], query: string, limit = 8): 
 }
 
 export function blockedMessage(blocked: string[]): string {
-  return `macOS won't let Chief of Staff read ${blocked.join(" and ")}'s favorites. Turn on Chief of Staff in System Settings › Privacy & Security › Full Disk Access, then ask again.`;
+  return `macOS won't let Chief of Staff read ${blocked.join(" and ")}'s favorites. Turn on Chief of Staff in System Settings › Privacy & Security › Full Disk Access (say "open Full Disk Access" to go there), choose Quit & Reopen, then ask again. ${STALE_SWITCH}`;
 }
 
 export function formatBookmarks(read: BookmarkRead, matches: Array<Bookmark & { score: number }>, query: string): string {

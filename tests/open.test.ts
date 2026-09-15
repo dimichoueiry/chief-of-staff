@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  checkPath, findApp, openOrQueue, performOpen, resolveOpen, safeWebUrl, takePending, type Runner,
+  checkPath, findApp, openOrQueue, performOpen, resolveOpen, safeWebUrl, takePending, type OpenAction, type Runner,
 } from "../src/actions/open.js";
 import { Shortcuts, findShortcut, parseShortcuts } from "../src/actions/shortcuts.js";
 import { fetchBoards, findBoards, slateBoardUrl, slateHomeUrl, type SlateBoard } from "../src/actions/slate.js";
@@ -100,6 +100,20 @@ describe("resolving what you asked for", () => {
     expect(await resolve("drawcal", "Cursor")).toMatchObject({ ok: true, action: { kind: "path", app: "Cursor", label: "drawcal in Cursor" } });
     expect(await resolve("nuonc_rag")).toMatchObject({ ok: false, reason: expect.stringMatching(/no path/) });
     expect(await resolve("zzzz unknown thing")).toMatchObject({ ok: false, candidates: expect.arrayContaining(["gmail", "drawcal", "Slate"]) });
+  });
+
+  it("opens a permission's own page in System Settings, and nothing else outside the web", async () => {
+    const fda = await resolve("open the full disk access setting");
+    expect(fda).toEqual({ ok: true, action: { kind: "settings", anchor: "Privacy_AllFiles", label: "System Settings › Privacy & Security › Full Disk Access" } });
+    expect(await resolve("screen recording settings")).toMatchObject({ ok: true, action: { anchor: "Privacy_ScreenCapture" } });
+    expect(await resolve("Accessibility")).toMatchObject({ ok: true, action: { anchor: "Privacy_Accessibility" } });
+    expect(await resolve("speech recognition permissions")).toMatchObject({ ok: true, action: { anchor: "Privacy_SpeechRecognition" } });
+
+    const { run, calls } = recorder();
+    expect(await performOpen((fda as { action: OpenAction }).action, run)).toBe("Opened System Settings › Privacy & Security › Full Disk Access.");
+    expect(calls).toEqual([["x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"]]);
+    await expect(performOpen({ kind: "settings", anchor: "Privacy_AllFiles&evil", label: "x" }, run)).rejects.toThrow(/isn't a System Settings page/);
+    expect(calls).toHaveLength(1);
   });
 
   it("ranks boards: exact, then prefix, then words; ties by most recent", () => {

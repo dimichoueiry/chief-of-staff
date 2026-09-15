@@ -11,6 +11,7 @@ import { mkdir, readFile, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { STALE_SWITCH } from "../actions/permissions.js";
 import { cosHome } from "../util/home.js";
 
 const exec = promisify(execFile);
@@ -42,8 +43,7 @@ export class ScreenPermissionError extends Error {
   }
 }
 
-export const SCREEN_PERMISSION_HELP =
-  "I can't see your screen yet. Turn on Chief of Staff in System Settings › Privacy & Security › Screen & System Audio Recording, then ask me again.";
+export const SCREEN_PERMISSION_HELP = `I can't see your screen yet. Turn on Chief of Staff in System Settings › Privacy & Security › Screen & System Audio Recording (say "open Screen Recording settings" to go there), then ask me again. ${STALE_SWITCH}`;
 
 /** What someone says when they want it to look: "look at this", "what am I looking at?", "can you see my screen?", "what does this say?". */
 export const LOOK_REQUEST =
