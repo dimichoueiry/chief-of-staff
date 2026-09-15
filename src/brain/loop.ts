@@ -18,6 +18,7 @@ import { PERSONA } from "./persona.js";
 import { DEFAULT_MESSAGES, loadPrompt } from "./prompts.js";
 import { BRIEF_SCHEMA, type Brief } from "./schema.js";
 import { ToolRuntime, toolsFor, type ToolCall } from "./tools.js";
+import type { PendingOpen } from "../actions/open.js";
 
 export interface RunOptions {
   config: Config;
@@ -45,6 +46,8 @@ export interface RunResult {
   stopReason: string;
   /** provider:model that handled the run. */
   model: string;
+  /** Things the model wants to open that need the user's OK. */
+  pendingOpens: PendingOpen[];
 }
 
 export class RefusedError extends Error {
@@ -143,5 +146,6 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
     turns,
     stopReason: last.stop,
     model: formatSpec(spec),
+    pendingOpens: runtime.pendingOpens,
   };
 }

@@ -26,6 +26,9 @@ import { eventsInRange } from "../sensors/calendar.js";
 import { applyActivity, scanActivity } from "../sensors/git.js";
 import { addDays, todayISO } from "../util/dates.js";
 import { reloadHomeEnv } from "../util/env.js";
+import { macOpen, openOrQueue, performOpen, takePending, type PendingOpen, type Runner } from "../actions/open.js";
+import { Shortcuts } from "../actions/shortcuts.js";
+import { slateBoards, type SlateBoard } from "../actions/slate.js";
 import { speak, stopSpeaking } from "../voice/tts.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -48,7 +51,15 @@ export interface UiOptions {
   offline?: boolean;
   /** Set to false in tests so nothing is spoken. */
   allowSpeech?: boolean;
+  /** Replace `open` and the Slate board list (tests). */
+  openRunner?: Runner;
+  slateLoader?: () => Promise<{ boards: SlateBoard[]; live: boolean; reason?: string }>;
 }
+
+/** "open slate", "pull up my gmail", "launch cursor", "search for …": handled without a model. */
+const OPEN_SHAPE = /^(?:(?:please\s+)?(?:open|launch|pull up|bring up|go to|show me)\s+.+|(?:search(?: the web| google)?(?: for)?|google|look up)\s+.+)$/i;
+
+const confirmView = (p: PendingOpen) => ({ id: p.id, label: p.action.label, url: p.action.kind === "url" ? p.action.url : null });
 
 /** Sentences the offline Scribe can file without a model. */
 const CAPTURE_SHAPE = /^(remind|starting|start|new project|park|kill|done with|finished|touched|worked on|today i|note:|.+\s+every\s+|.+\s+next\s*:)/i;
@@ -189,6 +200,25 @@ export function createUiServer(o: UiOptions): Server {
           return json(res, 200, { kind: "focus", project: p.name, text: r.text, model: r.model, changes: changes(r.toolCalls) });
         }
 
+        if (mode !== "capture" && OPEN_SHAPE.test(text)) {
+          const opened = await openOrQueue(
+            {
+              target: text.replace(/^please\s+/i, "").replace(/^(?:pull up|bring up|show me)\s+/i, "open "),
+              shortcuts: await new Shortcuts(config.selfhubDir).list(),
+              projects: await new Ledger(config.selfhubDir).read(),
+              boards: o.slateLoader ?? (() => slateBoards()),
+            },
+            o.openRunner ?? macOpen,
+          );
+          if (opened.status === "opened") return json(res, 200, { kind: "action", text: opened.message, model: "rules" });
+          if (opened.status === "confirm") return json(res, 200, { kind: "confirm", text: opened.message, confirm: [confirmView(opened.pending)], model: "rules" });
+          // Not something the rules know: let the model try (it has the same open tool), or explain.
+          if (!ready("ask")) {
+            const known = opened.candidates?.length ? `\nI know: ${opened.candidates.slice(0, 10).join(", ")}` : "";
+            return json(res, 200, { kind: "answer", text: `Couldn't open that: ${opened.message}.${known}`, model: "rules" });
+          }
+        }
+
         const isCapture = mode === "capture" || (mode === "auto" && CAPTURE_SHAPE.test(text));
         const intent: ModelIntent = isCapture ? "capture" : "ask";
         if (isCapture && !ready("capture")) {
@@ -197,7 +227,24 @@ export function createUiServer(o: UiOptions): Server {
         }
         if (!ready(intent)) return json(res, 200, { kind: "answer", text: NO_MODEL });
         const r = await runIntent({ config, intent, message: text, today: today(), modelFlag: o.modelFlag });
-        return json(res, 200, { kind: isCapture ? "capture" : "answer", text: r.text, model: r.model, changes: changes(r.toolCalls) });
+        return json(res, 200, {
+          kind: isCapture ? "capture" : "answer",
+          text: r.text,
+          model: r.model,
+          changes: changes(r.toolCalls),
+          confirm: r.pendingOpens.map(confirmView),
+        });
+      }
+      case "POST /api/actions/confirm": {
+        const b = await body(req);
+        const p = takePending(String(b.id ?? ""));
+        if (!p) return json(res, 410, { error: "That request expired. Ask again." });
+        if (b.cancel === true) return json(res, 200, { ok: true, text: "Cancelled." });
+        try {
+          return json(res, 200, { ok: true, text: await performOpen(p.action, o.openRunner ?? macOpen) });
+        } catch (err) {
+          return json(res, 422, { error: (err as Error).message });
+        }
       }
       case "POST /api/wrap": {
         const b = await body(req);

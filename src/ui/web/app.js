@@ -159,7 +159,26 @@ async function stopSpeaking() {
   setState("idle");
 }
 
+function showConfirm(items) {
+  const box = $("answer-actions");
+  box.replaceChildren();
+  box.hidden = !items || !items.length;
+  for (const item of items || []) {
+    if (item.url) box.append(el("div", { class: "url" }, item.url));
+    const decide = async (cancel) => {
+      for (const b of box.querySelectorAll("button")) b.disabled = true;
+      const r = await post("/api/actions/confirm", { id: item.id, cancel });
+      box.replaceChildren(el("div", { class: "url" }, r.text || r.error || ""));
+    };
+    box.append(
+      el("button", { class: "chip chip-keep", onclick: () => decide(false) }, `Open ${item.label.length > 40 ? "link" : item.label}`),
+      el("button", { class: "chip", onclick: () => decide(true) }, "Cancel"),
+    );
+  }
+}
+
 function showAnswer(title, text, model = "") {
+  showConfirm([]);
   $("answer").hidden = false;
   $("answer-title").textContent = title;
   $("answer-model").textContent = model ? `· ${model}` : "";
@@ -187,11 +206,13 @@ async function submit(text, fromVoice = false) {
     setState("idle");
     return;
   }
-  showAnswer(r.kind === "capture" ? "Filed" : "Chief of staff", r.text || r.error || "", r.model);
+  const titles = { capture: "Filed", action: "Done", confirm: "Confirm" };
+  showAnswer(titles[r.kind] || "Chief of staff", r.text || r.error || "", r.model);
+  showConfirm(r.confirm);
   if (r.kind === "capture") markStale();
   setState("idle");
   // Spoken questions get spoken answers; typed ones stay quiet unless you press read aloud.
-  if (fromVoice && r.kind !== "capture" && r.text) await speakText(r.text);
+  if (fromVoice && r.kind === "answer" && r.text) await speakText(r.text);
 }
 
 async function runFocus(project) {

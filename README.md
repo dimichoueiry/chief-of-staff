@@ -113,6 +113,22 @@ cos voice provider say            # force the Mac voice (auto | openai | say)
 Settings are saved in `~/.cos/voice.json` and apply to the next thing it says, including in the menubar app.
 Listening still uses Apple's on-device recogniser; it needs no key.
 
+## Opening things
+
+Say or type "open …" in the pill (or run `cos open …`). These open instantly, with no model needed:
+
+- `open slate`, `open slate board chief of staff ui`, `open the build blueprint board on slate`.
+  Board names are looked up through Slate's local bridge and remembered for when no Slate tab is open.
+  `cos slate` lists the names it knows.
+- Your shortcuts: `open gmail`, `open drawcal repo` (`cos shortcuts add gmail https://mail.google.com`).
+  They live in `~/selfhub/links/shortcuts.md`.
+- Projects with a `path:` in the ledger: `open drawcal`, or `cos open drawcal --app Cursor`.
+- Installed apps (`open calendar`) and searches (`search for tauri menubar`).
+
+A web address the model comes up with on its own is never opened directly: the pill shows it
+with **Open** and **Cancel**. Only http(s) addresses open; files open only from your home folder,
+and never scripts or installers. `COS_SLATE_URL` points at a different Slate address if needed.
+
 ## Models and providers
 
 The brain is model-agnostic. Add a key for any provider you use, then pick models whenever

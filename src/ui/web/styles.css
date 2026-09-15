@@ -94,6 +94,8 @@ body {
 .answer-head .spark { color: var(--accent); }
 .answer-head .model { color: var(--muted); font-weight: 400; font-size: 12px; font-family: var(--mono); }
 .answer-head .chip { margin-left: auto; }
+.answer-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.answer-actions .url { flex-basis: 100%; color: var(--muted); font: 12px var(--mono); word-break: break-all; }
 .answer pre { margin: 0; white-space: pre-wrap; font: inherit; color: #dfe3ea; }
 
 /* ---------- the pill ---------- */

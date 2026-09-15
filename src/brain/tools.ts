@@ -14,6 +14,9 @@ import { Journal } from "../core/journal.js";
 import { Ledger, PROJECT_STATUSES, findProject, type Project, type ProjectPatch } from "../core/ledger.js";
 import { Notes } from "../core/notes.js";
 import { Reminders } from "../core/reminders.js";
+import { openOrQueue, safeWebUrl, checkPath, macOpen, type PendingOpen, type Runner } from "../actions/open.js";
+import { Shortcuts } from "../actions/shortcuts.js";
+import { slateBoards, type SlateBoard } from "../actions/slate.js";
 import { eventsInRange, formatAgenda, type CalendarProvider } from "../sensors/calendar.js";
 import { scanActivity } from "../sensors/git.js";
 import { addDays, daysBetween, isISODate, todayISO } from "../util/dates.js";
@@ -104,6 +107,30 @@ export const TOOLS: Record<string, ToolSpec> = {
       required: ["from"],
     },
   },
+  open: {
+    name: "open",
+    description:
+      "Open something on the user's Mac: Slate or a Slate board by name (\"slate\", \"slate board UI/UX\"), one of their shortcuts by name, " +
+      "a project's folder (optionally in an app such as Cursor or Terminal), an installed app, a web search (\"search for …\"), or a website. " +
+      "Web addresses you come up with are shown to the user to confirm before they open.",
+    parameters: {
+      type: "object",
+      properties: {
+        target: s('What to open, e.g. "slate board chief of staff", "gmail", "drawcal", "search for tauri menubar", "https://…"'),
+        app: s('Optional app to open a folder or file in, e.g. "Cursor", "Terminal", "Finder"'),
+      },
+      required: ["target"],
+    },
+  },
+  add_shortcut: {
+    name: "add_shortcut",
+    description: "Save a named shortcut the user can open later: a web address (http/https) or a folder/document in their home folder.",
+    parameters: {
+      type: "object",
+      properties: { name: s('Short name, e.g. "gmail", "drawcal repo"'), target: s("https://… or ~/path") },
+      required: ["name", "target"],
+    },
+  },
   get_git_log: {
     name: "get_git_log",
     description: "Recent commits for a project's folder (by its path field or a folder named like the project).",
@@ -116,7 +143,7 @@ export const TOOLS: Record<string, ToolSpec> = {
 };
 
 const ALL = Object.keys(TOOLS);
-const WRITES = ["upsert_project", "skip_cadence", "touch_project", "add_reminder", "complete_reminder", "add_note", "append_journal"];
+const WRITES = ["upsert_project", "skip_cadence", "touch_project", "add_reminder", "complete_reminder", "add_note", "append_journal", "add_shortcut"];
 
 /** Which tools each intent may use. The brief is read-only and gets none. */
 export function toolsFor(intent: Intent): ToolSpec[] {
@@ -125,7 +152,7 @@ export function toolsFor(intent: Intent): ToolSpec[] {
     "silence-check": [],
     ask: ALL,
     capture: [...WRITES, "get_project", "get_calendar"],
-    focus: ["get_project", "upsert_project", "get_git_log", "get_calendar"],
+    focus: ["get_project", "upsert_project", "get_git_log", "get_calendar", "open"],
     wrap: ["get_project", "append_journal", "touch_project", "upsert_project", "get_git_log"],
   };
   return names[intent].map((n) => TOOLS[n]);
@@ -149,12 +176,17 @@ export class ToolRuntime {
   readonly notes: Notes;
   readonly reminders: Reminders;
   readonly calls: ToolCall[] = [];
+  /** Web addresses the model asked to open, waiting for the user to confirm. */
+  readonly pendingOpens: PendingOpen[] = [];
+  readonly shortcuts: Shortcuts;
 
   constructor(
     readonly config: Config,
     readonly today: string = todayISO(),
     readonly calendarProvider?: CalendarProvider,
+    readonly actions: { run?: Runner; slate?: () => Promise<{ boards: SlateBoard[]; live: boolean; reason?: string }> } = {},
   ) {
+    this.shortcuts = new Shortcuts(config.selfhubDir);
     this.ledger = new Ledger(config.selfhubDir);
     this.journal = new Journal(config.selfhubDir);
     this.notes = new Notes(config.selfhubDir);
@@ -260,6 +292,34 @@ export class ToolRuntime {
         const r = await eventsInRange(from, to, this.calendarProvider);
         if (r.error) throw new Error(`calendar unavailable: ${r.error}`);
         return `Calendar ${from} to ${to} (source: ${r.provider})\n${formatAgenda(r.events, from, to)}`;
+      }
+      case "open": {
+        const r = await openOrQueue(
+          {
+            target: this.str(input, "target", true),
+            app: this.str(input, "app") || undefined,
+            shortcuts: await this.shortcuts.list(),
+            projects: await this.ledger.read(),
+            boards: this.actions.slate ?? (() => slateBoards()),
+          },
+          this.actions.run ?? macOpen,
+        );
+        if (r.status === "opened") return r.message;
+        if (r.status === "confirm") {
+          this.pendingOpens.push(r.pending);
+          return `Not opened yet: the user sees a button to confirm opening ${r.pending.action.kind === "url" ? r.pending.action.url : r.pending.action.label}. Tell them it's waiting for their OK.`;
+        }
+        throw new Error(r.message + (r.candidates?.length ? `. Known: ${r.candidates.join(", ")}` : ""));
+      }
+      case "add_shortcut": {
+        const name = this.str(input, "name", true);
+        const target = this.str(input, "target", true);
+        if (!safeWebUrl(target)) {
+          const checked = await checkPath(target);
+          if ("error" in checked) throw new Error(`target must be an http(s) address or something in the home folder: ${checked.error}`);
+        }
+        const { created } = await this.shortcuts.set(name, target);
+        return `${created ? "Saved" : "Updated"} shortcut "${name}" → ${target}`;
       }
       case "get_git_log": {
         const projectName = this.str(input, "project", true);

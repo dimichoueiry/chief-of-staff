@@ -46,7 +46,7 @@ export interface ContextOptions {
   calendarProvider?: CalendarProvider;
 }
 
-const STORE_DIRS = new Set(["goals", "journal", "notes", ".git", "node_modules", "assets"]);
+const STORE_DIRS = new Set(["goals", "journal", "notes", "links", ".git", "node_modules", "assets"]);
 
 /** Every markdown file in selfhub that is not one of the stores: who you are. */
 export async function readIdentity(selfhubDir: string): Promise<string> {

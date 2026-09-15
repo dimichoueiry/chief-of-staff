@@ -82,8 +82,10 @@ describe("ui server (offline)", () => {
   let base: string;
   let close: () => Promise<void>;
   let home: string;
+  let opened: string[][];
 
   beforeEach(async () => {
+    opened = [];
     ({ dir, cleanup } = await makeTmpSelfhub());
     await cp(resolve("examples/selfhub-sample"), dir, { recursive: true });
     process.env.COS_CALENDAR = "none";
@@ -95,6 +97,10 @@ describe("ui server (offline)", () => {
       today: THU,
       offline: true,
       allowSpeech: false,
+      openRunner: async (args) => {
+        opened.push(args);
+      },
+      slateLoader: async () => ({ boards: [{ id: "a1", name: "Chief of Staff — UI/UX", projectName: null, updatedAt: 1 }], live: true }),
     });
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -152,6 +158,30 @@ describe("ui server (offline)", () => {
     expect(missing.status).toBe(404);
     const stop = await (await fetch(`${base}/api/speak/stop`, { method: "POST", body: "{}" })).json();
     expect(stop).toEqual({ ok: true, stopped: false });
+  });
+
+  it("opens Slate boards instantly from the pill and asks before opening a web address", async () => {
+    const post = (b: unknown, path = "/api/pill") => fetch(`${base}${path}`, { method: "POST", body: JSON.stringify(b) });
+    const slate = await (await post({ text: "open slate board chief of staff ui" })).json();
+    expect(slate).toMatchObject({ kind: "action", text: "Opened Slate board “Chief of Staff — UI/UX”." });
+    expect(opened).toEqual([["https://slate-iota-lac.vercel.app/board/a1"]]);
+
+    const link = await (await post({ text: "open https://example.com/page" })).json();
+    expect(link.kind).toBe("confirm");
+    expect(opened).toHaveLength(1);
+    const ok = await (await post({ id: link.confirm[0].id }, "/api/actions/confirm")).json();
+    expect(ok.text).toBe("Opened https://example.com/page.");
+    expect(opened.at(-1)).toEqual(["https://example.com/page"]);
+    expect((await post({ id: link.confirm[0].id }, "/api/actions/confirm")).status).toBe(410);
+
+    const another = await (await post({ text: "go to https://example.org" })).json();
+    const cancelled = await (await post({ id: another.confirm[0].id, cancel: true }, "/api/actions/confirm")).json();
+    expect(cancelled.text).toBe("Cancelled.");
+    expect(opened).toHaveLength(2);
+
+    const unknown = await (await post({ text: "open the thing from yesterday" })).json();
+    expect(unknown.kind).toBe("answer");
+    expect(unknown.text).toMatch(/^Couldn't open that/);
   });
 
   it("reads a calendar range and reports bad ranges", async () => {

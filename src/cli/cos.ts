@@ -36,6 +36,9 @@ import { applyActivity, scanActivity } from "../sensors/git.js";
 import { addDays, isISODate, todayISO } from "../util/dates.js";
 import { homeEnvFile, parseEnv, syncProjectEnv } from "../util/env.js";
 import { deployRuntime } from "./deploy.js";
+import { openOrQueue, performOpen } from "../actions/open.js";
+import { Shortcuts } from "../actions/shortcuts.js";
+import { findBoards, slateBaseUrl, slateBoardUrl, slateBoards } from "../actions/slate.js";
 import { buildMenubar, installLoginItem, openMenubar, restartMenubar, uninstallMenubar } from "./menubar.js";
 import { ask, confirm } from "./prompt.js";
 
@@ -558,6 +561,82 @@ models
     } catch (err) {
       await modelError(err);
     }
+  });
+
+// ---------- opening things ----------
+
+program
+  .command("open")
+  .argument("<target...>", 'slate, "slate board <name>", a shortcut, a project, an app, "search for …", or a web address')
+  .option("--app <name>", "open a folder or file in this app, e.g. Cursor")
+  .option("-y, --yes", "open web addresses without asking")
+  .description("open something: Slate boards, shortcuts, projects, apps, searches, websites")
+  .action(async (words: string[], o: { app?: string; yes?: boolean }) => {
+    const cfg = config();
+    const r = await openOrQueue({
+      target: words.join(" "),
+      app: o.app,
+      shortcuts: await new Shortcuts(cfg.selfhubDir).list(),
+      projects: await new Ledger(cfg.selfhubDir).read(),
+      boards: () => slateBoards(),
+    });
+    if (r.status === "opened") return console.log(r.message);
+    if (r.status === "failed") {
+      console.error(`Couldn't open that: ${r.message}.`);
+      if (r.candidates?.length) console.error(dim(`Known: ${r.candidates.slice(0, 12).join(", ")}`));
+      process.exit(1);
+    }
+    if (!(await confirm(r.message, o.yes))) return console.log("Not opened.");
+    console.log(await performOpen(r.pending.action));
+  });
+
+const shortcutsCmd = program
+  .command("shortcuts")
+  .description("named places to open: websites, folders, documents")
+  .action(async () => {
+    const store = new Shortcuts(config().selfhubDir);
+    const all = await store.list();
+    if (!all.length) console.log(`No shortcuts yet. Add one: cos shortcuts add gmail https://mail.google.com`);
+    const w = Math.max(0, ...all.map((x) => x.name.length));
+    for (const x of all) console.log(`${x.name.padEnd(w)}  ${dim(x.target)}`);
+    console.log(dim(`Built in: slate (${slateBaseUrl()}/app), "slate board <name>", your projects, installed apps, "search for …"`));
+    console.log(dim(`saved in ${store.file}`));
+  });
+
+shortcutsCmd
+  .command("add")
+  .argument("<name>", 'e.g. gmail, or "drawcal repo" in quotes')
+  .argument("<target>", "https://… or ~/path")
+  .description("save or update a shortcut")
+  .action(async (name: string, target: string) => {
+    const { safeWebUrl, checkPath } = await import("../actions/open.js");
+    if (!safeWebUrl(target)) {
+      const checked = await checkPath(target);
+      if ("error" in checked) fail(`Target must be an http(s) address or something in your home folder: ${checked.error}`);
+    }
+    const { created } = await new Shortcuts(config().selfhubDir).set(name, target);
+    console.log(`${created ? "Saved" : "Updated"} "${name}" → ${target}`);
+  });
+
+shortcutsCmd
+  .command("remove")
+  .argument("<name>")
+  .description("delete a shortcut")
+  .action(async (name: string) => {
+    console.log((await new Shortcuts(config().selfhubDir).remove(name)) ? `Removed "${name}".` : `No shortcut called "${name}".`);
+  });
+
+program
+  .command("slate")
+  .argument("[query...]", "filter boards by name")
+  .description("list your Slate boards (the names `open slate board …` understands)")
+  .action(async (words: string[]) => {
+    const r = await slateBoards();
+    console.log(dim(r.live ? "live from Slate" : `cached list (${r.reason})`));
+    const q = words.join(" ").trim();
+    const boards = q ? findBoards(r.boards, q) : r.boards.slice().sort((a, b) => b.updatedAt - a.updatedAt);
+    if (!boards.length) return console.log(q ? `No board matches "${q}".` : "No boards.");
+    for (const b of boards.slice(0, 40)) console.log(`${b.name}${b.projectName ? dim(`  · ${b.projectName}`) : ""}  ${dim(slateBoardUrl(b.id))}`);
   });
 
 // ---------- keys ----------
