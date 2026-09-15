@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private let wake = WakeListener()
   private var wakeSettings = WakeSettings.load()
   private var wakeItem: NSMenuItem!
+  private var homeItem: NSMenuItem!
   private var loggedWakeProblem: String?
   private let focusMenu = NSMenu()
   private let modelMenu = NSMenu()
@@ -110,6 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     add(menu, "Talk   (⌃ ⌃)", #selector(talk))
     add(menu, "Ask or capture…   (⌥Space)", #selector(type))
     wakeItem = add(menu, "Listen for “Darius”", #selector(toggleWake))
+    homeItem = add(menu, "Move the chat back to the bottom", #selector(moveHome))
     let focus = NSMenuItem(title: "Focus a project", action: nil, keyEquivalent: "")
     focus.submenu = focusMenu
     menu.addItem(focus)
@@ -139,6 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   func menuWillOpen(_ menu: NSMenu) {
     guard menu !== focusMenu, menu !== modelMenu else { return }
     refreshWakeItem()
+    homeItem.isHidden = panel.placement == nil
     refreshPermissionsMenu()
     refreshFocusMenu()
     refreshModelMenu()
@@ -472,12 +475,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   @objc private func quit() { NSApp.terminate(nil) }
 
+  @objc private func moveHome() { panel.resetPlacement() }
+
   // MARK: messages from the page
 
   private func handle(message: [String: Any]) {
     switch message["type"] as? String {
     case "height":
       if let h = message["value"] as? Double { panel.setHeight(CGFloat(h)) }
+    case "move":
+      // Dragged by the bar or the card's header: the window follows, and the spot is kept when the drag ends.
+      if let dx = message["dx"] as? Double, let dy = message["dy"] as? Double { panel.move(dx: CGFloat(dx), dy: CGFloat(dy)) }
+    case "placed":
+      panel.savePlacement()
+      Log.write("pill placed at \(panel.frame.midX),\(panel.frame.minY)")
+    case "unplace":
+      panel.resetPlacement()
     case "state":
       pageState = message["value"] as? String ?? "idle"
     case "listen":

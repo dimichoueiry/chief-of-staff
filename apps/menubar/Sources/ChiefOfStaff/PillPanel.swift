@@ -1,13 +1,14 @@
 import AppKit
 import WebKit
 
-/// A borderless, non-activating floating panel anchored bottom-centre of the
-/// screen the mouse is on, hosting the pill page. Transparent, so only the
-/// pill and its cards show. Grows upward as the page content grows.
+/// A borderless, non-activating floating panel hosting the pill page: bottom-centre
+/// of the screen the mouse is on, or wherever it was dragged to (the page sends the
+/// drag; see Placement). Transparent, so only the pill and its cards show. Grows
+/// upward as the page content grows.
 final class PillPanel: NSPanel, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate {
   static let width: CGFloat = 700
   static let minHeight: CGFloat = 90
-  static let bottomMargin: CGFloat = 14
+  private static let placementKey = "pillPlacement"
 
   let webView: WKWebView
   var onMessage: (([String: Any]) -> Void)?
@@ -56,13 +57,14 @@ final class PillPanel: NSPanel, NSWindowDelegate, WKNavigationDelegate, WKUIDele
     webView.load(URLRequest(url: url))
   }
 
-  /// Keep the bottom edge where it is while the content grows or shrinks.
+  /// Keep the bottom edge where it is while the content grows or shrinks, and all of it on screen.
   func setHeight(_ h: CGFloat) {
-    let maxH = (currentScreen()?.visibleFrame.height ?? 900) - 40
+    let maxH = (windowScreen()?.visibleFrame.height ?? 900) - 40
     let height = max(PillPanel.minHeight, min(h, maxH))
     guard abs(frame.height - height) > 0.5 else { return }
     var f = frame
     f.size.height = height
+    if let visible = windowScreen()?.visibleFrame { f = Placement.clamp(f, into: visible) }
     setFrame(f, display: true, animate: false)
   }
 
@@ -71,12 +73,43 @@ final class PillPanel: NSPanel, NSWindowDelegate, WKNavigationDelegate, WKUIDele
     return NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
   }
 
+  /// The screen the window's bottom-centre is on (while dragging, or placed), else the mouse's.
+  private func windowScreen() -> NSScreen? {
+    let spot = CGPoint(x: frame.midX, y: frame.minY)
+    return NSScreen.screens.first { $0.frame.insetBy(dx: -1, dy: -1).contains(spot) } ?? currentScreen()
+  }
+
+  /// Where it was dragged to, as the window's bottom-centre; nil for the default spot.
+  var placement: CGPoint? {
+    guard let p = UserDefaults.standard.dictionary(forKey: Self.placementKey), let x = p["x"] as? Double, let y = p["y"] as? Double else { return nil }
+    return CGPoint(x: x, y: y)
+  }
+
   func reposition() {
-    guard let screen = currentScreen()?.visibleFrame else { return }
-    var f = frame
-    f.origin.x = screen.midX - f.width / 2
-    f.origin.y = screen.minY + PillPanel.bottomMargin
+    guard let fallback = currentScreen()?.visibleFrame else { return }
+    let f = Placement.frame(saved: placement, size: frame.size, screens: NSScreen.screens.map(\.visibleFrame), fallback: fallback)
     setFrame(f, display: true)
+  }
+
+  /// Follow a drag from the page: dx right, dy down, in points.
+  func move(dx: CGFloat, dy: CGFloat) {
+    var f = frame
+    f.origin.x += dx
+    f.origin.y -= dy // the page counts down, the screen counts up
+    // Across screens: keep it on whichever one the mouse is on now.
+    if let visible = currentScreen()?.visibleFrame { f = Placement.clamp(f, into: visible) }
+    setFrame(f, display: true, animate: false)
+  }
+
+  /// The drag ended: remember the spot for next time it's summoned.
+  func savePlacement() {
+    UserDefaults.standard.set(["x": Double(frame.midX), "y": Double(frame.minY)], forKey: Self.placementKey)
+  }
+
+  /// Back to bottom-centre, and forget the spot.
+  func resetPlacement() {
+    UserDefaults.standard.removeObject(forKey: Self.placementKey)
+    reposition()
   }
 
   func show() {

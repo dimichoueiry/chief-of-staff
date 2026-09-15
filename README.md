@@ -83,6 +83,10 @@ npm run cos -- menubar install   # builds ~/Applications/Chief of Staff.app, ope
   is safe, and misheard versions ("Darias", "Marius") still count. While it waits, speech is recognised on this Mac
   only (it won't run where on-device recognition isn't available), and macOS shows the microphone as in use.
   ✦ › Listen for "Darius" turns it on or off; `cos voice wake on|off`, `cos voice name Nova` changes the name.
+- **Move it anywhere.** Drag the bar (or the chat's header) to put the pill wherever it's out of your way; it
+  comes back to that spot each time, stays on screen, and follows you to another display. A short press is still
+  a click, so the mic and buttons work as before. Double-click the header or the bar's background, or use
+  ✦ › Move the chat back to the bottom, to put it back.
 - **⌥Space** anywhere: the pill appears for typing.
 - **Compact mic.** The ⤡ button at the right of the bar shrinks it to a small, see-through mic (about 85 px
   wide instead of 640) that covers less of the screen; ⤢ opens it back up. It turns solid while it listens,

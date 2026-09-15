@@ -963,6 +963,81 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+// ---------- moving it: drag the bar or the chat's header ----------
+// In the app the window follows the drag, stays on screen, and is summoned to the same spot next time;
+// in a browser the page's content moves and the spot is kept for this browser. A press that moves less
+// than a few pixels is still a click (the mic, the title, a chip). Double-click the header or the bar's
+// background to put it back (the chat may be hidden, so the bar needs its own way).
+const DRAG_THRESHOLD = 4;
+let placedAt = SHELL ? null : JSON.parse(localStorage.getItem("cos.placement") || "null");
+
+/** In a browser: the card and the bar move by the same amount, each on its own (the bar is fixed to the window). */
+function applyPlacement() {
+  if (SHELL) return;
+  $("answer").style.transform = placedAt ? `translate(${placedAt.x}px, ${placedAt.y}px)` : "";
+  $("pill").style.transform = placedAt ? `translate(calc(-50% + ${placedAt.x}px), ${placedAt.y}px)` : "";
+}
+
+function startDrag(e) {
+  if (e.button !== 0 || e.target.closest("input, textarea")) return;
+  const start = { x: e.screenX, y: e.screenY };
+  let last = start;
+  let dragging = false;
+  const move = (ev) => {
+    if (!dragging) {
+      if (Math.hypot(ev.screenX - start.x, ev.screenY - start.y) < DRAG_THRESHOLD) return;
+      dragging = true;
+      root.dataset.dragging = "1";
+    }
+    // Screen coordinates, so the window moving under the pointer doesn't count as the pointer moving.
+    const dx = ev.screenX - last.x;
+    const dy = ev.screenY - last.y;
+    last = { x: ev.screenX, y: ev.screenY };
+    if (!dx && !dy) return;
+    if (SHELL) toShell({ type: "move", dx, dy });
+    else {
+      placedAt = { x: (placedAt?.x || 0) + dx, y: (placedAt?.y || 0) + dy };
+      applyPlacement();
+    }
+  };
+  const end = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", end);
+    window.removeEventListener("pointercancel", end);
+    if (!dragging) return;
+    delete root.dataset.dragging;
+    if (SHELL) toShell({ type: "placed" });
+    else localStorage.setItem("cos.placement", JSON.stringify(placedAt));
+    // The press that dragged isn't also a click on the button it started on.
+    const swallow = (c) => {
+      c.stopPropagation();
+      c.preventDefault();
+    };
+    window.addEventListener("click", swallow, true);
+    setTimeout(() => window.removeEventListener("click", swallow, true), 0);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", end);
+  window.addEventListener("pointercancel", end);
+}
+
+function resetPlacement(e) {
+  if (e.target.closest("button, input, textarea, #answer-title")) return;
+  if (SHELL) toShell({ type: "unplace" });
+  else {
+    placedAt = null;
+    localStorage.removeItem("cos.placement");
+    applyPlacement();
+  }
+  flash("Back at the bottom");
+}
+
+$("pill").addEventListener("pointerdown", startDrag);
+$("pill").addEventListener("dblclick", resetPlacement);
+document.querySelector(".answer-head").addEventListener("pointerdown", startDrag);
+document.querySelector(".answer-head").addEventListener("dblclick", resetPlacement);
+applyPlacement();
+
 // The shell sizes its window to the content, so report the height whenever it changes.
 if (SHELL) {
   const stage = document.querySelector(".stage");

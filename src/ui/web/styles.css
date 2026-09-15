@@ -90,7 +90,7 @@ body {
 
 /* ---------- answer card ---------- */
 .answer { width: min(560px, 100%); background: rgba(26, 29, 37, 0.96); border: 1px solid var(--line); border-radius: 16px; padding: 14px 18px 16px; box-shadow: 0 20px 60px rgba(0,0,0,.4); }
-.answer-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-weight: 600; }
+.answer-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-weight: 600; cursor: grab; }
 .answer-head .spark { color: var(--accent); }
 .answer-head #answer-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: 45%; cursor: pointer; }
 .answer-head .model { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-weight: 400; font-size: 12px; font-family: var(--mono); }
@@ -200,6 +200,12 @@ html[data-chat="hidden"] .answer { display: none; }
 .pill[data-state="idle"] .status:empty { display: none; }
 .pill .stop { display: none; width: 30px; height: 30px; border-radius: 50%; border: 1px solid #3a3f4b; background: #2a2e38; color: #9aa0ac; font-size: 11px; cursor: pointer; }
 .pill[data-state="speaking"] .stop { display: grid; place-items: center; }
+
+/* Dragging it somewhere else: the bar and the chat's header are handles; controls keep their own cursors. */
+.pill { cursor: grab; }
+.pill input { cursor: text; }
+html[data-dragging="1"], html[data-dragging="1"] * { cursor: grabbing !important; user-select: none; }
+html[data-dragging="1"] .pill { box-shadow: 0 0 0 1px rgba(232, 168, 92, 0.35), 0 14px 36px rgba(0, 0, 0, 0.5); }
 
 /* ---------- views ---------- */
 html[data-view="pill"] .panel { display: none; }

@@ -14,7 +14,7 @@ describe("menubar: when you've finished talking", () => {
     const dir = await mkdtemp(join(tmpdir(), "cos-endpointing-"));
     try {
       const bin = join(dir, "check");
-      await exec("swiftc", ["-o", bin, "apps/menubar/Sources/ChiefOfStaff/Endpointing.swift", "apps/menubar/Sources/ChiefOfStaff/WakePhrase.swift", "apps/menubar/Checks/main.swift"], { timeout: 240_000 });
+      await exec("swiftc", ["-o", bin, "apps/menubar/Sources/ChiefOfStaff/Endpointing.swift", "apps/menubar/Sources/ChiefOfStaff/WakePhrase.swift", "apps/menubar/Sources/ChiefOfStaff/Placement.swift", "apps/menubar/Checks/main.swift"], { timeout: 240_000 });
       const { stdout } = await exec(bin).catch((err: { stdout?: string }) => ({ stdout: err.stdout ?? String(err) }));
       expect(stdout.split("\n").filter((l) => l.startsWith("FAIL"))).toEqual([]);
       expect(stdout).toContain("all checks passed");

@@ -1,4 +1,4 @@
-// Checks for Endpointing and WakePhrase, compiled with swiftc alongside the source files (tests/menubar-endpointing.test.ts).
+// Checks for Endpointing, WakePhrase and Placement, compiled with swiftc alongside the source files (tests/menubar-endpointing.test.ts).
 import Foundation
 
 var failures = 0
@@ -110,6 +110,34 @@ do {
   }
   check("another name works the same", WakePhrase(name: "Nova").find(in: "Nova sleep") == .sleep && WakePhrase(name: "Nova").find(in: "Darius sleep") == nil)
   check("hints teach the recogniser the name", darius.hints.contains("Darius wake up"))
+}
+
+// Where the pill's window goes when it's dragged or summoned.
+do {
+  let screen = CGRect(x: 0, y: 0, width: 1512, height: 944) // a laptop's visible area
+  let size = CGSize(width: 700, height: 200)
+  let home = Placement.frame(saved: nil, size: size, screens: [screen], fallback: screen)
+  check("not moved: bottom-centre", home.midX == 756 && home.minY == 14)
+
+  let corner = Placement.frame(saved: CGPoint(x: 1300, y: 700), size: size, screens: [screen], fallback: screen)
+  check("a saved spot is used as is when it fits", corner.midX == 1300 && corner.minY == 700)
+
+  let high = Placement.clamp(CGRect(x: 400, y: 900, width: 700, height: 200), into: screen)
+  check("never off the top: the chat above the bar stays visible", high.maxY == 944 && high.minY == 744)
+  let low = Placement.clamp(CGRect(x: 400, y: -80, width: 700, height: 200), into: screen)
+  check("never off the bottom: the bar stays visible", low.minY == 0)
+  let left = Placement.clamp(CGRect(x: -600, y: 100, width: 700, height: 200), into: screen)
+  check("the wide window may hang off a side, but its middle stays on screen", left.midX == Placement.sideReach && left.minX < 0)
+  let right = Placement.clamp(CGRect(x: 1400, y: 100, width: 700, height: 200), into: screen)
+  check("same on the right", right.midX == 1512 - Placement.sideReach)
+  let tall = Placement.clamp(CGRect(x: 400, y: 0, width: 700, height: 2000), into: screen)
+  check("taller than the screen: cut to fit", tall.height == 944 && tall.minY == 0)
+
+  let external = CGRect(x: 1512, y: 0, width: 2560, height: 1415)
+  let there = Placement.frame(saved: CGPoint(x: 2500, y: 300), size: size, screens: [screen, external], fallback: screen)
+  check("left on another display: it comes back there", there.midX == 2500 && there.minY == 300)
+  let unplugged = Placement.frame(saved: CGPoint(x: 2500, y: 300), size: size, screens: [screen], fallback: screen)
+  check("that display unplugged: home on this one", unplugged.midX == 756 && unplugged.minY == 14)
 }
 
 print(failures == 0 ? "all checks passed" : "\(failures) failed")
