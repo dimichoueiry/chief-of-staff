@@ -21,7 +21,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import OpenAI from "openai";
 import { cosHome } from "../util/home.js";
-import { cueFile, cueSeconds, type CueName } from "./cues.js";
+import { cueFile, type CueName } from "./cues.js";
+import { readyPlayer } from "./player.js";
 
 // ---------- settings ----------
 
@@ -157,8 +158,8 @@ export function chunkText(text: string, max = 400): string[] {
 export interface SpeechEngine {
   /** mp3 bytes for one piece of text. */
   synthesize(text: string, s: VoiceSettings, signal: AbortSignal): Promise<Buffer>;
-  /** Play an audio file, or only its first `seconds`; resolves when playback ends. */
-  play(file: string, track: (child: ChildProcess) => void, seconds?: number): Promise<void>;
+  /** Play an audio file; resolves when playback ends. */
+  play(file: string, track: (child: ChildProcess) => void): Promise<void>;
   /** Speak with the built-in macOS voice. */
   say(text: string, s: VoiceSettings, track: (child: ChildProcess) => void): Promise<void>;
 }
@@ -182,7 +183,16 @@ export const systemEngine: SpeechEngine = {
     );
     return Buffer.from(await res.arrayBuffer());
   },
-  play: (file, track, seconds) => run("afplay", [...(seconds ? ["-t", seconds.toFixed(3)] : []), file], track),
+  // The native player ends with the sound; afplay lingers about a second after it, so it's only the fallback.
+  async play(file, track) {
+    const player = readyPlayer();
+    if (!player) return run("afplay", [file], track);
+    try {
+      await run(player, [file], track);
+    } catch {
+      await run("afplay", [file], track);
+    }
+  },
   say: (text, s, track) => run("say", [...(s.sayVoice ? ["-v", s.sayVoice] : []), ...(process.env.COS_SPEECH_RATE ? ["-r", process.env.COS_SPEECH_RATE] : []), text], track),
 };
 
@@ -255,7 +265,7 @@ export async function speak(text: string, o: SpeakOptions = {}): Promise<SpeakRe
   const cue = async (name: CueName) => {
     if (!o.cues?.[name] || s.cues === "off" || (s.cues === "turn" && name !== "turn") || pb.stopped) return;
     try {
-      await engine.play(await (o.cueFile ?? cueFile)(name), pb.track, cueSeconds(name));
+      await engine.play(await (o.cueFile ?? cueFile)(name), pb.track);
       if (!pb.stopped) cued.push(name);
     } catch {
       /* speak without it */

@@ -2,7 +2,7 @@ import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { CUE_RATE, CUE_SHAPES, cueFile, cueSeconds, renderCue } from "../src/voice/cues.js";
+import { CUE_RATE, CUE_SHAPES, cueFile, renderCue } from "../src/voice/cues.js";
 
 /** Samples as -1..1, from a 16-bit mono WAV. */
 function read(wav: Buffer): number[] {
@@ -19,30 +19,25 @@ function pitch(samples: number[]): number {
 }
 
 describe("cue sounds", () => {
-  it("writes short, quiet 16-bit mono WAVs that start and end in silence, with padding a timed stop lands in", () => {
+  it("writes short, quiet 16-bit mono WAVs that start and end in silence", () => {
     for (const name of ["turn", "start"] as const) {
       const wav = renderCue(name);
       expect(wav.toString("ascii", 0, 4)).toBe("RIFF");
       expect(wav.toString("ascii", 8, 12)).toBe("WAVE");
       expect([wav.readUInt16LE(20), wav.readUInt16LE(22), wav.readUInt32LE(24), wav.readUInt16LE(34)]).toEqual([1, 1, CUE_RATE, 16]);
       expect(wav.readUInt32LE(40)).toBe(wav.length - 44);
-      const all = read(wav);
-      const end = Math.round(CUE_SHAPES[name].length * CUE_RATE);
-      const s = all.slice(0, end);
+      const s = read(wav);
+      expect(s.length / CUE_RATE).toBeCloseTo(CUE_SHAPES[name].length, 2);
       expect(Math.max(...s.map(Math.abs))).toBeCloseTo(CUE_SHAPES[name].peak, 2);
       // No click: the first and last few milliseconds are near silent.
       expect(Math.max(...s.slice(0, 20).map(Math.abs))).toBeLessThan(0.01);
       expect(Math.abs(s.at(-1)!)).toBeLessThan(0.001);
-      // Played for just past the sound, stopping inside silence well before the file ends.
-      expect(all.slice(end).every((x) => x === 0)).toBe(true);
-      expect(cueSeconds(name)).toBeGreaterThan(CUE_SHAPES[name].length);
-      expect(all.length / CUE_RATE - cueSeconds(name)).toBeGreaterThan(0.2);
     }
   });
 
   it("makes the turn chime rise and the start cue lower, shorter and about 9 dB quieter", () => {
-    const turn = read(renderCue("turn")).slice(0, Math.round(CUE_SHAPES.turn.length * CUE_RATE));
-    const start = read(renderCue("start")).slice(0, Math.round(CUE_SHAPES.start.length * CUE_RATE));
+    const turn = read(renderCue("turn"));
+    const start = read(renderCue("start"));
     const first = pitch(turn.slice(Math.round(0.01 * CUE_RATE), Math.round(0.09 * CUE_RATE)));
     const second = pitch(turn.slice(Math.round(0.12 * CUE_RATE), Math.round(0.3 * CUE_RATE)));
     expect(first).toBeGreaterThan(560);

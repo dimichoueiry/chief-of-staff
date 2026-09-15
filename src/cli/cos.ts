@@ -30,6 +30,7 @@ import { bold, dim, renderBrief, renderBriefNotification, renderBriefSpeech, typ
 import { join, resolve } from "node:path";
 import * as launchd from "../scheduler/launchd.js";
 import { eventsInRange, formatAgenda } from "../sensors/calendar.js";
+import { playerBuilt, readyPlayer } from "../voice/player.js";
 import { pickStt } from "../voice/stt.js";
 import {
   CUE_MODES, DEFAULT_VOICE, LISTEN_PAUSE, OPENAI_VOICES, activeTts, isKnownVoice, readVoiceSettings, saveVoiceSettings, speak, voiceSettingsFile,
@@ -490,6 +491,7 @@ program
   .action(async (o: { port: string; open: boolean }) => {
     const cfg = config();
     const server = createUiServer({ config: cfg, modelFlag: modelFlag(), today: program.opts<{ today?: string }>().today });
+    readyPlayer(); // build the audio player now, so the first reply doesn't play with afplay's pauses
     const port = Number(o.port) || 4747;
     await new Promise<void>((resolveListen, reject) => {
       server.once("error", reject);
@@ -1024,6 +1026,10 @@ voiceCmd
     if (o.voice && !isKnownVoice(o.voice)) fail(`Unknown voice "${o.voice}". Choose from: ${OPENAI_VOICES.join(", ")}`);
     const settings = { ...readVoiceSettings(), ...(o.voice ? { voice: o.voice } : {}) };
     const text = words.join(" ").trim() || `Good morning${loadConfig().name ? `, ${loadConfig().name}` : ""}. Three things today. First, record the intro video. Second, reply to the design review before lunch. Third, park anything you haven't touched in two weeks.`;
+    if (!readyPlayer()) {
+      console.log(dim("Building the audio player (once)…"));
+      await playerBuilt();
+    }
     console.log(dim(`Speaking with ${activeTts(settings) === "openai" ? `OpenAI voice ${settings.voice}` : "the Mac voice"}…`));
     // Played as in a conversation, with the cues you have set.
     const r = await speak(text, { settings, cues: { start: true, turn: true }, onFallback: (why) => console.error(dim(`OpenAI voice failed (${why}); used the Mac voice.`)) });

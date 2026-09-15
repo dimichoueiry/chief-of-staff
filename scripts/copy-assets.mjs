@@ -6,6 +6,7 @@ const assets = [
   ["src/sensors/eventkit", "dist/sensors/eventkit"],
   ["src/sensors/screen", "dist/sensors/screen"],
   ["src/ui/web", "dist/ui/web"],
+  ["src/voice/player", "dist/voice/player"],
 ];
 for (const [from, to] of assets) {
   try {

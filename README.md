@@ -172,6 +172,8 @@ With `OPENAI_API_KEY` set, answers are spoken by OpenAI's `gpt-4o-mini-tts` in a
 (`marin` by default) with a calm chief-of-staff delivery. Without it, the Mac voice speaks.
 Long answers start playing after the first sentence instead of waiting for the whole text,
 and if the OpenAI voice fails mid-answer it finishes with the Mac voice rather than going silent.
+Audio plays through a small native player, built once in the background into `~/.cos/bin`: the Mac's `afplay`
+waits about a second after every clip, which put dead air between sentences and delayed the chime and mic.
 
 ```bash
 cos voice                         # what's speaking, and the voice list

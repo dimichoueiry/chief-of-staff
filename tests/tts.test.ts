@@ -4,7 +4,6 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { cueSeconds } from "../src/voice/cues.js";
 import {
   DEFAULT_VOICE, activeTts, chunkText, isKnownVoice, readVoiceSettings, saveVoiceSettings, speak, stopSpeaking,
   type SpeechEngine, type VoiceSettings,
@@ -144,13 +143,9 @@ describe("turn-taking cues", () => {
 
   it("plays the start cue while the first piece is made, and the turn chime only after the last word", async () => {
     const { engine, log } = fakeEngine();
-    const timed: string[] = [];
-    const play = engine.play;
-    engine.play = (file, track, seconds) => (timed.push(`${file.split("/").pop()} ${seconds ?? "whole"}`), play(file, track));
     const r = await speak(threeSentences, { settings: openai, engine, lookahead: 0, cues: { start: true, turn: true }, cueFile });
     const pieces = plays(log).filter((l) => l.endsWith(".mp3"));
-    // Cues stop just past their sound (afplay lingers a second at a file's end); the voice plays whole.
-    expect(timed).toEqual([`start.wav ${cueSeconds("start")}`, ...pieces.map((p) => `${p.slice(5)} whole`), `turn.wav ${cueSeconds("turn")}`]);
+
     expect(plays(log)).toEqual(["play:start.wav", ...pieces, "play:turn.wav"]);
     expect(log.indexOf("synth:First thing ")).toBeLessThan(log.indexOf(pieces[0])); // no wait added for the cue
     expect(r.cued).toEqual(["start", "turn"]);

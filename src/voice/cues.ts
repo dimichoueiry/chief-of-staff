@@ -8,11 +8,6 @@
  *
  * Both sit well under the voice (peaks at -14 and -23 dBFS). They are synthesised here,
  * so there are no audio assets, and written once to ~/.cos/sounds as 16-bit mono WAV.
- *
- * Each file ends in silence that is never played. afplay keeps running about a second
- * after a file's last sample, which would hold the mic shut after the chime; told to
- * stop partway (-t), it exits at once. So a cue plays for cueSeconds(), just past its
- * sound and short of the padding.
  */
 import { createHash } from "node:crypto";
 import { access, mkdir, rename, writeFile } from "node:fs/promises";
@@ -60,21 +55,12 @@ export const CUE_SHAPES: Record<CueName, CueShape> = {
 
 const ATTACK = 0.005;
 const FADE = 0.04;
-/** Silence after the sound, so a timed stop lands inside the file. */
-const PADDING = 0.3;
-/** Played past the sound, so the fade is never cut. */
-const MARGIN = 0.06;
 
-/** How long to play a cue: all of its sound and none of its padding. */
-export function cueSeconds(name: CueName): number {
-  return CUE_SHAPES[name].length + MARGIN;
-}
-
-/** The cue as WAV bytes: a sine with a quiet octave and a brief bell partial, no clicks at either end, then silence. */
+/** The cue as WAV bytes: a sine with a quiet octave and a brief bell partial, no clicks at either end. */
 export function renderCue(name: CueName): Buffer {
   const shape = CUE_SHAPES[name];
   const n = Math.round(shape.length * CUE_RATE);
-  const samples = new Float64Array(n + Math.round(PADDING * CUE_RATE));
+  const samples = new Float64Array(n);
   for (const note of shape.notes) {
     for (let i = Math.round(note.at * CUE_RATE); i < n; i++) {
       const t = i / CUE_RATE - note.at;
@@ -115,7 +101,7 @@ export function cueDir(): string {
 
 /** The cue's file, written on first use. The name carries the shape, so a changed sound gets a new file. */
 export async function cueFile(name: CueName, dir: string = cueDir()): Promise<string> {
-  const version = createHash("sha1").update(JSON.stringify([CUE_SHAPES[name], PADDING])).digest("hex").slice(0, 8);
+  const version = createHash("sha1").update(JSON.stringify(CUE_SHAPES[name])).digest("hex").slice(0, 8);
   const file = join(dir, `${name}-${version}.wav`);
   try {
     await access(file);
