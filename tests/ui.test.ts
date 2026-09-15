@@ -103,6 +103,9 @@ describe("ui server (offline)", () => {
   it("serves the page and static assets", async () => {
     const html = await (await fetch(`${base}/`)).text();
     expect(html).toContain('id="pill"');
+    const js = await (await fetch(`${base}/app.js`)).text();
+    expect(js).toContain("window.cosShell");
+    expect(js).toContain("messageHandlers.shell");
     expect((await fetch(`${base}/app.js`)).headers.get("content-type")).toContain("javascript");
     expect((await fetch(`${base}/../package.json`)).status).not.toBe(200);
   });
@@ -131,5 +134,15 @@ describe("ui server (offline)", () => {
     expect(projects.map((p: { name: string }) => p.name)).toContain("drawcal");
     const spoke = await (await fetch(`${base}/api/speak`, { method: "POST", body: JSON.stringify({ text: "hi" }) })).json();
     expect(spoke.muted).toBe(true);
+  });
+
+  it("answers focus for a known project offline and stops speech on request", async () => {
+    const f = await (await fetch(`${base}/api/pill`, { method: "POST", body: JSON.stringify({ text: "drawcal", mode: "focus" }) })).json();
+    expect(f).toMatchObject({ kind: "focus", project: "drawcal" });
+    expect(f.text).toContain("Recorded next action: cut the export feature from v1.");
+    const missing = await fetch(`${base}/api/pill`, { method: "POST", body: JSON.stringify({ text: "nope", mode: "focus" }) });
+    expect(missing.status).toBe(404);
+    const stop = await (await fetch(`${base}/api/speak/stop`, { method: "POST", body: "{}" })).json();
+    expect(stop).toEqual({ ok: true, stopped: false });
   });
 });

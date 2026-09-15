@@ -20,7 +20,7 @@ import { loadLastBrief, saveBrief } from "../output/notify.js";
 import { renderBriefSpeech } from "../output/render.js";
 import { applyActivity, scanActivity } from "../sensors/git.js";
 import { todayISO } from "../util/dates.js";
-import { speak } from "../voice/tts.js";
+import { speak, stopSpeaking } from "../voice/tts.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const WEB_DIR = join(here, "web");
@@ -103,15 +103,30 @@ export function createUiServer(o: UiOptions): Server {
         const text = String(b.text ?? "").trim();
         if (!text) return json(res, 400, { error: "empty" });
         const mode = String(b.mode ?? "auto");
+
+        if (mode === "focus") {
+          const p = await new Ledger(config.selfhubDir).find(text);
+          if (!p) return json(res, 404, { error: `No project matches "${text}".` });
+          if (!o.hasApiKey) {
+            return json(res, 200, {
+              kind: "focus",
+              project: p.name,
+              text: `Recorded next action: ${p.next ?? "none yet"}.\n${p.why ? `Why it matters: ${p.why}.\n` : ""}\nThe top-3 analysis needs the model key in .env.`,
+            });
+          }
+          const r = await runIntent({ config, intent: "focus", project: p.name, today: today() });
+          return json(res, 200, { kind: "focus", project: p.name, text: r.text, changes: r.toolCalls.filter((c) => !c.isError && !c.name.startsWith("get_")).length });
+        }
+
         const isCapture = mode === "capture" || (mode === "auto" && CAPTURE_SHAPE.test(text));
-        if (isCapture && (!o.hasApiKey || mode === "capture" && !o.hasApiKey)) {
+        if (isCapture && !o.hasApiKey) {
           const filed = await scribe(config.selfhubDir, text.replace(/^note:\s*/i, ""), today());
           return json(res, 200, { kind: "capture", text: filed.message + (filed.question ? `\n${filed.question}` : ""), where: filed.where });
         }
         if (!o.hasApiKey) {
           return json(res, 200, {
             kind: "answer",
-            text: "Questions need the model. Set ANTHROPIC_API_KEY in .env and restart `cos ui`. The brief, decisions and capture work offline.",
+            text: "Questions need the model key (ANTHROPIC_API_KEY in .env), then restart. The brief, decisions and capture work without it.",
           });
         }
         const r = await runIntent({ config, intent: isCapture ? "capture" : "ask", message: text, today: today() });
@@ -132,6 +147,8 @@ export function createUiServer(o: UiOptions): Server {
         await speak(text);
         return json(res, 200, { ok: true });
       }
+      case "POST /api/speak/stop":
+        return json(res, 200, { ok: true, stopped: stopSpeaking() });
       default:
         return json(res, 404, { error: "not found" });
     }

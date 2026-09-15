@@ -130,3 +130,19 @@ body {
 .pill[data-state="speaking"] .wave i { background: var(--success); }
 .pill[data-state="speaking"] input { display: none; }
 .pill[data-state="idle"] .status:empty { display: none; }
+.pill .stop { display: none; width: 30px; height: 30px; border-radius: 50%; border: 1px solid #3a3f4b; background: #2a2e38; color: #9aa0ac; font-size: 11px; cursor: pointer; }
+.pill[data-state="speaking"] .stop { display: grid; place-items: center; }
+
+/* ---------- views ---------- */
+html[data-view="pill"] .panel { display: none; }
+
+/* ---------- hosted by the native shell ---------- */
+/* The panel window is transparent and sized to the content, anchored at the
+   bottom of the screen, so the page lays out bottom-up with no backdrop. */
+html[data-shell="1"],
+html[data-shell="1"] body { height: auto; min-height: 0; background: transparent; overflow: hidden; }
+html[data-shell="1"] .stage { min-height: 0; padding: 14px 22px 16px; gap: 12px; }
+html[data-shell="1"] .panel { max-height: 620px; overflow-y: auto; box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45); }
+html[data-shell="1"] .answer { max-height: 360px; overflow-y: auto; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4); }
+html[data-shell="1"] .pill { position: static; transform: none; width: 100%; max-width: 640px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45); }
+html[data-shell="1"] .pill kbd { display: none; }

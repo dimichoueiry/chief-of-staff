@@ -1,15 +1,31 @@
-/* The pill + brief page. Plain JS, talks to the local server. */
+/* The pill + brief page. Plain JS, talks to the local server.
+ * In a browser it is a full page. Hosted by the native shell (?shell=1) it is a
+ * transparent strip anchored at the bottom of the screen, and the shell drives
+ * it through window.cosShell (hotkeys, native listening). */
 const $ = (id) => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+const SHELL = params.get("shell") === "1" && Boolean(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.shell);
+const root = document.documentElement;
+root.dataset.shell = SHELL ? "1" : "0";
+root.dataset.view = params.get("mode") || (SHELL ? "pill" : "full"); // pill | brief | full
+
 const pill = $("pill");
 const input = $("pill-input");
 const status = $("pill-status");
 let brief = null;
-let mode = "auto"; // auto | ask | capture
+let briefStale = false;
+let offline = false;
+let inputMode = "auto"; // auto | ask | capture
 
-// ---------- state machine for the pill ----------
+function toShell(msg) {
+  if (SHELL) window.webkit.messageHandlers.shell.postMessage(msg);
+}
+
+// ---------- the pill's state machine: idle | listening | thinking | speaking ----------
 function setState(state, text = "") {
   pill.dataset.state = state;
   status.textContent = text;
+  toShell({ type: "state", value: state });
   if (state === "idle") input.focus();
 }
 
@@ -27,6 +43,9 @@ function el(tag, attrs = {}, ...children) {
 
 function renderBrief(data) {
   brief = data.brief;
+  offline = Boolean(data.offline);
+  briefStale = false;
+  $("btn-refresh").classList.remove("chip-accent");
   $("greeting").textContent = brief.greeting;
   $("headline").textContent = brief.headline;
 
@@ -47,10 +66,11 @@ function renderBrief(data) {
   schedule.replaceChildren();
   if (!brief.schedule.length) schedule.append(el("li", { class: "empty" }, "Nothing on the calendar. The day is free."));
   for (const s of brief.schedule) {
-    const li = el("li", { class: s.free ? "free" : "" },
-      el("span", { class: "time" }, `${s.start}–${s.end}`),
-      el("span", {}, s.free ? "Free block" : s.title, s.free && s.plan ? el("span", { class: "plan" }, `  → ${s.plan}`) : ""));
-    schedule.append(li);
+    schedule.append(
+      el("li", { class: s.free ? "free" : "" },
+        el("span", { class: "time" }, `${s.start}–${s.end}`),
+        el("span", {}, s.free ? "Free block" : s.title, s.free && s.plan ? el("span", { class: "plan" }, `  → ${s.plan}`) : "")),
+    );
   }
 
   const decisions = $("decisions");
@@ -58,33 +78,31 @@ function renderBrief(data) {
   $("decisions-wrap").hidden = !brief.decisions.length;
   for (const d of brief.decisions) {
     const opts = el("div", { class: "opts" });
-    const li = el("li", {}, el("div", { class: "q" }, d.question), el("div", { class: "reason" }, d.reason), opts);
+    decisions.append(el("li", {}, el("div", { class: "q" }, d.question), el("div", { class: "reason" }, d.reason), opts));
     for (const o of d.options) {
       opts.append(el("button", {
         class: `chip ${o === "keep" ? "chip-keep" : o === "kill" ? "chip-kill" : ""}`,
-        onclick: async (e) => {
+        onclick: async () => {
           for (const b of opts.querySelectorAll("button")) b.disabled = true;
           const r = await post("/api/decide", { project: d.project, choice: o });
           opts.replaceWith(el("div", { class: "done" }, r.message || r.error));
+          briefStale = true;
         },
       }, o[0].toUpperCase() + o.slice(1)));
     }
-    decisions.append(li);
   }
 
   const reminders = $("reminders");
   reminders.replaceChildren();
   $("reminders-wrap").hidden = !brief.reminders.length;
-  for (const r of brief.reminders) {
-    reminders.append(el("li", { class: r.overdue ? "overdue" : "" }, el("time", {}, r.date), r.text));
-  }
+  for (const r of brief.reminders) reminders.append(el("li", { class: r.overdue ? "overdue" : "" }, el("time", {}, r.date), r.text));
 
   const nudges = $("nudges");
   nudges.replaceChildren();
   $("nudges-wrap").hidden = !brief.nudges.length;
   for (const n of brief.nudges) nudges.append(el("li", {}, n));
 
-  $("source").textContent = `${data.source}${data.offline ? " · offline: set ANTHROPIC_API_KEY for the model" : ""} · ${data.today}`;
+  $("source").textContent = `${data.source}${offline ? " · offline: add the model key to .env for questions and focus" : ""} · ${data.today}`;
   $("panel").dataset.speech = data.speech;
 }
 
@@ -99,99 +117,208 @@ async function post(url, body) {
 }
 
 async function loadBrief(refresh = false) {
-  setState("thinking", refresh ? "Rebuilding the brief…" : "Loading…");
+  $("headline").textContent = refresh ? "Rebuilding the brief…" : "Loading…";
   try {
     renderBrief(await get(`/api/brief${refresh ? "?refresh=1" : ""}`));
   } catch (err) {
     $("greeting").textContent = "Could not load the brief";
     $("headline").textContent = String(err);
   }
-  setState("idle");
+}
+
+function markStale() {
+  briefStale = true;
+  $("btn-refresh").classList.add("chip-accent");
+  // Rules are instant, so refresh right away when offline; a model rebuild waits for the button.
+  if (offline && root.dataset.view !== "pill") loadBrief(true);
 }
 
 async function speakText(text) {
+  if (!text) return;
   setState("speaking", "Reading it to you…");
   try {
     await post("/api/speak", { text });
   } finally {
-    setState("idle");
+    if (pill.dataset.state === "speaking") setState("idle");
   }
 }
 
-function showAnswer(kind, text) {
-  $("answer").hidden = false;
-  $("answer-title").textContent = kind === "capture" ? "Filed" : "Chief of staff";
-  $("answer-text").textContent = text;
-  $("answer").scrollIntoView({ behavior: "smooth", block: "nearest" });
+async function stopSpeaking() {
+  await post("/api/speak/stop", {});
+  setState("idle");
 }
 
-async function submit(text) {
+function showAnswer(title, text) {
+  $("answer").hidden = false;
+  $("answer-title").textContent = title;
+  $("answer-text").textContent = text;
+  if (!SHELL) $("answer").scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function hideAnswer() {
+  $("answer").hidden = true;
+}
+
+async function submit(text, fromVoice = false) {
   const t = text.trim();
-  if (!t) return;
+  if (!t) {
+    setState("idle");
+    return;
+  }
   input.value = "";
-  setState("thinking", "Thinking…");
+  setState("thinking", fromVoice ? `“${t}”` : "Thinking…");
+  let r;
   try {
-    const r = await post("/api/pill", { text: t, mode });
-    showAnswer(r.kind, r.text || r.error);
-    if (r.kind === "capture") loadBrief(true);
-    else if (r.text) await speakText(r.text);
+    r = await post("/api/pill", { text: t, mode: inputMode });
   } catch (err) {
-    showAnswer("answer", String(err));
+    showAnswer("Chief of staff", String(err));
+    setState("idle");
+    return;
+  }
+  showAnswer(r.kind === "capture" ? "Filed" : "Chief of staff", r.text || r.error || "");
+  if (r.kind === "capture") markStale();
+  setState("idle");
+  // Spoken questions get spoken answers; typed ones stay quiet unless you press read aloud.
+  if (fromVoice && r.kind !== "capture" && r.text) await speakText(r.text);
+}
+
+async function runFocus(project) {
+  setState("thinking", `Looking at ${project}…`);
+  try {
+    const r = await post("/api/pill", { text: project, mode: "focus" });
+    showAnswer(r.project ? `${r.project} — top 3 right now` : "Focus", r.text || r.error || "");
+    if (r.changes) markStale();
+  } catch (err) {
+    showAnswer("Focus", String(err));
   }
   setState("idle");
 }
 
-// ---------- voice in the browser (Web Speech API, when the browser has it) ----------
+// ---------- voice in a plain browser (Web Speech API). The native shell listens itself. ----------
 const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null;
-function listen() {
+function browserListen() {
   if (!Recognition) {
-    status.textContent = "This browser has no speech recognition — type instead.";
-    setTimeout(() => setState("idle"), 2000);
+    setState("idle", "No speech recognition in this browser — type instead.");
     return;
   }
-  if (rec) { rec.stop(); return; }
+  if (rec) {
+    rec.stop();
+    return;
+  }
   rec = new Recognition();
   rec.lang = navigator.language || "en-US";
   rec.interimResults = true;
   let finalText = "";
   rec.onresult = (e) => {
     let interim = "";
-    for (const res of e.results) (res.isFinal ? (finalText += res[0].transcript) : (interim += res[0].transcript));
+    for (const res of e.results) res.isFinal ? (finalText += res[0].transcript) : (interim += res[0].transcript);
     status.textContent = `“${finalText || interim}”`;
   };
   rec.onend = () => {
     rec = null;
-    if (finalText.trim()) submit(finalText);
-    else setState("idle");
+    submit(finalText, true);
   };
-  rec.onerror = () => { rec = null; setState("idle"); };
+  rec.onerror = () => {
+    rec = null;
+    setState("idle");
+  };
   setState("listening", "Listening…");
   rec.start();
 }
 
+function micPressed() {
+  if (SHELL) toShell({ type: pill.dataset.state === "listening" ? "stopListen" : "listen" });
+  else browserListen();
+}
+
+function setView(view) {
+  root.dataset.view = view;
+  if (view === "brief" && (!brief || briefStale)) loadBrief(briefStale);
+}
+
+// ---------- the bridge the native shell calls ----------
+window.cosShell = {
+  focus() {
+    input.focus();
+  },
+  setMode(view) {
+    setView(view);
+    input.focus();
+  },
+  listening(on) {
+    if (on) {
+      hideAnswer();
+      setState("listening", "Listening…");
+    } else if (pill.dataset.state === "listening") setState("idle");
+  },
+  transcript(text, final) {
+    if (!final) {
+      status.textContent = `“${text}”`;
+      return;
+    }
+    submit(text, true);
+  },
+  status(text) {
+    setState("idle", text);
+    setTimeout(() => {
+      if (pill.dataset.state === "idle" && status.textContent === text) status.textContent = "";
+    }, 5000);
+  },
+  reload() {
+    loadBrief(false);
+  },
+  focusProject(name) {
+    runFocus(name);
+  },
+  dismiss() {
+    if (pill.dataset.state === "speaking") post("/api/speak/stop", {});
+    hideAnswer();
+    input.value = "";
+    setState("idle");
+  },
+};
+
 // ---------- wiring ----------
-pill.addEventListener("submit", (e) => { e.preventDefault(); submit(input.value); });
-$("mic").addEventListener("click", listen);
+pill.addEventListener("submit", (e) => {
+  e.preventDefault();
+  submit(input.value);
+});
+$("mic").addEventListener("click", micPressed);
+$("stop").addEventListener("click", stopSpeaking);
 $("btn-refresh").addEventListener("click", () => loadBrief(true));
 $("btn-speak").addEventListener("click", () => speakText($("panel").dataset.speech || ""));
 $("answer-speak").addEventListener("click", () => speakText($("answer-text").textContent));
 $("mode").addEventListener("click", () => {
-  mode = mode === "auto" ? "ask" : mode === "ask" ? "capture" : "auto";
-  $("mode").textContent = mode;
-  input.placeholder = mode === "capture" ? "Tell me something to file…" : "Ask anything…";
+  inputMode = inputMode === "auto" ? "ask" : inputMode === "ask" ? "capture" : "auto";
+  $("mode").textContent = inputMode;
+  input.placeholder = inputMode === "capture" ? "Tell me something to file…" : "Ask anything…";
 });
 
-// Fn double-tap is captured natively by the desktop shell; in the browser we offer Cmd/Ctrl+K and a double-tap of Shift.
 let lastShift = 0;
 document.addEventListener("keydown", (e) => {
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); input.focus(); }
-  if (e.key === "Escape") { $("answer").hidden = true; if (rec) rec.stop(); setState("idle"); }
-  if (e.key === "Shift") {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    input.focus();
+  }
+  if (e.key === "Escape") {
+    window.cosShell.dismiss();
+    if (rec) rec.abort();
+    toShell({ type: "hide" });
+  }
+  // In a browser there is no global Fn hook; double-tap Shift starts listening instead.
+  if (!SHELL && e.key === "Shift") {
     const now = Date.now();
-    if (now - lastShift < 350) listen();
+    if (now - lastShift < 350) browserListen();
     lastShift = now;
   }
 });
 
+// The shell sizes its window to the content, so report the height whenever it changes.
+if (SHELL) {
+  const stage = document.querySelector(".stage");
+  new ResizeObserver(() => toShell({ type: "height", value: Math.ceil(stage.getBoundingClientRect().height) })).observe(stage);
+}
+
+setState("idle");
 loadBrief();
