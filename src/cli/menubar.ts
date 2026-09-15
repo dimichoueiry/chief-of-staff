@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { AGENTS_DIR, LOG_DIR } from "../scheduler/launchd.js";
 import { deployRuntime } from "./deploy.js";
+import { ensureSigningIdentity, parseRequirement } from "./signing.js";
 
 const exec = promisify(execFile);
 
@@ -35,7 +36,7 @@ async function exists(p: string): Promise<boolean> {
   }
 }
 
-/** swift build → assemble the .app bundle → ad-hoc sign → write the shell config. */
+/** swift build → assemble the .app bundle → sign with the local certificate → write the shell config. */
 export async function buildMenubar(o: BuildOptions): Promise<string> {
   const log = o.log ?? (() => {});
   const pkg = join(o.repoRoot, "apps", "menubar");
@@ -49,7 +50,7 @@ export async function buildMenubar(o: BuildOptions): Promise<string> {
   const binary = join(stdout.trim(), "ChiefOfStaff");
 
   log(`assembling ${APP_PATH}`);
-  const before = await signature(APP_PATH);
+  const before = await requirement(APP_PATH);
   const contents = join(APP_PATH, "Contents");
   await rm(APP_PATH, { recursive: true, force: true });
   await mkdir(join(contents, "MacOS"), { recursive: true });
@@ -58,18 +59,26 @@ export async function buildMenubar(o: BuildOptions): Promise<string> {
   await chmod(join(contents, "MacOS", "ChiefOfStaff"), 0o755);
   await cp(join(pkg, "Info.plist"), join(contents, "Info.plist"));
   await writeFile(join(contents, "PkgInfo"), "APPL????");
-  // Ad-hoc signature so Accessibility / Microphone grants stick to this bundle.
-  await exec("codesign", ["--force", "--deep", "--sign", "-", APP_PATH]);
-  const after = await signature(APP_PATH);
+  // Signed with the local certificate, the app keeps its permissions from build to build. Ad-hoc only if that can't be made.
+  try {
+    const id = await ensureSigningIdentity(log);
+    await exec("codesign", ["--force", "--deep", "--sign", id.sha1, "--keychain", id.keychain, APP_PATH]);
+  } catch (err) {
+    log(`couldn't sign with the local certificate (${(err as Error).message.split("\n")[0]}); signing ad-hoc, so this build needs its permissions again`);
+    await exec("codesign", ["--force", "--deep", "--sign", "-", APP_PATH]);
+  }
+  const after = await requirement(APP_PATH);
   if (before && after && before !== after) {
-    // macOS ties every permission to the exact build. After a rebuild the old switches still show "on"
-    // in System Settings but no longer apply, so clear them: the app then asks again, cleanly, when it opens.
+    // macOS ties permissions to how the app is signed. When that changed (the first certificate build, or an
+    // ad-hoc one), the old switches still show "on" but no longer apply, so clear them: it asks again, cleanly.
     try {
       await exec("tccutil", ["reset", "All", BUNDLE_ID]);
-      log("new build: cleared the app's old macOS permissions (they stop applying after a rebuild); it asks again when it opens");
+      log("the app is signed differently: cleared its old macOS permissions (they no longer apply); it asks again when it opens");
     } catch (err) {
       log(`couldn't clear the old permissions (${(err as Error).message.split("\n")[0]}); remove Chief of Staff from each Privacy & Security list and add it back`);
     }
+  } else if (before && after) {
+    log("same signing identity as the last build: the app keeps its macOS permissions");
   }
 
   await mkdir(join(homedir(), ".cos"), { recursive: true });
@@ -79,11 +88,14 @@ export async function buildMenubar(o: BuildOptions): Promise<string> {
   return APP_PATH;
 }
 
-/** The app's code signature hash, which changes with every build that changes the code. */
-async function signature(app: string): Promise<string | null> {
+/**
+ * What macOS checks a permission against: the app's designated requirement. Ad-hoc, it's the build's hash
+ * (new every build); with the certificate, it's the certificate (the same every build).
+ */
+async function requirement(app: string): Promise<string | null> {
   try {
-    const { stderr } = await exec("codesign", ["-dv", "--verbose=4", app]); // CDHash only shows when verbose
-    return /CDHash=(\w+)/.exec(stderr)?.[1] ?? null;
+    const { stdout, stderr } = await exec("codesign", ["-d", "-r-", app]);
+    return parseRequirement(`${stdout}\n${stderr}`);
   } catch {
     return null; // not built yet
   }

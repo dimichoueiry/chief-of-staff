@@ -103,10 +103,11 @@ When it opens, it checks five macOS permissions and walks you through any that a
 ✦ › **Permissions** shows each with a check; click one that's off to set it up. Saying "open Full Disk
 Access" (or "Screen Recording", "Accessibility"…) opens that exact page.
 
-macOS ties these to the exact build of the app. After a rebuild the old switches still show "on" but do
-nothing, so `cos menubar build` clears them when the signature changes, and the app asks again when it
-opens. If a switch is on and the feature still says it's blocked, remove Chief of Staff from that list
-with −, add it back with +, and reopen the app.
+macOS ties these to how the app is signed. `cos menubar build` signs it with a local certificate it makes
+once (in `~/.cos/signing`, its own keychain file, not your login keychain), so rebuilds keep every
+permission. Only when the signing changes (the first certificate build, or if it ever falls back to ad-hoc)
+does the build clear the old switches, and the app asks again when it opens. If a switch is on and the
+feature still says it's blocked, remove Chief of Staff from that list with −, add it back with +, and reopen the app.
 
 ### It remembers the conversation
 
