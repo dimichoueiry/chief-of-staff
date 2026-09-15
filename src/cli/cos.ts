@@ -28,7 +28,10 @@ import { join, resolve } from "node:path";
 import * as launchd from "../scheduler/launchd.js";
 import { formatEvent, todayEvents } from "../sensors/calendar.js";
 import { pickStt } from "../voice/stt.js";
-import { speak } from "../voice/tts.js";
+import {
+  DEFAULT_VOICE, OPENAI_VOICES, activeTts, isKnownVoice, readVoiceSettings, saveVoiceSettings, speak, voiceSettingsFile,
+  type TtsProvider,
+} from "../voice/tts.js";
 import { applyActivity, scanActivity } from "../sensors/git.js";
 import { isISODate, todayISO } from "../util/dates.js";
 import { homeEnvFile, parseEnv, syncProjectEnv } from "../util/env.js";
@@ -190,7 +193,7 @@ program
       process.stdout.write(renderBrief(brief, target));
       if (target === "terminal") console.log(dim(`— ${source}`));
     }
-    if (o.speak) await speak(renderBriefSpeech(brief));
+    if (o.speak) await speakAndReport(renderBriefSpeech(brief));
   });
 
 // ---------- model intents ----------
@@ -664,9 +667,94 @@ program
     if (!joined || joined === "brief") {
       const { brief } = await getBrief(config(), Boolean(o.offline));
       await saveBrief(brief, "say");
-      return speak(renderBriefSpeech(brief));
+      await speakAndReport(renderBriefSpeech(brief));
+      return;
     }
-    await speak(joined);
+    await speakAndReport(joined);
+  });
+
+async function speakAndReport(text: string): Promise<void> {
+  const r = await speak(text, { onFallback: (why) => console.error(dim(`OpenAI voice failed (${why}); using the Mac voice.`)) });
+  if (process.env.COS_DEBUG) console.error(dim(`spoke with ${r.engine} in ${r.pieces} piece(s)`));
+}
+
+const voiceCmd = program
+  .command("voice")
+  .description("how it sounds: OpenAI's natural voice, or the Mac voice")
+  .action(() => {
+    const s = readVoiceSettings();
+    const engine = activeTts(s);
+    console.log(`${bold("Speaking with")}  ${engine === "openai" ? `OpenAI ${s.model}, voice ${s.voice}` : `the Mac voice${s.sayVoice ? ` (${s.sayVoice})` : ""}`}`);
+    if (engine === "say" && s.provider === "auto") console.log(dim("  Add OPENAI_API_KEY to .env for the natural voice."));
+    console.log(`  provider  ${s.provider}${s.provider === "auto" ? dim("  (OpenAI when a key is set, otherwise the Mac voice)") : ""}`);
+    console.log(`  speed     ${s.speed}`);
+    console.log(`  style     ${dim(s.instructions)}`);
+    console.log("");
+    console.log(`${bold("Voices")}  ${OPENAI_VOICES.map((v) => (v === s.voice ? `[${v}]` : v)).join("  ")}`);
+    console.log(dim("  Hear one: cos voice test --voice cedar      Keep one: cos voice use cedar"));
+    console.log(dim(`  saved in ${voiceSettingsFile()}`));
+  });
+
+voiceCmd
+  .command("use")
+  .argument("<voice>", `one of: ${OPENAI_VOICES.join(", ")} (or a custom voice_… id)`)
+  .description("choose the OpenAI voice")
+  .action((voice: string) => {
+    if (!isKnownVoice(voice)) fail(`Unknown voice "${voice}". Choose from: ${OPENAI_VOICES.join(", ")}`);
+    saveVoiceSettings({ voice });
+    console.log(`Voice → ${voice}`);
+  });
+
+voiceCmd
+  .command("provider")
+  .argument("<provider>", "auto | openai | say")
+  .description("force OpenAI or the Mac voice, or let it pick (auto)")
+  .action((provider: string) => {
+    if (!["auto", "openai", "say"].includes(provider)) fail("provider must be auto, openai or say");
+    saveVoiceSettings({ provider: provider as TtsProvider });
+    console.log(`Provider → ${provider} (now speaking with ${activeTts()})`);
+  });
+
+voiceCmd
+  .command("style")
+  .argument("<instructions...>", 'how it should sound, e.g. "upbeat and quick, like a coach"')
+  .description("steer tone, pace and emotion (OpenAI voice)")
+  .action((words: string[]) => {
+    saveVoiceSettings({ instructions: words.join(" ") });
+    console.log("Style saved.");
+  });
+
+voiceCmd
+  .command("speed")
+  .argument("<n>", "0.25 to 4; 1 is normal")
+  .description("speaking speed (OpenAI voice)")
+  .action((n: string) => {
+    const speed = Number(n);
+    if (!(speed >= 0.25 && speed <= 4)) fail("speed must be between 0.25 and 4");
+    saveVoiceSettings({ speed });
+    console.log(`Speed → ${speed}`);
+  });
+
+voiceCmd
+  .command("test")
+  .argument("[text...]", "what to say")
+  .option("--voice <voice>", "try a voice without saving it")
+  .description("hear the current voice")
+  .action(async (words: string[], o: { voice?: string }) => {
+    if (o.voice && !isKnownVoice(o.voice)) fail(`Unknown voice "${o.voice}". Choose from: ${OPENAI_VOICES.join(", ")}`);
+    const settings = { ...readVoiceSettings(), ...(o.voice ? { voice: o.voice } : {}) };
+    const text = words.join(" ").trim() || `Good morning${loadConfig().name ? `, ${loadConfig().name}` : ""}. Three things today. First, record the intro video. Second, reply to the design review before lunch. Third, park anything you haven't touched in two weeks.`;
+    console.log(dim(`Speaking with ${activeTts(settings) === "openai" ? `OpenAI voice ${settings.voice}` : "the Mac voice"}…`));
+    const r = await speak(text, { settings, onFallback: (why) => console.error(dim(`OpenAI voice failed (${why}); used the Mac voice.`)) });
+    if (!r.fellBack) console.log(dim("Done."));
+  });
+
+voiceCmd
+  .command("reset")
+  .description(`back to the defaults (voice ${DEFAULT_VOICE.voice}, auto provider)`)
+  .action(() => {
+    saveVoiceSettings(null);
+    console.log("Voice settings reset.");
   });
 
 program
@@ -692,7 +780,7 @@ program
     try {
       const r = await runIntent({ config: cfg, intent: "ask", message: question, today: today(), modelFlag: modelFlag() });
       console.log(`${bold("Chief of staff:")} ${r.text}`);
-      await speak(r.text);
+      await speakAndReport(r.text);
     } catch (err) {
       await modelError(err);
     }

@@ -204,8 +204,8 @@ export function createUiServer(o: UiOptions): Server {
         const text = String(b.text ?? "").trim();
         if (!text) return json(res, 400, { error: "empty" });
         if (o.allowSpeech === false) return json(res, 200, { ok: true, muted: true });
-        await speak(text);
-        return json(res, 200, { ok: true });
+        const spoken = await speak(text);
+        return json(res, 200, { ok: true, engine: spoken.engine, fellBack: spoken.fellBack ?? null, stopped: spoken.stopped });
       }
       case "POST /api/speak/stop":
         return json(res, 200, { ok: true, stopped: stopSpeaking() });

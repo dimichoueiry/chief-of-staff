@@ -93,6 +93,25 @@ copied there whenever it's newer, the next time any `cos` command runs from the 
 (or right away with `cos env sync`). The running app picks up key changes on its next request.
 `cos env` shows which file is used and which providers have a key.
 
+## Voice
+
+With `OPENAI_API_KEY` set, answers are spoken by OpenAI's `gpt-4o-mini-tts` in a natural voice
+(`marin` by default) with a calm chief-of-staff delivery. Without it, the Mac voice speaks.
+Long answers start playing after the first sentence instead of waiting for the whole text,
+and if the OpenAI voice fails mid-answer it finishes with the Mac voice rather than going silent.
+
+```bash
+cos voice                         # what's speaking, and the voice list
+cos voice test --voice cedar      # hear a voice without keeping it
+cos voice use cedar               # keep it
+cos voice style "upbeat and brisk, like a coach"
+cos voice speed 1.1
+cos voice provider say            # force the Mac voice (auto | openai | say)
+```
+
+Settings are saved in `~/.cos/voice.json` and apply to the next thing it says, including in the menubar app.
+Listening still uses Apple's on-device recogniser; it needs no key.
+
 ## Models and providers
 
 The brain is model-agnostic. Add a key for any provider you use, then pick models whenever
