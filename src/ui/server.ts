@@ -7,7 +7,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  MODEL_INTENTS, PROVIDERS, PROVIDER_ORDER, forgetModel, formatSpec, parseModelSpec, presets, providerConfigured,
+  MODEL_INTENTS, PROVIDERS, PROVIDER_ORDER, forgetModel, formatSpec, isProviderId, parseModelSpec, presets, providerConfigured,
   readModelSettings, rememberModel, resolveModel, setModel, testModel, type ModelIntent,
 } from "../brain/llm/registry.js";
 import { Conversations, conversationsDir, displayTitle, eventsSinceReply, historyMessages, messageCount, visibleTurns, withEvents, type Conversation, type Turn } from "../brain/conversation.js";
@@ -35,6 +35,7 @@ import { readConsent } from "../actions/consent.js";
 import { LOOK_REQUEST, SCREEN_PERMISSION_HELP, ScreenPermissionError, describeShot, helperCapturer, type ScreenCapturer, type Screenshot } from "../sensors/screen.js";
 import { addDays, todayISO } from "../util/dates.js";
 import { reloadHomeEnv } from "../util/env.js";
+import { KEY_PROVIDERS, cleanKey, keysState, saveKey } from "../util/keys.js";
 import type { Access } from "../actions/access.js";
 import { AgentGrid } from "../actions/agentgrid.js";
 import { watchAgents, type Watcher } from "../actions/agentwatch.js";
@@ -248,6 +249,22 @@ export function createUiServer(o: UiOptions): Server {
       ],
       providers: PROVIDER_ORDER.map((id) => ({ id, label: PROVIDERS[id].label, ready: providerConfigured(id), key: PROVIDERS[id].keyEnv[0] })),
     };
+  }
+
+  /** After a key arrives, point the app at that provider unless something already answers. */
+  function useIfNothingElseWorks(spec: ModelSpec): void {
+    try {
+      const current = resolveModel("ask", { flag: o.modelFlag });
+      if (current?.ready) return;
+    } catch {
+      /* an unreadable saved choice is exactly when to replace it */
+    }
+    try {
+      setModel(formatSpec(spec));
+      Log(`model → ${formatSpec(spec)} (first working key)`);
+    } catch {
+      /* leave the choice alone if it won't take */
+    }
   }
 
   async function json(res: ServerResponse, status: number, body: unknown): Promise<void> {
@@ -561,6 +578,44 @@ export function createUiServer(o: UiOptions): Server {
         } catch (err) {
           const why = String((err as Error).message).split("\n")[0];
           return json(res, 422, { error: `${name} didn't work, so nothing changed: ${why}` });
+        }
+      }
+      case "GET /api/keys":
+        return json(res, 200, keysState());
+      case "POST /api/keys": {
+        const b = await body(req);
+        const provider = String(b.provider ?? "");
+        if (!isProviderId(provider) || !KEY_PROVIDERS.includes(provider)) {
+          return json(res, 400, { error: `provider must be one of ${KEY_PROVIDERS.join(", ")}` });
+        }
+        const info = PROVIDERS[provider];
+        const raw = b.value === null || b.value === undefined ? "" : String(b.value);
+        if (!raw.trim()) {
+          saveKey(provider, null);
+          reloadHomeEnv();
+          Log(`key removed: ${provider}`);
+          return json(res, 200, { ok: true, works: false, message: `Removed the ${info.label} key`, ...keysState() });
+        }
+        const cleaned = cleanKey(raw);
+        if ("error" in cleaned) return json(res, 400, { error: cleaned.error });
+        saveKey(provider, cleaned.value);
+        reloadHomeEnv(); // live for the next request, for the check below, and for the state returned
+        const state = keysState();
+        Log(`key saved: ${provider}`);
+        const spec: ModelSpec = { provider, model: info.defaultModel };
+        try {
+          const t = await (o.modelTester ?? testModel)(spec);
+          useIfNothingElseWorks(spec);
+          return json(res, 200, {
+            ok: true, works: true, message: `${info.label} is connected`,
+            detail: `${spec.model} answered in ${(t.ms / 1000).toFixed(1)} s. You can talk to it now.`, ...state,
+          });
+        } catch (err) {
+          const why = String((err as Error).message).split("\n")[0];
+          return json(res, 200, {
+            ok: true, works: false, message: `Saved, but ${info.label} didn't answer`,
+            detail: `${why}\n\nThe key is in ${state.file}. If it's the wrong one, paste it again; if you're offline, it may work later.`, ...state,
+          });
         }
       }
       case "POST /api/models/forget": {
