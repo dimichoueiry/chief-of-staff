@@ -21,7 +21,7 @@ import { readAccess, type Access, type AccessMode } from "../actions/access.js";
 import { AgentGrid, findSession, formatSessions, formatTranscript } from "../actions/agentgrid.js";
 import { openOrQueue, safeWebUrl, checkPath, macOpen, type Runner } from "../actions/open.js";
 import { findBookmarks, formatBookmarks, readBookmarks, type BookmarkRead } from "../actions/bookmarks.js";
-import { baseDomain, consequentialClick, sharedBrowser, siteOf, type AssistantBrowser } from "../actions/browser.js";
+import { baseDomain, consequentialClick, sharedBrowser, siteOf, type AssistantBrowser, type ScrollSpeed, type ScrollTo } from "../actions/browser.js";
 import { isPending, queue, take, type ConfirmView, type Pending } from "../actions/pending.js";
 import { performPending } from "../actions/perform.js";
 import { classifyCommand, decide, formatResult, resolveCwd, runCommand, runVisible, tildePath, type CommandRequest, type Shell } from "../actions/terminal.js";
@@ -303,6 +303,23 @@ export const TOOLS: Record<string, ToolSpec> = {
       type: "object",
       properties: { ref: s("The dropdown's ref"), element: s("What it is"), values: { type: "array", items: { type: "string" }, description: "The option(s) to choose, as shown" } },
       required: ["ref", "element", "values"],
+    },
+  },
+  browser_scroll: {
+    name: "browser_scroll",
+    description:
+      "Scroll the page in your browser so they can see more of it: a screen (or more) down or up, to the top or bottom, " +
+      "to something on the page by its [ref=…] (\"the chorus\", \"the comments\"), or auto: keep scrolling on its own at a reading pace while they read or play along, until stop. " +
+      "It only moves what's shown in the window; to know what a page says, read it (you get the whole page, not just what's in view).",
+    parameters: {
+      type: "object",
+      properties: {
+        to: { type: "string", enum: ["down", "up", "top", "bottom", "auto", "stop"], description: "Which way, or auto / stop" },
+        screens: { type: "number", description: "For down or up: how many screens, default 1 (0.5 for half)" },
+        speed: { type: "string", enum: ["slow", "medium", "fast"], description: "For auto: default slow" },
+        ref: s("Scroll to this element instead, from the page as last read"),
+      },
+      required: ["to"],
     },
   },
   browser_back: {
@@ -726,6 +743,13 @@ export class ToolRuntime {
         const values = Array.isArray(input.values) ? input.values.map(String) : [];
         if (!values.length) throw new Error('"values" is required');
         return browser.select(browser.element(this.str(input, "ref", true)), values);
+      }
+      case "browser_scroll": {
+        this.browserAllowed();
+        const to = this.str(input, "to", true) as ScrollTo;
+        if (!["down", "up", "top", "bottom", "auto", "stop"].includes(to)) throw new Error('"to" must be down, up, top, bottom, auto or stop');
+        const speed = this.str(input, "speed") as ScrollSpeed;
+        return this.browser().scroll({ to, screens: Number(input.screens) || undefined, speed: speed || undefined, ref: this.str(input, "ref") || undefined });
       }
       case "browser_back":
         this.browserAllowed();

@@ -309,3 +309,43 @@ describe("reading a page that fills in after it loads", () => {
     await rm(home, { recursive: true, force: true });
   });
 });
+
+describe("scrolling what's shown", () => {
+  it("scrolls by screens, to the ends, to an element or on its own, and says where it is", async () => {
+    const home = await mkdtemp(join(tmpdir(), "cos-browser-"));
+    const calls: Array<Record<string, unknown>> = [];
+    let report = { scrollable: true, moved: true, percent: 38, screen: 3, screens: 8 };
+    const driver: BrowserDriver = {
+      async call(tool, args) {
+        if (tool === "browser_snapshot") {
+          return "### Page\n- Page URL: https://tabs.ultimate-guitar.com/tab/x\n- Page Title: Tab\n### Snapshot\n```yaml\n- heading \"Chorus\" [ref=e7]\n- text: lots of chords\n```";
+        }
+        calls.push({ tool, ...args });
+        return `### Result\n${JSON.stringify(report)}\n\n### Ran Playwright code\n...`;
+      },
+      async close() {},
+    };
+    const browser = new AssistantBrowser(driver, join(home, "browser.json"), { stepMs: 0, maxMs: 0 });
+    await expect(browser.scroll({ to: "down" })).rejects.toThrow(/Read the page first/);
+    browser.allow("ultimate-guitar.com");
+    await browser.open("https://tabs.ultimate-guitar.com/tab/x");
+    calls.length = 0;
+
+    expect(await browser.scroll({ to: "down" })).toBe("Scrolled down a screen. Now 38% of the way down (screen 3 of 8).");
+    expect(String(calls[0].function)).toContain('"to":"down","screens":1,"speed":25');
+    expect(await browser.scroll({ to: "up", screens: 2 })).toBe("Scrolled up 2 screens. Now 38% of the way down (screen 3 of 8).");
+    report = { scrollable: true, moved: false, percent: 100, screen: 8, screens: 8 };
+    expect(await browser.scroll({ to: "down" })).toBe("At the bottom (screen 8 of 8).");
+    report = { scrollable: true, moved: false, percent: 0, screen: 1, screens: 8 };
+    expect(await browser.scroll({ to: "auto", speed: "medium" })).toBe("Scrolling on its own, medium (about 50 px a second), until they say stop or it reaches the end. At the top (screen 1 of 8).");
+    expect(await browser.scroll({ to: "stop" })).toBe("Stopped scrolling. At the top (screen 1 of 8).");
+    report = { scrollable: true, moved: true, percent: 55, screen: 5, screens: 8 };
+    expect(await browser.scroll({ to: "down", ref: "e7" })).toBe("Scrolled to “Chorus”. Now 55% of the way down (screen 5 of 8).");
+    expect(calls.at(-1)).toMatchObject({ tool: "browser_evaluate", target: "e7", element: "Chorus" });
+    await expect(browser.scroll({ to: "down", ref: "e99" })).rejects.toThrow(/no \[ref=e99\]/);
+    report = { scrollable: false, moved: false, percent: 0, screen: 1, screens: 1 };
+    expect(await browser.scroll({ to: "down", screens: 50 })).toBe("The page doesn't scroll: all of it is already in view.");
+    expect(String(calls.at(-1)!.function)).toContain('"screens":10'); // capped
+    await rm(home, { recursive: true, force: true });
+  });
+});

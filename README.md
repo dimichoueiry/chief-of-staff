@@ -257,6 +257,8 @@ localhost:3000/modules/M6?". It reads pages as an outline of their text, links, 
 (through Playwright MCP, no screenshots), clicks and types by voice, and tells you what it found.
 Your everyday browser is never touched.
 
+It can scroll what's shown, too: "scroll down", "go to the chorus", or "scroll slowly while I play" (auto-scroll at a reading pace until you say stop). It scrolls the page's main scroller, which on some sites is a panel.
+
 - **Signing in:** the first time a site needs it, sign in yourself in its window. It remembers
   (the profile is `~/.cos/browser/profile`). It never types passwords or codes. Google may refuse
   sign-ins in automated browsers.

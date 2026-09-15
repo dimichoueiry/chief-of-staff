@@ -428,6 +428,29 @@ export class AssistantBrowser {
     return this.settled();
   }
 
+  /**
+   * Move what's shown in the window: a screen or more down or up, to the top or bottom, to an element from the
+   * last read, or scrolling on its own at a reading pace (auto) until stopped or it reaches the end. The page's
+   * main scroller is used, which on some sites is a panel rather than the page itself.
+   */
+  async scroll(o: { to: ScrollTo; screens?: number; speed?: ScrollSpeed; ref?: string }): Promise<string> {
+    if (!this.last) throw new Error("Read the page first (browser_read), then scroll it.");
+    if (o.ref) {
+      const el = this.element(o.ref);
+      const out = await this.driver.call("browser_evaluate", { element: el.name || el.role, target: el.ref, function: SCROLL_TO_ELEMENT });
+      return `Scrolled to “${el.name || el.role}”. ${describeScroll(parseScroll(out))}`;
+    }
+    const screens = Math.min(Math.max(Number(o.screens) || 1, 0.25), 10);
+    const speed = SCROLL_SPEEDS[o.speed ?? "slow"] ?? SCROLL_SPEEDS.slow;
+    const call = `(${SCROLL_PAGE})(${JSON.stringify({ to: o.to, screens, speed })})`;
+    const state = parseScroll(await this.driver.call("browser_evaluate", { function: `async () => ${call}` }));
+    if (o.to === "auto") return state.scrollable ? `Scrolling on its own, ${o.speed ?? "slow"} (about ${speed} px a second), until they say stop or it reaches the end. ${describeScroll(state)}` : describeScroll(state);
+    if (o.to === "stop") return `Stopped scrolling. ${describeScroll(state)}`;
+    if (!state.moved) return describeScroll(state);
+    const what = o.to === "top" ? "to the top" : o.to === "bottom" ? "to the bottom" : `${o.to} ${screens === 1 ? "a screen" : `${screens} screens`}`;
+    return `Scrolled ${what}. ${describeScroll(state)}`;
+  }
+
   async back(): Promise<string> {
     await this.driver.call("browser_navigate_back", {});
     return this.settled();
@@ -436,6 +459,104 @@ export class AssistantBrowser {
   close(): Promise<void> {
     return this.driver.close();
   }
+}
+
+// ---------- scrolling ----------
+
+export type ScrollTo = "down" | "up" | "top" | "bottom" | "auto" | "stop";
+export type ScrollSpeed = "slow" | "medium" | "fast";
+export const SCROLL_SPEEDS: Record<ScrollSpeed, number> = { slow: 25, medium: 50, fast: 100 };
+
+export interface ScrollState {
+  scrollable: boolean;
+  moved: boolean;
+  /** 0 to 100: how far down the page is shown. */
+  percent: number;
+  screen: number;
+  screens: number;
+}
+
+/**
+ * Runs in the page. Finds the main scroller (the page, or the biggest scrolling panel on sites that scroll one),
+ * moves it, and reports where it is. Auto-scroll keeps going on a timer in the page until stopped or at the end.
+ */
+const SCROLL_PAGE = `async ({ to, screens, speed }) => {
+  const scrolls = (el) => el && el.scrollHeight > el.clientHeight + 20 && (el === document.scrollingElement || /auto|scroll|overlay/.test(getComputedStyle(el).overflowY));
+  let box = scrolls(document.scrollingElement) ? document.scrollingElement : null;
+  if (!box) {
+    let area = 0;
+    for (const el of document.querySelectorAll("body *")) {
+      if (!scrolls(el)) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width * r.height > area) { area = r.width * r.height; box = el; }
+    }
+  }
+  const state = (moved) => {
+    if (!box) return { scrollable: false, moved: false, percent: 0, screen: 1, screens: 1 };
+    const max = Math.max(1, box.scrollHeight - box.clientHeight);
+    const screens = Math.ceil(box.scrollHeight / box.clientHeight);
+    // The screen the middle of the window is on.
+    return { scrollable: true, moved, percent: Math.round((box.scrollTop / max) * 100), screen: Math.min(screens, Math.ceil((box.scrollTop + box.clientHeight / 2) / box.clientHeight)), screens };
+  };
+  // A smooth scroll takes longer the further it goes: wait until it has stopped moving (up to 2 s).
+  const settle = async () => {
+    let last = -1;
+    for (let i = 0; i < 40 && box.scrollTop !== last; i++) {
+      last = box.scrollTop;
+      await new Promise((r) => setTimeout(r, 60));
+    }
+  };
+  clearInterval(window.__cosAutoScroll);
+  if (!box || to === "stop") return state(false);
+  const before = box.scrollTop;
+  if (to === "auto") {
+    let last = performance.now();
+    window.__cosAutoScroll = setInterval(() => {
+      const now = performance.now();
+      box.scrollTop += (speed * (now - last)) / 1000;
+      last = now;
+      if (box.scrollTop + box.clientHeight >= box.scrollHeight - 2) clearInterval(window.__cosAutoScroll);
+    }, 40);
+    return state(false);
+  }
+  const top = to === "top" ? 0 : to === "bottom" ? box.scrollHeight : box.scrollTop + (to === "up" ? -1 : 1) * screens * box.clientHeight * 0.85;
+  box.scrollTo({ top, behavior: "smooth" });
+  await new Promise((r) => setTimeout(r, 60));
+  await settle();
+  return state(Math.abs(box.scrollTop - before) > 2);
+}`;
+
+const SCROLL_TO_ELEMENT = `async (el) => {
+  clearInterval(window.__cosAutoScroll);
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  const box = document.scrollingElement;
+  let last = -1;
+  await new Promise((r) => setTimeout(r, 60));
+  for (let i = 0; i < 40 && box.scrollTop !== last; i++) {
+    last = box.scrollTop;
+    await new Promise((r) => setTimeout(r, 60));
+  }
+  const max = Math.max(1, box.scrollHeight - box.clientHeight);
+  const screens = Math.ceil(box.scrollHeight / box.clientHeight);
+  return { scrollable: true, moved: true, percent: Math.round((box.scrollTop / max) * 100), screen: Math.min(screens, Math.ceil((box.scrollTop + box.clientHeight / 2) / box.clientHeight)), screens };
+}`;
+
+/** The page's report, from Playwright MCP's "### Result" block. */
+export function parseScroll(text: string): ScrollState {
+  const json = /### Result\s*\n([\s\S]*?)(?:\n###|$)/.exec(text)?.[1]?.trim() ?? text.trim();
+  try {
+    const s = JSON.parse(json) as Partial<ScrollState>;
+    return { scrollable: Boolean(s.scrollable), moved: Boolean(s.moved), percent: Number(s.percent) || 0, screen: Number(s.screen) || 1, screens: Number(s.screens) || 1 };
+  } catch {
+    return { scrollable: false, moved: false, percent: 0, screen: 1, screens: 1 };
+  }
+}
+
+export function describeScroll(s: ScrollState): string {
+  if (!s.scrollable) return "The page doesn't scroll: all of it is already in view.";
+  if (s.percent >= 99) return `At the bottom (screen ${s.screens} of ${s.screens}).`;
+  if (s.percent <= 0) return `At the top (screen 1 of ${s.screens}).`;
+  return `Now ${s.percent}% of the way down (screen ${s.screen} of ${s.screens}).`;
 }
 
 let shared: AssistantBrowser | null = null;
