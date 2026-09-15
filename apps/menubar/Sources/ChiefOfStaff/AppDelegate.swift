@@ -10,14 +10,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private var wakeSettings = WakeSettings.load()
   private var wakeItem: NSMenuItem!
   private var homeItem: NSMenuItem!
+  private var keysItem: NSMenuItem!
   private var loggedWakeProblem: String?
   private let focusMenu = NSMenu()
   private let modelMenu = NSMenu()
+  private var keysWindow: KeysWindow!
   private let permissionsMenu = NSMenu()
   private var permissionsItem: NSMenuItem!
   private var view = "pill"
   private var pageState = "idle"
   private var ready = false
+  private var hasKey = true
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     guard let config = ShellConfig.load() else {
@@ -26,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       return
     }
     server = ServerManager(config: config)
+    keysWindow = KeysWindow(server: server)
     installEditMenu()
     buildStatusItem()
 
@@ -68,7 +72,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       self.resumeWake()
       self.panel.load(URL(string: "\(config.baseURL)/?shell=1&mode=pill")!)
       Log.write("ready at \(config.baseURL)")
-      DispatchQueue.main.async { self.offerSetup() }
+      DispatchQueue.main.async {
+        let walking = self.offerSetup()
+        self.refreshKeysItem()
+        if !walking { self.offerKeys() } // otherwise the walk asks when it finishes
+      }
     }
   }
 
@@ -118,6 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let model = NSMenuItem(title: "Model", action: nil, keyEquivalent: "")
     model.submenu = modelMenu
     menu.addItem(model)
+    keysItem = add(menu, "API keys…", #selector(showKeys))
     add(menu, "Read the brief aloud", #selector(readAloud))
     menu.addItem(.separator())
     add(menu, "Rebuild the brief", #selector(rebuildBrief))
@@ -145,6 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     refreshPermissionsMenu()
     refreshFocusMenu()
     refreshModelMenu()
+    refreshKeysItem()
   }
 
   // MARK: the wake phrase
@@ -250,13 +260,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   @objc private func runSetup() { walk(Permission.allCases.filter { !$0.granted }) }
 
   /// Once per build (a rebuild clears macOS's switches): if anything is off, offer to go through it.
-  private func offerSetup() {
+  /// Returns true when a walk started, so the key offer waits for it rather than landing on top.
+  @discardableResult
+  private func offerSetup() -> Bool {
     let defaults = UserDefaults.standard
-    guard defaults.string(forKey: "setupDoneForBuild") != Permission.build else { return }
+    guard defaults.string(forKey: "setupDoneForBuild") != Permission.build else { return false }
     let off = Permission.allCases.filter { !$0.granted }
     guard !off.isEmpty else {
       defaults.set(Permission.build, forKey: "setupDoneForBuild")
-      return
+      return false
     }
     NSApp.activate(ignoringOtherApps: true)
     let a = NSAlert()
@@ -268,9 +280,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let choice = a.runModal()
     if choice == .alertFirstButtonReturn {
       walk(off)
-    } else {
-      defaults.set(Permission.build, forKey: "setupDoneForBuild")
+      return true
     }
+    defaults.set(Permission.build, forKey: "setupDoneForBuild")
+    return false
   }
 
   /// One permission at a time: macOS's prompt, or its page and a Next button once it's switched on.
@@ -281,6 +294,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       // next launch; "Later" or "Stop" is what stops the asking for this build.
       if off.isEmpty { UserDefaults.standard.set(Permission.build, forKey: "setupDoneForBuild") }
       Log.write("permission setup finished; off: \(off.map(\.rawValue))")
+      offerKeys() // the other thing a first launch needs, asked after the permissions, never during
       return
     }
     let rest = Array(steps.dropFirst())
@@ -313,8 +327,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       let intents = state["intents"] as? [String: Any] ?? [:]
       let inUse = (intents["ask"] as? [String: Any])?["spec"] as? String
       let saved = state["default"] as? String
-      let header = NSMenuItem(title: inUse.map { "In use: \($0)" } ?? "No model yet — add a key to .env", action: nil, keyEquivalent: "")
-      header.isEnabled = false
+      let header: NSMenuItem
+      if let inUse {
+        header = NSMenuItem(title: "In use: \(inUse)", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+      } else {
+        // Nothing can answer yet, so the one useful thing here is the way to fix that.
+        header = NSMenuItem(title: "No model yet — add an API key…", action: #selector(self.showKeys), keyEquivalent: "")
+        header.target = self
+      }
       self.modelMenu.addItem(header)
       self.modelMenu.addItem(.separator())
       for preset in state["presets"] as? [[String: Any]] ?? [] {
@@ -391,6 +412,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       alert("That didn't work.", error)
     } else if let message = result["message"] as? String {
       alert(message, result["detail"] as? String ?? "")
+    }
+  }
+
+  @objc private func showKeys() { keysWindow.show() }
+
+  /// Keep the menu honest about whether anything can answer, and offer the window once when nothing can.
+  private func refreshKeysItem() {
+    guard ready else { return }
+    server.getJSON("api/keys") { [weak self] obj in
+      guard let self, let state = obj as? [String: Any] else { return }
+      let ready = state["ready"] as? Bool ?? false
+      self.keysItem.title = ready ? "API keys…" : "Add an API key…"
+      self.hasKey = ready
+    }
+  }
+
+  /// First launch with no key: the app can hold notes and read the calendar, but it can't think.
+  /// Said once per build, like the permission walk, and never again once a key is in.
+  private func offerKeys() {
+    guard ready else { return }
+    let defaults = UserDefaults.standard
+    guard defaults.string(forKey: "keysOfferedForBuild") != Permission.build else { return }
+    server.getJSON("api/keys") { [weak self] obj in
+      guard let self, let state = obj as? [String: Any], !(state["ready"] as? Bool ?? false) else { return }
+      defaults.set(Permission.build, forKey: "keysOfferedForBuild")
+      NSApp.activate(ignoringOtherApps: true)
+      let a = NSAlert()
+      a.messageText = "Chief of Staff needs an API key"
+      a.informativeText = "Without one it still keeps your notes, projects and calendar, but it can't answer questions or write your brief.\n\nOne key from Anthropic, OpenAI or OpenRouter is enough. It's also under ✦ › API keys."
+      a.addButton(withTitle: "Add a key")
+      a.addButton(withTitle: "Later")
+      if a.runModal() == .alertFirstButtonReturn { self.keysWindow.show() }
     }
   }
 
