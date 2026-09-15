@@ -117,7 +117,14 @@ export async function packageApp(o: PackageOptions): Promise<PackageResult> {
     await symlink("/Applications", join(stage, "Applications"));
     await rm(dmg, { force: true });
     log(`writing ${dmg}`);
-    await exec("hdiutil", ["create", "-volname", APP_NAME, "-srcfolder", stage, "-ov", "-format", "UDZO", "-quiet", dmg]);
+    // Not -quiet: when hdiutil fails it explains itself on stderr, and that is the only clue there is.
+    try {
+      await exec("hdiutil", ["create", "-volname", APP_NAME, "-srcfolder", stage, "-ov", "-format", "UDZO", dmg], { maxBuffer: 8 * 1024 * 1024 });
+    } catch (err) {
+      const e = err as { stderr?: string; stdout?: string; message: string };
+      const said = [e.stdout, e.stderr].filter(Boolean).join("\n").trim();
+      throw new Error(`Couldn't write the disk image. hdiutil said:\n${said || e.message}\n\nThe app itself is fine: ${app}`);
+    }
     await rm(stage, { recursive: true, force: true });
   }
   return { app, dmg, signedWith };

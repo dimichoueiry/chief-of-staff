@@ -90,7 +90,7 @@ What they do:
 2. Open it. macOS says it can't verify the developer. Close that.
 3. System Settings › Privacy & Security, scroll down, **Open Anyway**. (Or right-click the app › Open on older macOS, or `xattr -dr com.apple.quarantine "/Applications/Chief of Staff.app"` in Terminal.)
 4. Grant the permissions it asks for: Accessibility, Microphone, Speech Recognition. Screen Recording and Full Disk Access only if they want "look at this" and browser favorites.
-5. Put a key in `~/.cos/.env`: `ANTHROPIC_API_KEY=…` (or OpenAI / OpenRouter). The app reads the file on its next request, no restart.
+5. Paste an API key. The app asks on first launch, and it is always under ✦ › API keys: one field per provider, a "Get a key" link to each, and a live check as it saves. No Terminal, no hidden file.
 
 Good enough for a handful of people who trust you. Not for anyone who doesn't, and not
 something you can put on a web page: every download is "damaged or unverified" to the OS.
@@ -99,8 +99,6 @@ Limits of the current build:
 
 - **arm64 only.** Built on this Mac, it runs on Apple silicon. An Intel friend needs a build
   from an Intel Mac, or a universal one (see below).
-- **The key is a file.** There is no screen for it. The menu says "No model yet — add a key
-  to .env"; a friend has to make `~/.cos/.env` by hand.
 - **Memory needs git.** The first write creates `~/selfhub` with `git init`. A Mac that has
   never run git shows Apple's "install command line tools?" dialog once.
 - **Its own browser needs Chrome or Edge** installed; the browser feature is off without one.
@@ -180,18 +178,45 @@ the menu rather than a new download link.
 
 ### 6. Onboarding
 
-Two things the app assumes a developer did by hand and a customer won't:
-
-- **The key.** A first-run pane (or a menu item) that writes `~/.cos/.env`. The server
-  already reloads that file on change.
-- **The memory repo.** Creating `~/selfhub` on first write is right, but the git
+- **The key: done.** ✦ › API keys (`KeysWindow.swift` and `GET/POST /api/keys`) writes
+  `~/.cos/.env` owner-only and checks the key with one live request. The app offers it once on
+  first launch when nothing is set, so a recipient is never left guessing.
+- **The memory repo: open.** Creating `~/selfhub` on first write is right, but the git
   dependency means a Mac without command line tools sees Apple's install dialog. Either
-  document it or bundle a git (large) or use libgit2 through a Swift package.
+  document it, bundle a git (large), or use libgit2 through a Swift package.
 
 Neither is packaging work; both are the difference between "installs" and "works".
 
+### The keys window
+
+One window, one field per provider, driven by the server so adding a provider to the registry
+adds a row with no Swift change. What it does:
+
+| Behaviour | Why |
+|---|---|
+| Checks the key with one live request as it saves | a wrong key is caught now, not mid-conversation |
+| Saves even when the check fails, and says what the provider said | nobody is stranded offline or behind a proxy |
+| Starts using that provider when nothing else answers | one paste and it works, no model picking |
+| Shows only a mask (`sk-ant…4f2a`), never the key | the window is safe to have open |
+| Warns when the same variable comes from the shell | otherwise a save looks ignored |
+| Rejects a paste that has whitespace, is too short, or is the placeholder | the usual bad pastes, named plainly |
+
+Verify it without the app: `npx vitest run tests/keys.test.ts`, or against a built bundle,
+
+```bash
+APP=".build/package/Chief of Staff.app"
+FRESH=$(mktemp -d)
+(cd /tmp && env -i HOME="$FRESH" COS_HOME="$FRESH/.cos" PATH=/usr/bin:/bin   "$APP/Contents/Helpers/node" "$APP/Contents/Resources/runtime/dist/cli/cos.js" ui --port 4796 --no-open &)
+sleep 2
+curl -s http://127.0.0.1:4796/api/keys      # ready: false, three rows, each with a keyUrl
+```
+
+Run that from `/tmp`, not the repo: inside the project folder the project's own `.env` is
+copied to the home file, which is right in normal use and hides the empty state in a test.
+
 ## Recommendation
 
-- **Now, for friends:** `npm run package`, send the .dmg with the five steps above.
+- **Now, for friends:** `npm run package`, send the .dmg with the five steps above. Keys are a
+  window now, so nothing about setup needs a Terminal.
 - **Before any customer:** the Developer Program and steps 1 to 3. One afternoon once the
   certificate exists; the packager is ready for it. Then a key pane (6), then universal (4).

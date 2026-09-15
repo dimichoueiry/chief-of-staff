@@ -113,7 +113,7 @@ function renderBrief(data) {
   $("nudges-wrap").hidden = !brief.nudges.length;
   for (const n of brief.nudges) nudges.append(el("li", {}, n));
 
-  $("source").textContent = `${data.source}${offline ? " · no model key: questions and focus need one" : ""} · ${data.today}`;
+  $("source").textContent = `${data.source}${offline ? " · no API key yet: add one under ✦ › API keys" : ""} · ${data.today}`;
   $("panel").dataset.speech = data.speech;
 }
 

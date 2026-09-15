@@ -11,6 +11,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import OpenAI from "openai";
+import { homeEnvFile } from "../../util/env.js";
 import { cosHome } from "../../util/home.js";
 import { AnthropicProvider } from "./anthropic.js";
 import { CompatProvider, defaultCompatSend } from "./openai.js";
@@ -207,7 +208,7 @@ export class NoModelError extends Error {
 export function explainNotReady(intent: ModelIntent, resolved: ResolvedModel | null): string {
   if (!resolved) {
     return [
-      `No model is set up for "${intent}". Add one key to .env:`,
+      `No model is set up for "${intent}". Add one key — ✦ › API keys in the menubar app, or ${homeEnvFile()}:`,
       ...PROVIDER_ORDER.map((id) => `  ${PROVIDERS[id].keyEnv[0].padEnd(24)} ${PROVIDERS[id].label}`),
       "Then pick a model any time: cos models use openai:gpt-5.4",
     ].join("\n");

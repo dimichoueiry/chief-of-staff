@@ -180,10 +180,16 @@ After code changes, `npm run build && npm run cos -- menubar refresh` updates th
 restarts the app without rebuilding it, so macOS permissions stay granted. Only Swift changes
 need `npm run cos -- menubar build`, and that means going through the permissions again.
 
-Keys are read from `~/.cos/.env` by everything. Edit the project's `.env` if you prefer: it's
-copied there whenever it's newer, the next time any `cos` command runs from the project folder
-(or right away with `cos env sync`). The running app picks up key changes on its next request.
-`cos env` shows which file is used and which providers have a key.
+Keys are read from `~/.cos/.env` by everything. Two ways in:
+
+- **✦ › API keys** in the menubar app: a field per provider, checked with one live request as
+  you save, written to `~/.cos/.env` owner-only. The only way someone you handed the app to can
+  do it, since they have no repo and no Terminal.
+- **The file**, or the project's `.env`: copied there whenever it's newer, the next time any
+  `cos` command runs from the project folder (or right away with `cos env sync`).
+
+Either way the running app picks up the change on its next request, no restart. `cos env` shows
+which file is used and which providers have a key.
 
 ## Voice
 
@@ -338,8 +344,9 @@ cos agents                    # your Agent Grid sessions, as the assistant sees 
 
 ## Models and providers
 
-The brain is model-agnostic. Add a key for any provider you use, then pick models whenever
-you like. Nothing else needs a key: calendar, speech, and memory are all local.
+The brain is model-agnostic. Add a key for any provider you use (✦ › API keys, or the file),
+then pick models whenever you like. Nothing else needs a key: calendar, speech, and memory are
+all local.
 
 | Provider | Key in `.env` | Model names look like |
 |---|---|---|
