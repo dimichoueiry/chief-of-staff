@@ -287,6 +287,8 @@ pill.addEventListener("submit", (e) => {
 });
 $("mic").addEventListener("click", micPressed);
 $("stop").addEventListener("click", stopSpeaking);
+// The menubar icon can be hidden beside the notch; this opens the same menu from the pill.
+$("menu-btn").addEventListener("click", () => toShell({ type: "menu" }));
 $("btn-refresh").addEventListener("click", () => loadBrief(true));
 $("btn-speak").addEventListener("click", () => speakText($("panel").dataset.speech || ""));
 $("answer-speak").addEventListener("click", () => speakText($("answer-text").textContent));

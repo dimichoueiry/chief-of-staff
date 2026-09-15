@@ -246,6 +246,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       startListening()
     case "stopListen":
       speech.stop()
+    case "menu":
+      // Same menu as the ✦ icon, opened where you clicked, so a hidden menubar icon never locks you out.
+      statusItem.menu?.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
     case "hide":
       speech.cancel()
       panel.hide()

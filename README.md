@@ -69,7 +69,8 @@ npm run cos -- menubar install   # builds ~/Applications/Chief of Staff.app, ope
 - **Double-tap Fn** anywhere: the pill appears and listens. Double-tap again when you're done talking.
 - **⌥Space** anywhere: the pill appears for typing.
 - **Esc** or clicking elsewhere dismisses it.
-- The ✦ menubar icon opens today's brief, focus on a project, read aloud, and rebuild.
+- The ✦ menubar icon opens today's brief, focus on a project, the model picker, read aloud, and rebuild.
+  If macOS hides the icon beside the notch, press ⌥Space and click the ✦ inside the pill: same menu.
 
 First run asks for three permissions: Accessibility (to see the Fn key), Microphone and
 Speech Recognition (to listen, on-device). If double-tapping Fn also opens the emoji picker
