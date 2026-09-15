@@ -82,11 +82,16 @@ Logs live in `~/.cos/logs`.
 
 The app and the scheduler run a copy of the CLI from `~/.cos/app`, not from this repo. macOS
 won't let a background process read code in Desktop, Documents or Downloads without a
-permission prompt it may never show. After changing code, run
-`npm run build && npm run cos -- menubar build` to refresh the copy.
+permission prompt it may never show.
 
-Keys for the app and the scheduler live in `~/.cos/.env`. Each build copies this repo's
-`.env` there when the repo's copy is newer, or you can edit `~/.cos/.env` directly.
+After code changes, `npm run build && npm run cos -- menubar refresh` updates that copy and
+restarts the app without rebuilding it, so macOS permissions stay granted. Only Swift changes
+need `npm run cos -- menubar build`.
+
+Keys are read from `~/.cos/.env` by everything. Edit the project's `.env` if you prefer: it's
+copied there whenever it's newer, the next time any `cos` command runs from the project folder
+(or right away with `cos env sync`). The running app picks up key changes on its next request.
+`cos env` shows which file is used and which providers have a key.
 
 ## Models and providers
 
@@ -97,7 +102,7 @@ you like. Nothing else needs a key: calendar, speech, and memory are all local.
 |---|---|---|
 | Anthropic (Claude) | `ANTHROPIC_API_KEY` | `anthropic:claude-opus-5`, `anthropic:claude-haiku-4-5` |
 | OpenAI | `OPENAI_API_KEY` | `openai:gpt-5.4`, `openai:gpt-5.2` |
-| OpenRouter | `OPENROUTER_API_KEY` | `openrouter:openai/gpt-5.2`, `openrouter:~anthropic/claude-sonnet-latest`, `openrouter:openrouter/auto` |
+| OpenRouter | `OPENROUTER_API_KEY` | `openrouter:anthropic/claude-sonnet-5`, `openrouter:openai/gpt-5.4`, `openrouter:openrouter/auto` (full list at openrouter.ai/models) |
 | Any OpenAI-compatible server (Ollama, LM Studio, …) | `COS_COMPATIBLE_BASE_URL` | `compatible:llama3.2` |
 
 Pick a model three ways:

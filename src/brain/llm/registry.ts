@@ -51,7 +51,7 @@ export const PROVIDERS: Record<ProviderId, ProviderInfo> = {
     label: "OpenRouter",
     keyEnv: ["OPENROUTER_API_KEY"],
     defaultModel: "openrouter/auto",
-    examples: ["openrouter/auto", "~anthropic/claude-sonnet-latest", "openai/gpt-5.2"],
+    examples: ["openrouter/auto", "anthropic/claude-sonnet-5", "openai/gpt-5.4", "google/gemini-2.5-pro"],
     keyUrl: "https://openrouter.ai/keys",
   },
   compatible: {
@@ -252,6 +252,7 @@ export function createProvider(spec: ModelSpec, env: NodeJS.ProcessEnv = process
 
 /** Built-in picker entries plus any the user added in models.json. */
 export function presets(settings: ModelSettings = readModelSettings()): string[] {
+  // OpenRouter names checked against its live model list (openrouter.ai/api/v1/models), September 2026.
   const builtIn = [
     "anthropic:claude-opus-5",
     "anthropic:claude-sonnet-5",
@@ -259,7 +260,12 @@ export function presets(settings: ModelSettings = readModelSettings()): string[]
     "openai:gpt-5.4",
     "openai:gpt-5.2",
     "openrouter:openrouter/auto",
-    "openrouter:~anthropic/claude-sonnet-latest",
+    "openrouter:anthropic/claude-opus-5",
+    "openrouter:anthropic/claude-sonnet-5",
+    "openrouter:anthropic/claude-haiku-4.5",
+    "openrouter:openai/gpt-5.4",
+    "openrouter:openai/gpt-5.4-mini",
+    "openrouter:google/gemini-2.5-pro",
   ];
   return [...new Set([...builtIn, ...(settings.presets ?? [])])];
 }
