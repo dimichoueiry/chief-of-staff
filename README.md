@@ -78,6 +78,10 @@ npm run cos -- menubar install   # builds ~/Applications/Chief of Staff.app, ope
   (which also hides the pill). Double-tapping Control while it talks cuts it off and listens. Replies to
   typed questions, and "open …" requests, don't reopen the mic.
 - **⌥Space** anywhere: the pill appears for typing.
+- **Compact mic.** The ⤡ button at the right of the bar shrinks it to a small, see-through mic (about 85 px
+  wide instead of 640) that covers less of the screen; ⤢ opens it back up. It turns solid while it listens,
+  thinks or speaks, and the choice is remembered. Typing still works when compact: press ⌥Space and start
+  typing, and the full bar opens for that time. By voice: "compact mode" / "full mode".
 - **Esc** or clicking elsewhere dismisses it.
 - The ✦ menubar icon opens today's brief, focus on a project, the model picker, read aloud, and rebuild.
   If macOS hides the icon beside the notch, press ⌥Space and click the ✦ inside the pill: same menu.
