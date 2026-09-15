@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private let hotkeys = HotkeyMonitor()
   private let speech = SpeechListener()
   private let focusMenu = NSMenu()
+  private let modelMenu = NSMenu()
   private var fnItem: NSMenuItem!
   private var view = "pill"
   private var pageState = "idle"
@@ -76,6 +77,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let focus = NSMenuItem(title: "Focus a project", action: nil, keyEquivalent: "")
     focus.submenu = focusMenu
     menu.addItem(focus)
+    let model = NSMenuItem(title: "Model", action: nil, keyEquivalent: "")
+    model.submenu = modelMenu
+    menu.addItem(model)
     add(menu, "Read the brief aloud", #selector(readAloud))
     menu.addItem(.separator())
     add(menu, "Rebuild the brief", #selector(rebuildBrief))
@@ -95,11 +99,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
 
   func menuWillOpen(_ menu: NSMenu) {
-    guard menu !== focusMenu else { return }
+    guard menu !== focusMenu, menu !== modelMenu else { return }
     let trusted = HotkeyMonitor.accessibilityTrusted(prompt: false)
     fnItem.title = trusted ? "Double-tap Fn: on" : "Enable double-tap Fn (Accessibility)…"
     fnItem.state = trusted ? .on : .off
     refreshFocusMenu()
+    refreshModelMenu()
+  }
+
+  /// Presets from the server, a check on the model in use, dimmed when that provider has no key.
+  private func refreshModelMenu() {
+    guard ready else { return }
+    server.getJSON("api/models") { [weak self] obj in
+      guard let self, let state = obj as? [String: Any] else { return }
+      self.modelMenu.removeAllItems()
+      let intents = state["intents"] as? [String: Any] ?? [:]
+      let inUse = (intents["ask"] as? [String: Any])?["spec"] as? String
+      let saved = state["default"] as? String
+      let header = NSMenuItem(title: inUse.map { "In use: \($0)" } ?? "No model yet — add a key to .env", action: nil, keyEquivalent: "")
+      header.isEnabled = false
+      self.modelMenu.addItem(header)
+      self.modelMenu.addItem(.separator())
+      for preset in state["presets"] as? [[String: Any]] ?? [] {
+        guard let spec = preset["spec"] as? String else { continue }
+        let hasKey = preset["ready"] as? Bool ?? false
+        let item = NSMenuItem(title: hasKey ? spec : "\(spec)   (no key)", action: hasKey ? #selector(self.selectModel(_:)) : nil, keyEquivalent: "")
+        item.target = self
+        item.representedObject = spec
+        item.state = spec == (saved ?? inUse) ? .on : .off
+        item.isEnabled = hasKey
+        self.modelMenu.addItem(item)
+      }
+      self.modelMenu.addItem(.separator())
+      let hint = NSMenuItem(title: "Any model: cos models use provider:model", action: nil, keyEquivalent: "")
+      hint.isEnabled = false
+      self.modelMenu.addItem(hint)
+      if saved != nil {
+        let clear = NSMenuItem(title: "Clear saved choice", action: #selector(self.clearModel), keyEquivalent: "")
+        clear.target = self
+        self.modelMenu.addItem(clear)
+      }
+    }
+  }
+
+  @objc private func selectModel(_ sender: NSMenuItem) {
+    guard let spec = sender.representedObject as? String else { return }
+    server.postJSON("api/models", ["spec": spec]) { _ in Log.write("model → \(spec)") }
+  }
+
+  @objc private func clearModel() {
+    server.postJSON("api/models", ["spec": NSNull()])
   }
 
   private func refreshFocusMenu() {
