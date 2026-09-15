@@ -429,14 +429,19 @@ function renderThread(c) {
   showChatInfo(c);
 }
 
-/** Show the conversation in progress; after a quiet spell the server has started a new one. */
+/**
+ * Show the conversation in progress: after a quiet spell the server has started a new one, and
+ * something may have happened in this one since (an agent finished, an action was carried out).
+ */
 async function syncConversation() {
   if (busy) return;
   try {
     const c = await get("/api/conversation");
     if (busy) return;
-    if (c.id !== conversationId) renderThread(c);
+    const grew = c.id === conversationId && c.turns.length > thread.childElementCount;
+    if (c.id !== conversationId || c.turns.length !== thread.childElementCount) renderThread(c);
     else showChatInfo(c);
+    if (grew && chatHidden) $("show-chat").classList.add("unread");
   } catch {
     /* the server is restarting; try again next time */
   }
@@ -1047,3 +1052,5 @@ if (SHELL) {
 setState("idle");
 loadBrief();
 syncConversation();
+// Keep it current while it sits open: an agent may finish, or an action land, between messages.
+setInterval(syncConversation, 20_000);

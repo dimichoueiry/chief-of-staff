@@ -490,7 +490,7 @@ program
   .option("--no-open", "do not open the browser")
   .action(async (o: { port: string; open: boolean }) => {
     const cfg = config();
-    const server = createUiServer({ config: cfg, modelFlag: modelFlag(), today: program.opts<{ today?: string }>().today });
+    const server = createUiServer({ config: cfg, modelFlag: modelFlag(), today: program.opts<{ today?: string }>().today, agentWatch: {} });
     readyPlayer(); // build the audio player now, so the first reply doesn't play with afplay's pauses
     const port = Number(o.port) || 4747;
     await new Promise<void>((resolveListen, reject) => {

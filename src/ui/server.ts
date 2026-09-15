@@ -25,7 +25,7 @@ import { buildBrief } from "../logic/brief.js";
 import { daysIdle } from "../logic/cadence.js";
 import { decide, isChoice } from "../logic/decide.js";
 import { scribe } from "../logic/scribe.js";
-import { loadLastBrief, saveBrief } from "../output/notify.js";
+import { loadLastBrief, notify, saveBrief } from "../output/notify.js";
 import { markdownToSpeech, renderBriefSpeech } from "../output/render.js";
 import { eventsInRange } from "../sensors/calendar.js";
 import { activityRoots, applyActivity, scanActivity } from "../sensors/git.js";
@@ -36,7 +36,8 @@ import { LOOK_REQUEST, SCREEN_PERMISSION_HELP, ScreenPermissionError, describeSh
 import { addDays, todayISO } from "../util/dates.js";
 import { reloadHomeEnv } from "../util/env.js";
 import type { Access } from "../actions/access.js";
-import type { AgentGrid } from "../actions/agentgrid.js";
+import { AgentGrid } from "../actions/agentgrid.js";
+import { watchAgents, type Watcher } from "../actions/agentwatch.js";
 import type { AssistantBrowser } from "../actions/browser.js";
 import { macOpen, openOrQueue, type Runner } from "../actions/open.js";
 import { confirmView, isPending, take, type ConfirmView } from "../actions/pending.js";
@@ -88,6 +89,12 @@ export interface UiOptions {
   screen?: ScreenCapturer;
   /** How a model is checked before it's used from the menu (tests). */
   modelTester?: (spec: ModelSpec) => Promise<{ ms: number; servedBy: string }>;
+  /**
+   * Tell them when an Agent Grid agent finishes: a notification, and a line in the conversation so the
+   * assistant knows too. Agent Grid is polled while the server listens; `cos ui` turns this on. Tests
+   * pass a fake Agent Grid and notifier, or leave it out.
+   */
+  agentWatch?: { everyMs?: number; stateFile?: string | null; notifier?: (title: string, body: string) => Promise<boolean> };
 }
 
 /** How long a finished action counts as "just done", so the same one isn't queued again. */
@@ -693,7 +700,7 @@ export function createUiServer(o: UiOptions): Server {
     }
   }
 
-  return createServer(async (req, res) => {
+  const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     // Keys added to ~/.cos/.env apply to the next request; no restart.
     if (url.pathname.startsWith("/api/")) reloadHomeEnv();
@@ -704,4 +711,28 @@ export function createUiServer(o: UiOptions): Server {
       await json(res, 500, { error: (err as Error).message });
     }
   });
+
+  if (o.agentWatch) {
+    const w = o.agentWatch;
+    let watcher: Watcher | null = null;
+    server.on("listening", () => {
+      watcher = watchAgents({
+        grid: o.agentGrid ?? new AgentGrid(),
+        everyMs: w.everyMs,
+        stateFile: w.stateFile,
+        allowed: () => access().agents !== "off",
+        log: Log,
+        onFinished: async (_f, said) => {
+          Log(`agent finished: ${said.line}`);
+          // Written between messages, never in the middle of one, so a reply being saved can't drop it.
+          const job = pillQueue.then(() => conversations.append(conversations.current(), { role: "event", text: said.line }));
+          pillQueue = job.catch(() => undefined);
+          await job;
+          await (w.notifier ?? notify)(said.title, said.body);
+        },
+      });
+    });
+    server.on("close", () => watcher?.stop());
+  }
+  return server;
 }

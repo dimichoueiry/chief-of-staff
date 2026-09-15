@@ -1,9 +1,14 @@
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
+import type { AddressInfo } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AgentGrid, type AgentSession } from "../src/actions/agentgrid.js";
 import { AgentWatch, describeFinish, lastSaid, loadWatchState, saveWatchState, watchAgents, type AgentFinished } from "../src/actions/agentwatch.js";
+import { loadConfig } from "../src/config.js";
+import { createUiServer } from "../src/ui/server.js";
+import { makeTmpSelfhub } from "./helpers/tmp-selfhub.js";
 
 const home = homedir();
 const session = (over: Partial<AgentSession>): AgentSession => ({
@@ -152,5 +157,53 @@ describe("watching Agent Grid", () => {
     expect(logged.at(-1)).toBe("agent watch: Agent Grid is back");
     expect(told).toEqual(["Refactor auth: done"]);
     w.stop();
+  });
+
+  it("from the UI server: a notification and a line in the conversation, once, while it listens", async () => {
+    const { dir: selfhub, cleanup } = await makeTmpSelfhub();
+    const home = await mkdtemp(join(tmpdir(), "cos-home-"));
+    process.env.COS_HOME = home;
+    const told: string[] = [];
+    const stateFile = join(home, "agent-watch.json");
+    const server = createUiServer({
+      config: loadConfig({ COS_SELFHUB: selfhub, COS_PROJECT_ROOTS: "/nonexistent" }),
+      today: "2026-09-15", offline: true, allowSpeech: false, backgroundSummaries: false,
+      agentGrid: grid(),
+      agentWatch: {
+        everyMs: 20, stateFile,
+        notifier: async (title, body) => {
+          told.push(`${title} — ${body}`);
+          return true;
+        },
+      },
+    });
+    const until = async (ok: () => boolean) => {
+      for (let i = 0; i < 200 && !ok(); i++) await new Promise((r) => setTimeout(r, 10));
+      expect(ok()).toBe(true);
+    };
+    try {
+      await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+      const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+      await until(() => existsSync(stateFile)); // the first look has recorded the fleet
+      sessions[0] = session({ sessionId: "a", status: "done" });
+      await until(() => told.length === 1);
+      await new Promise((r) => setTimeout(r, 120)); // several more looks
+      expect(told).toEqual(["Refactor auth: done — claude in ~/Desktop/drawcal. All done, tests pass."]);
+      const c = (await (await fetch(`${base}/api/conversation`)).json()) as { turns: { role: string; text: string }[] };
+      expect(c.turns.map((t) => [t.role, t.text])).toEqual([
+        ["event", 'Agent "Refactor auth" (claude in ~/Desktop/drawcal, id a) finished: done. It last said: All done, tests pass.'],
+      ]);
+      await new Promise<void>((r) => server.close(() => r()));
+      sessions[1] = session({ sessionId: "b", title: "Quiz", status: "working" });
+      await new Promise((r) => setTimeout(r, 80));
+      sessions[1] = session({ sessionId: "b", title: "Quiz", status: "done" });
+      await new Promise((r) => setTimeout(r, 80));
+      expect(told).toHaveLength(1); // closed: it stopped looking
+    } finally {
+      server.close();
+      delete process.env.COS_HOME;
+      await rm(home, { recursive: true, force: true });
+      await cleanup();
+    }
   });
 });
