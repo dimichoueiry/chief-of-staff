@@ -95,6 +95,13 @@ body {
 .answer-head #answer-title { white-space: nowrap; }
 .answer-head .model { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-weight: 400; font-size: 12px; font-family: var(--mono); }
 .answer-head .chip { white-space: nowrap; }
+.answer-head .chip.icon { padding: 3px 10px; font-size: 15px; line-height: 1.2; color: #d6dae2; }
+
+/* Hidden chat: the card goes away (the window shrinks with it); the pill keeps a way back. */
+html[data-chat="hidden"] .answer { display: none; }
+.pill .show-chat { position: relative; font: 12px var(--mono); color: var(--accent); background: #231f18; border: 1px solid #5a4630; border-radius: 999px; padding: 4px 9px; cursor: pointer; white-space: nowrap; }
+.pill .show-chat[hidden] { display: none; }
+.pill .show-chat.unread::after { content: ""; position: absolute; top: -2px; right: -2px; width: 8px; height: 8px; border-radius: 50%; background: var(--attention); }
 .answer-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .answer-actions .url { flex-basis: 100%; color: var(--muted); font: 12px var(--mono); word-break: break-all; }
 .answer-actions .detail { flex-basis: 100%; margin: 0; max-height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-word; font: 12px var(--mono); color: #cfd4dc; background: #1a1d24; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }

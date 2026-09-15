@@ -274,6 +274,25 @@ function renderMarkdown(text) {
 
 // ---------- the conversation ----------
 const thread = $("thread");
+
+// Hiding the chat keeps it out of the way until you bring it back; it's remembered across summons.
+const HIDE_CHAT = /^(?:please\s+)?(?:hide|close|collapse|minimi[sz]e|put away)\s+(?:the\s+|this\s+)?(?:chat|conversation|thread)[.!]*$/i;
+const SHOW_CHAT = /^(?:please\s+)?(?:show|open|bring back|expand)\s+(?:the\s+|me the\s+)?(?:chat|conversation|thread)[.!]*$/i;
+let chatHidden = localStorage.getItem("cos.chatHidden") === "1";
+
+function setChatHidden(hidden) {
+  chatHidden = hidden;
+  localStorage.setItem("cos.chatHidden", hidden ? "1" : "0");
+  root.dataset.chat = hidden ? "hidden" : "shown";
+  if (!hidden) $("show-chat").classList.remove("unread");
+  updateShowChat();
+  if (!hidden) scrollThread();
+}
+
+/** The pill's "chat" button: only while the chat is hidden and there is something in it. */
+function updateShowChat() {
+  $("show-chat").hidden = !(chatHidden && thread.children.length);
+}
 let conversationId = null;
 let busy = false;
 let lastReply = "";
@@ -338,6 +357,7 @@ function addTurn(turn) {
   }
   thread.append(node);
   $("answer").hidden = false;
+  updateShowChat();
   scrollThread();
   return node;
 }
@@ -349,6 +369,7 @@ function renderThread(c) {
   $("answer-model").textContent = "";
   for (const t of c.turns) addTurn(t);
   $("answer").hidden = !c.turns.length;
+  updateShowChat();
 }
 
 /** Show the conversation in progress; after a quiet spell the server has started a new one. */
@@ -431,6 +452,7 @@ async function send(body, thinking, fromVoice = false) {
   lastReply = r.text || "";
   $("answer-model").textContent = r.model && r.model !== "rules" ? `· ${r.model}` : "";
   scrollThread();
+  if (chatHidden && r.text) $("show-chat").classList.add("unread");
   if (r.changes) markStale();
   busy = false;
   setState("idle");
@@ -445,6 +467,14 @@ async function submit(text, fromVoice = false) {
     setState("idle");
     return;
   }
+  if (HIDE_CHAT.test(t) || SHOW_CHAT.test(t)) {
+    input.value = "";
+    setChatHidden(HIDE_CHAT.test(t));
+    setState("idle");
+    return;
+  }
+  // A typed question needs its answer on screen; a spoken one is heard, so the chat can stay hidden.
+  if (!fromVoice && chatHidden) setChatHidden(false);
   if (fromVoice && DONE_TALKING.test(t)) {
     input.value = "";
     setState("idle");
@@ -577,6 +607,9 @@ $("btn-refresh").addEventListener("click", () => loadBrief(true));
 $("btn-speak").addEventListener("click", () => speakText($("panel").dataset.speech || ""));
 $("answer-speak").addEventListener("click", () => speakText(lastReply));
 $("new-chat").addEventListener("click", newConversation);
+$("hide-chat").addEventListener("click", () => setChatHidden(true));
+$("show-chat").addEventListener("click", () => setChatHidden(false));
+setChatHidden(chatHidden);
 $("mode").addEventListener("click", () => {
   inputMode = inputMode === "auto" ? "ask" : inputMode === "ask" ? "capture" : "auto";
   $("mode").textContent = inputMode;

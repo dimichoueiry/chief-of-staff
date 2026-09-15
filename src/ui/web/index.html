@@ -56,6 +56,7 @@
         <span class="model" id="answer-model"></span>
         <button class="chip" id="new-chat" title="Start a new conversation (⌘N)">＋ new</button>
         <button class="chip chip-accent" id="answer-speak" title="Read the last reply aloud">▶ read aloud</button>
+        <button class="chip icon" id="hide-chat" title="Hide the chat (bring it back from the pill)" aria-label="Hide the chat">▾</button>
       </div>
       <div class="thread" id="thread" aria-live="polite"></div>
     </section>
@@ -73,6 +74,7 @@
       <input id="pill-input" type="text" placeholder="Ask anything…" />
       <span class="status" id="pill-status"></span>
       <button type="button" class="stop" id="stop" title="Stop" aria-label="Stop speaking">■</button>
+      <button type="button" class="show-chat" id="show-chat" title="Show the chat" aria-label="Show the chat" hidden>▴ chat</button>
       <button type="button" class="mode" id="mode" title="Auto decides: capture or ask">auto</button>
       <button type="button" class="menu" id="menu-btn" title="Menu: model, brief, projects" aria-label="Open menu">✦</button>
       <kbd>⌃ ⌃</kbd>

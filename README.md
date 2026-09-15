@@ -94,6 +94,10 @@ filed, and what it opened (even the instant "open …" requests that never touch
 
 - The thread shows above the pill and is still there when you dismiss it and bring it back.
 - While it works, the pill says what it's doing ("Checking your calendar…"); replies show lists, bold and links.
+- **▾** in the chat's top-right corner hides the chat so it stops covering your screen (the window shrinks
+  to just the pill). **▴ chat** on the pill brings it back; a dot on it means a reply came in while hidden.
+  Saying "hide the chat" / "show the chat" works too. Hidden stays hidden across summons; a typed question
+  brings it back (you'll want to read the answer), a spoken one doesn't (you'll hear it).
 - **＋ new** (or ⌘N) starts a fresh conversation. After two quiet hours the next message starts one on its own
   (`COS_CONVERSATION_IDLE_MINUTES`).
 - Conversations are saved in `~/.cos/conversations`, so restarting the app doesn't lose the thread.
