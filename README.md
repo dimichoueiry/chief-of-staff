@@ -318,6 +318,13 @@ run it.
 Agent Grid mints a new key every time it starts; it now writes it to `~/.agentgrid/web.json`
 (owner-only) so the assistant can connect. Restart Agent Grid once after updating it.
 
+**When an agent finishes, you hear about it.** While the app runs, it watches Agent Grid; an agent
+that was working and has settled (done, failed, needs you, idle, stopped) gets a macOS notification
+naming it, how it ended and its last words, and the same line goes into the conversation so the
+assistant knows on your next message ("did the auth refactor finish?"). Each finish is told once:
+the last known statuses live in `~/.cos/agent-watch.json`, so restarting the app neither repeats
+one nor misses one that landed meanwhile. Off when `cos access agents off`.
+
 ```bash
 cos access                    # what it may do on its own
 cos access terminal auto      # off | ask | auto
