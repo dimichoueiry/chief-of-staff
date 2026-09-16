@@ -214,25 +214,28 @@ User stories
 - US7.4 They can remove it as easily as they installed it.
 
 Tasks — correctness (do these first; each is small and self-contained)
-- T7.1 Compile the three Swift helpers with `-target arm64-apple-macosx14.0` and set
+Done 2026-09-15: T7.1-T7.8 and T7.11. Verified on the built bundle: every binary reports
+`minos 14.0`, packaging refuses a build stamped newer, the app takes a free port when the
+usual one is busy, and nothing in the binary names npm or the repo.
+- [x] T7.1 Compile the three Swift helpers with `-target arm64-apple-macosx14.0` and set
   `LSMinimumSystemVersion` to 14.0. They ship stamped `minos 18.0` today while the app
   claims 13.0, so on an older Mac the app opens and the helpers refuse to load. 14.0 is the
   true floor: `cos-screen` uses `SCScreenshotManager`, which is macOS 14+.  [S]
-- T7.2 Pick a free port instead of hardcoding 4747, and write it where the shell reads it.
+- [x] T7.2 Pick a free port instead of hardcoding 4747, and write it where the shell reads it.
   Today a taken port means `EADDRINUSE`, and the app then says "Is the repo built
   (npm run build)?" to someone with no repo.  [S]
-- T7.3 Replace every message that names the repo, npm or a CLI command with something a
+- [x] T7.3 Replace every message that names the repo, npm or a CLI command with something a
   recipient can act on (`AppDelegate.swift` lines ~29 and ~70, `server.ts` no-model text).  [S]
-- T7.4 Default the wake word to off. An app handed to someone should not listen until asked.  [S]
-- T7.5 Cap and rotate `~/.cos/logs`.  [S]
-- T7.6 Stop defaulting the project scan to `~/Desktop`: ask, or default to nothing. It
+- [x] T7.4 Default the wake word to off. An app handed to someone should not listen until asked.  [S]
+- [x] T7.5 Cap and rotate `~/.cos/logs`.  [S]
+- [x] T7.6 Stop defaulting the project scan to `~/Desktop`: ask, or default to nothing. It
   triggers a Files-and-Folders prompt and reads folders that aren't ours.  [S]
-- T7.7 Take Full Disk Access out of the first-run walk. It has no prompt, must be done by
+- [x] T7.7 Take Full Disk Access out of the first-run walk. It has no prompt, must be done by
   dragging the app into System Settings, and only powers browser bookmarks. Ask when that
   feature is first used.  [S]
 
 Tasks — the product promise
-- T7.8 Start at login, from the app: `SMAppService.mainApp.register()` (macOS 13+), with a
+- [x] T7.8 Start at login, from the app: `SMAppService.mainApp.register()` (macOS 13+), with a
   menu toggle. No launch agent exists on this machine today, so nothing starts at login.  [S]
 - T7.9 Schedule the brief, the wrap nudge and the silence check **inside the running app**,
   not through launchd. Verified 2026-09-15: `~/.cos/bin/cos-calendar` returns "calendar
@@ -242,7 +245,7 @@ Tasks — the product promise
 - T7.10 Post notifications from the app (UNUserNotificationCenter) instead of
   `osascript display notification`, which is attributed to Script Editor and can be
   suppressed. Needs a server-to-app channel; the agent-finished path wants the same thing.  [M]
-- T7.11 An uninstall menu item: quit, remove the login item, offer to delete `~/.cos`, leave
+- [x] T7.11 An uninstall menu item: quit, remove the login item, offer to delete `~/.cos`, leave
   `~/selfhub` unless they say otherwise, and name the Privacy entries it can't remove.  [S]
 - T7.12 An app icon. Currently the generic one in Finder, the Dock and Notification Centre.  [S]
 - T7.13 First-run identity: the memory works but starts empty, so day one reads "Nothing is
