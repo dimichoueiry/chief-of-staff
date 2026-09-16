@@ -45,6 +45,7 @@ import { reloadHomeEnv } from "../util/env.js";
 import { KEY_PROVIDERS, cleanKey, keysState, saveKey } from "../util/keys.js";
 import type { Access } from "../actions/access.js";
 import { AgentGrid } from "../actions/agentgrid.js";
+import { STATUS_LABELS, areaTree } from "../actions/gridboard.js";
 import { watchAgents, type Watcher } from "../actions/agentwatch.js";
 import type { AssistantBrowser } from "../actions/browser.js";
 import { macOpen, openOrQueue, type Runner } from "../actions/open.js";
@@ -258,6 +259,77 @@ export function createUiServer(o: UiOptions): Server {
       ],
       providers: PROVIDER_ORDER.map((id) => ({ id, label: PROVIDERS[id].label, ready: providerConfigured(id), key: PROVIDERS[id].keyEnv[0] })),
     };
+  }
+
+  const grid = () => o.agentGrid ?? new AgentGrid();
+
+  /**
+   * What the Agent Grid menu draws: work areas and the agents in each, then the ticket board in one line
+   * and what is waiting on review. Never throws — Agent Grid being closed is a state, not an error.
+   */
+  async function gridView() {
+    const g = grid();
+    let url = "";
+    try {
+      url = g.pageUrl();
+    } catch (err) {
+      return { connected: false, error: (err as Error).message, areas: [], unfiled: null, tickets: null, actions: [] };
+    }
+    try {
+      const [file, sessions] = await Promise.all([g.areas(), g.sessions()]);
+      const board = await g.board().catch(() => null);
+      const tickets = board?.tickets ?? [];
+      const tree = areaTree(file, sessions);
+      const held = (sessionId: string) => tickets.filter((t) => t.sessionId === sessionId && t.status !== "done").map((t) => t.id);
+      const live = (s: { status: string }) => s.status !== "done" && s.status !== "stopped";
+      const agent = (s: (typeof sessions)[number]) => ({
+        id: s.sessionId,
+        name: s.customName || s.title || s.sessionId.slice(0, 8),
+        status: s.status,
+        needsYou: s.status === "blocked",
+        project: s.project ?? "",
+        tickets: held(s.sessionId),
+      });
+      const open = tickets.filter((t) => t.status !== "done");
+      return {
+        connected: true,
+        areas: tree.areas.map((n) => ({
+          id: n.area.id,
+          name: n.area.name,
+          running: n.agents.filter(live).length,
+          needYou: n.agents.filter((a) => a.status === "blocked").length,
+          finished: n.agents.filter((a) => !live(a)).length,
+          agents: n.agents.filter(live).map(agent),
+        })),
+        unfiled: {
+          running: tree.unfiled.filter(live).length,
+          finished: tree.unfiled.filter((a) => !live(a)).length,
+          agents: tree.unfiled.filter(live).slice(0, 12).map(agent),
+        },
+        tickets: board
+          ? {
+              open: open.length,
+              unassigned: open.filter((t) => !t.assignee).length,
+              columns: (["backlog", "todo", "in_progress", "review", "done"] as const).map((k) => ({
+                key: k, label: STATUS_LABELS[k], count: tickets.filter((t) => t.status === k).length,
+              })),
+              review: tickets.filter((t) => t.status === "review").slice(0, 8).map((t) => ({ id: t.id, title: t.title })),
+            }
+          : null,
+        actions: [
+          ...(board
+            ? [{
+                kind: "input", title: "New ticket…", prompt: "New ticket",
+                message: "One line saying what the work is. It goes in To do; ask me afterwards to add detail, set a priority or hand it to an agent.",
+                placeholder: "Fix the export button on Safari", button: "File it", path: "api/grid/tickets/new",
+              }]
+            : []),
+          { kind: "open", title: "Open Agent Grid", url },
+        ],
+      };
+    } catch (err) {
+      return { connected: false, error: (err as Error).message, areas: [], unfiled: null, tickets: null, actions: [{ kind: "open", title: "Open Agent Grid", url }] };
+    }
   }
 
   /** What the connections window draws: what is added, what each one needs, and what to add next. */
@@ -650,6 +722,22 @@ export function createUiServer(o: UiOptions): Server {
         } catch (err) {
           const why = String((err as Error).message).split("\n")[0];
           return json(res, 422, { error: `${name} didn't work, so nothing changed: ${why}` });
+        }
+      }
+      case "GET /api/grid":
+        return json(res, 200, await gridView());
+      case "POST /api/grid/tickets/new": {
+        // Filed straight from the menu: the person typed it and pressed the button, so that is the OK.
+        const b = await body(req);
+        const title = String(b.value ?? b.title ?? "").trim();
+        if (!title) return json(res, 400, { error: "A ticket needs a title: one line saying what the work is." });
+        if (title.length > 160) return json(res, 400, { error: "That title is over 160 characters. Put the detail on the board." });
+        try {
+          const made = await grid().createTicket({ title });
+          Log(`ticket filed from the menu: ${made.ticket.id}`);
+          return json(res, 200, { ok: true, message: `Filed ${made.ticket.id}`, detail: `"${made.ticket.title}" is in To do. Ask me to add detail, set a priority or hand it to an agent.`, ticket: made.ticket.id });
+        } catch (err) {
+          return json(res, 502, { error: `Agent Grid didn't take it: ${(err as Error).message}` });
         }
       }
       case "GET /api/connections":

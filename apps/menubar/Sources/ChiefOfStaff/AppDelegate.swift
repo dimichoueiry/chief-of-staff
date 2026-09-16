@@ -15,10 +15,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private var memoryItem: NSMenuItem!
   private var loginItem: NSMenuItem!
   private var connectionsItem: NSMenuItem!
+  private var gridItem: NSMenuItem!
   private var loggedWakeProblem: String?
   private let focusMenu = NSMenu()
   private let modelMenu = NSMenu()
   private let memoryMenu = NSMenu()
+  private let gridMenu = NSMenu()
   private var keysWindow: KeysWindow!
   private var connectionsWindow: ConnectionsWindow!
   private let permissionsMenu = NSMenu()
@@ -133,6 +135,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     add(menu, "Ask or capture…   (⌥Space)", #selector(type))
     wakeItem = add(menu, "Listen for “Darius”", #selector(toggleWake))
     homeItem = add(menu, "Move the chat back to the bottom", #selector(moveHome))
+    gridItem = NSMenuItem(title: "Agent Grid", action: nil, keyEquivalent: "")
+    gridItem.submenu = gridMenu
+    menu.addItem(gridItem)
     let focus = NSMenuItem(title: "Focus a project", action: nil, keyEquivalent: "")
     focus.submenu = focusMenu
     menu.addItem(focus)
@@ -167,7 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
 
   func menuWillOpen(_ menu: NSMenu) {
-    guard menu !== focusMenu, menu !== modelMenu, menu !== memoryMenu else { return }
+    guard menu !== focusMenu, menu !== modelMenu, menu !== memoryMenu, !isGridMenu(menu) else { return }
     refreshWakeItem()
     homeItem.isHidden = panel.placement == nil
     refreshPermissionsMenu()
@@ -176,6 +181,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     refreshKeysItem()
     refreshMemoryMenu()
     refreshConnectionsItem()
+    refreshGridMenu()
     loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
   }
 
@@ -502,6 +508,122 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   @objc private func showKeys() { keysWindow.show() }
 
   @objc private func showConnections() { connectionsWindow.show() }
+
+  /// The grid menu and the per-area submenus under it don't refresh the whole status menu when they open.
+  private func isGridMenu(_ menu: NSMenu) -> Bool {
+    var m: NSMenu? = menu
+    while let current = m {
+      if current === gridMenu { return true }
+      m = current.supermenu
+    }
+    return false
+  }
+
+  private func infoItem(_ title: String, small: Bool = false) -> NSMenuItem {
+    let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+    item.isEnabled = false
+    if small { item.attributedTitle = NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 11)]) }
+    return item
+  }
+
+  /// One running agent: what it is doing, whether it needs you, and the tickets it holds. Opens Agent Grid.
+  private func agentItem(_ a: [String: Any], open: [String: Any]?) -> NSMenuItem {
+    let name = a["name"] as? String ?? "agent"
+    let needs = a["needsYou"] as? Bool ?? false
+    let status = needs ? "needs you" : (a["status"] as? String ?? "")
+    let held = (a["tickets"] as? [String] ?? []).joined(separator: ", ")
+    let title = "\(needs ? "●" : "○")  \(name) — \(status)\(held.isEmpty ? "" : " · \(held)")"
+    let item = NSMenuItem(title: title, action: open == nil ? nil : #selector(runMenuAction(_:)), keyEquivalent: "")
+    item.target = self
+    item.representedObject = open
+    item.isEnabled = open != nil
+    return item
+  }
+
+  private func areaLine(name: String, running: Int, needYou: Int, finished: Int) -> String {
+    var bits: [String] = []
+    if running > 0 { bits.append("\(running) running") }
+    if needYou > 0 { bits.append("\(needYou) need\(needYou == 1 ? "s" : "") you") }
+    if bits.isEmpty { bits.append(finished > 0 ? "\(finished) finished" : "no agents") }
+    return "\(name) — \(bits.joined(separator: ", "))"
+  }
+
+  /// Work areas and their agents, the ticket board in a line, and a way to file one. From api/grid.
+  private func refreshGridMenu() {
+    guard ready else { return }
+    server.getJSON("api/grid") { [weak self] obj in
+      guard let self, let state = obj as? [String: Any] else { return }
+      self.gridMenu.removeAllItems()
+      let actions = state["actions"] as? [[String: Any]] ?? []
+      let open = actions.first { ($0["kind"] as? String) == "open" }
+
+      guard state["connected"] as? Bool ?? false else {
+        self.gridMenu.addItem(self.infoItem("Agent Grid isn't reachable"))
+        if let why = state["error"] as? String { self.gridMenu.addItem(self.infoItem(why, small: true)) }
+        self.addActions(actions, to: self.gridMenu)
+        self.gridItem.title = "Agent Grid"
+        return
+      }
+
+      var needYou = 0
+      for area in state["areas"] as? [[String: Any]] ?? [] {
+        let agents = area["agents"] as? [[String: Any]] ?? []
+        let n = area["needYou"] as? Int ?? 0
+        needYou += n
+        let item = NSMenuItem(title: self.areaLine(name: area["name"] as? String ?? "", running: area["running"] as? Int ?? 0, needYou: n, finished: area["finished"] as? Int ?? 0), action: nil, keyEquivalent: "")
+        if agents.isEmpty {
+          item.isEnabled = false
+        } else {
+          let sub = NSMenu()
+          for a in agents { sub.addItem(self.agentItem(a, open: open)) }
+          item.submenu = sub
+        }
+        self.gridMenu.addItem(item)
+      }
+      if let unfiled = state["unfiled"] as? [String: Any], (unfiled["running"] as? Int ?? 0) > 0 {
+        let agents = unfiled["agents"] as? [[String: Any]] ?? []
+        needYou += agents.filter { $0["needsYou"] as? Bool ?? false }.count
+        let item = NSMenuItem(title: self.areaLine(name: "Not in a work area", running: unfiled["running"] as? Int ?? 0, needYou: 0, finished: 0), action: nil, keyEquivalent: "")
+        let sub = NSMenu()
+        for a in agents { sub.addItem(self.agentItem(a, open: open)) }
+        item.submenu = sub
+        self.gridMenu.addItem(item)
+      }
+
+      self.gridMenu.addItem(.separator())
+      if let tickets = state["tickets"] as? [String: Any] {
+        let openCount = tickets["open"] as? Int ?? 0
+        let review = tickets["review"] as? [[String: Any]] ?? []
+        let unassigned = tickets["unassigned"] as? Int ?? 0
+        var line = openCount == 0 ? "No open tickets" : "Tickets: \(openCount) open"
+        if !review.isEmpty { line += " · \(review.count) in review" }
+        if unassigned > 0 { line += " · \(unassigned) unassigned" }
+        self.gridMenu.addItem(self.infoItem(line))
+        for t in review {
+          let title = "   Review \(t["id"] as? String ?? ""): \(t["title"] as? String ?? "")"
+          let item = NSMenuItem(title: title, action: open == nil ? nil : #selector(self.runMenuAction(_:)), keyEquivalent: "")
+          item.target = self
+          item.representedObject = open
+          self.gridMenu.addItem(item)
+        }
+      } else {
+        self.gridMenu.addItem(self.infoItem("This Agent Grid has no ticket board yet"))
+      }
+      self.gridMenu.addItem(.separator())
+      self.addActions(actions, to: self.gridMenu)
+      self.gridItem.title = needYou > 0 ? "Agent Grid  (\(needYou) need\(needYou == 1 ? "s" : "") you)" : "Agent Grid"
+    }
+  }
+
+  private func addActions(_ actions: [[String: Any]], to menu: NSMenu) {
+    for action in actions {
+      guard let title = action["title"] as? String else { continue }
+      let item = NSMenuItem(title: title, action: #selector(runMenuAction(_:)), keyEquivalent: "")
+      item.target = self
+      item.representedObject = action
+      menu.addItem(item)
+    }
+  }
 
   /// How many connections are on, so the menu says whether there are any without opening the window.
   private func refreshConnectionsItem() {
