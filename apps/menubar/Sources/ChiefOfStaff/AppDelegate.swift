@@ -11,9 +11,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private var wakeItem: NSMenuItem!
   private var homeItem: NSMenuItem!
   private var keysItem: NSMenuItem!
+  private var memoryItem: NSMenuItem!
   private var loggedWakeProblem: String?
   private let focusMenu = NSMenu()
   private let modelMenu = NSMenu()
+  private let memoryMenu = NSMenu()
   private var keysWindow: KeysWindow!
   private let permissionsMenu = NSMenu()
   private var permissionsItem: NSMenuItem!
@@ -127,6 +129,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     model.submenu = modelMenu
     menu.addItem(model)
     keysItem = add(menu, "API keys…", #selector(showKeys))
+    memoryItem = NSMenuItem(title: "Memory", action: nil, keyEquivalent: "")
+    memoryItem.submenu = memoryMenu
+    menu.addItem(memoryItem)
     add(menu, "Read the brief aloud", #selector(readAloud))
     menu.addItem(.separator())
     add(menu, "Rebuild the brief", #selector(rebuildBrief))
@@ -148,13 +153,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
 
   func menuWillOpen(_ menu: NSMenu) {
-    guard menu !== focusMenu, menu !== modelMenu else { return }
+    guard menu !== focusMenu, menu !== modelMenu, menu !== memoryMenu else { return }
     refreshWakeItem()
     homeItem.isHidden = panel.placement == nil
     refreshPermissionsMenu()
     refreshFocusMenu()
     refreshModelMenu()
     refreshKeysItem()
+    refreshMemoryMenu()
   }
 
   // MARK: the wake phrase
@@ -416,6 +422,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
 
   @objc private func showKeys() { keysWindow.show() }
+
+  /// Where memory lives, whether its history is being kept, and whatever the server says fixes it.
+  /// Every item is described by the server (api/memory), drawn by runMenuAction like the model ones.
+  private func refreshMemoryMenu() {
+    guard ready else { return }
+    server.getJSON("api/memory") { [weak self] obj in
+      guard let self, let state = obj as? [String: Any] else { return }
+      self.memoryMenu.removeAllItems()
+      let dir = state["dir"] as? String ?? "?"
+      let folder = NSMenuItem(title: (dir as NSString).abbreviatingWithTildeInPath, action: nil, keyEquivalent: "")
+      folder.isEnabled = false
+      self.memoryMenu.addItem(folder)
+
+      let history = state["history"] as? [String: Any] ?? [:]
+      let on = history["on"] as? Bool ?? false
+      let line = on
+        ? "History: on\(( history["lastCommit"] as? String).map { ", last write \($0.prefix(10))" } ?? "")"
+        : "History: off — your memory is saved, not versioned"
+      let status = NSMenuItem(title: line, action: nil, keyEquivalent: "")
+      status.isEnabled = false
+      self.memoryMenu.addItem(status)
+      if !on, let why = history["reason"] as? String {
+        let reason = NSMenuItem(title: why, action: nil, keyEquivalent: "")
+        reason.isEnabled = false
+        reason.attributedTitle = NSAttributedString(string: why, attributes: [.font: NSFont.systemFont(ofSize: 11)])
+        self.memoryMenu.addItem(reason)
+      }
+      self.memoryMenu.addItem(.separator())
+      for action in state["actions"] as? [[String: Any]] ?? [] {
+        guard let title = action["title"] as? String else { continue }
+        let item = NSMenuItem(title: title, action: #selector(self.runMenuAction(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = action
+        self.memoryMenu.addItem(item)
+      }
+      self.memoryItem.title = (state["ready"] as? Bool ?? true) && on ? "Memory" : "Memory ⚠︎"
+    }
+  }
 
   /// Keep the menu honest about whether anything can answer, and offer the window once when nothing can.
   private func refreshKeysItem() {
