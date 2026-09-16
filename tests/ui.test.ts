@@ -276,6 +276,47 @@ describe("ui server (offline)", () => {
     expect((await post({}, "/api/conversation/delete")).status).toBe(404);
   });
 
+  it("steps out for an aside and back on topic: the main chat waits untouched and the aside is thrown away", async () => {
+    const post = (b: unknown, path = "/api/pill") => fetch(`${base}${path}`, { method: "POST", body: JSON.stringify(b) });
+    const current = async () => (await fetch(`${base}/api/conversation`)).json();
+    const main = await (await post({ text: "remind me friday to call the bank" })).json();
+    expect((await current()).aside).toBe(false);
+
+    const aside = await (await post({}, "/api/conversation/aside")).json();
+    expect(aside).toMatchObject({ title: "Aside", turns: [], aside: true, others: 1 });
+    expect(aside.id).not.toBe(main.conversation);
+    expect((await current()).id).toBe(aside.id);
+    // Said in the aside, answered in the aside.
+    const quick = await (await post({ text: "open slate" })).json();
+    expect(quick.conversation).toBe(aside.id);
+    expect((await current()).turns.map((t: { text: string }) => t.text)).toEqual(["open slate", "Opened Slate."]);
+    // Not a chat: never listed, and the main one is as it was.
+    const listed = await (await fetch(`${base}/api/conversations`)).json();
+    expect(listed.chats.map((c: { title: string; current: boolean }) => [c.title, c.current])).toEqual([["remind me friday to call the bank", false]]);
+    expect(await (await post({}, "/api/conversation/aside")).json()).toMatchObject({ id: aside.id }); // already in one: it carries on
+
+    const back = await (await post({}, "/api/conversation/resume")).json();
+    expect(back).toMatchObject({ id: main.conversation, title: "remind me friday to call the bank", aside: false, others: 0 });
+    expect(back.turns.map((t: { text: string }) => t.text)).toEqual(["remind me friday to call the bank", "Reminder set for 2026-09-18: call the bank"]);
+    expect((await current()).id).toBe(main.conversation);
+    const more = await (await post({ text: "remind me monday to email the dean" })).json();
+    expect(more.conversation).toBe(main.conversation);
+    expect((await current()).turns).toHaveLength(4);
+
+    const again = await post({}, "/api/conversation/resume");
+    expect([again.status, (await again.json()).error]).toEqual([409, "You're already on topic."]);
+
+    // A new chat asked for from inside an aside throws the aside away too.
+    const second = await (await post({}, "/api/conversation/aside")).json();
+    const fresh = await (await post({}, "/api/conversation/new")).json();
+    expect(fresh.id).not.toBe(second.id);
+    expect(fresh).toMatchObject({ aside: false, turns: [] });
+    expect((await post({}, "/api/conversation/resume")).status).toBe(409);
+
+    const voice = await (await fetch(`${base}/api/voice`)).json();
+    expect(voice).toEqual({ wakeName: "Darius", wake: true });
+  });
+
   it("passes the pill's cue requests to the voice and reports which cues played", async () => {
     const heard: unknown[] = [];
     const server = createUiServer({
