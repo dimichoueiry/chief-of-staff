@@ -99,8 +99,8 @@ Limits of the current build:
 
 - **arm64 only.** Built on this Mac, it runs on Apple silicon. An Intel friend needs a build
   from an Intel Mac, or a universal one (see below).
-- **Memory needs git.** The first write creates `~/selfhub` with `git init`. A Mac that has
-  never run git shows Apple's "install command line tools?" dialog once.
+- **Memory history needs git.** The memory itself is written either way; the commit history is
+  what waits for Apple's developer tools. ✦ › Memory says so and offers to install them.
 - **Its own browser needs Chrome or Edge** installed; the browser feature is off without one.
 - **No updates.** A new version is a new .dmg.
 
@@ -181,11 +181,49 @@ the menu rather than a new download link.
 - **The key: done.** ✦ › API keys (`KeysWindow.swift` and `GET/POST /api/keys`) writes
   `~/.cos/.env` owner-only and checks the key with one live request. The app offers it once on
   first launch when nothing is set, so a recipient is never left guessing.
-- **The memory repo: open.** Creating `~/selfhub` on first write is right, but the git
-  dependency means a Mac without command line tools sees Apple's install dialog. Either
-  document it, bundle a git (large), or use libgit2 through a Swift package.
+- **The memory repo: done.** The server sets the stores up the first time it runs, so nobody
+  has to run `cos init`, and git is optional rather than assumed (below).
 
-Neither is packaging work; both are the difference between "installs" and "works".
+Both were the difference between "installs" and "works".
+
+### The memory folder, and git
+
+`/usr/bin/git` is on every Mac but only *works* where Apple's command line developer tools are
+installed. On a Mac without them it is a stub that opens an "install the developer tools?" dialog
+and fails — and because every memory write went through `git init`, **the write itself used to
+fail and the note was lost**. That is fixed:
+
+| Behaviour | Why |
+|---|---|
+| The git that runs is resolved once, Homebrew's before Apple's | one probe per run, not one per write |
+| Apple's stub is never executed unless `xcode-select -p` says the tools are there | executing it is what opens that dialog |
+| Without git, a write still writes, uncommitted | the history is allowed to be missing; the memory is not |
+| The stores are created on first run | a recipient never runs `cos init` |
+| An existing store file is never touched | a file someone edited or deleted stays that way |
+| When git appears, everything written without it is committed once | "every write is a commit" catches up |
+
+✦ › Memory shows the folder, whether history is on, and the way to fix it: "Turn history on
+(install developer tools)…" runs `xcode-select --install`, "Look for git again" re-checks without
+a restart. The menu title carries a ⚠︎ while anything is off.
+
+`COS_GIT` points at a specific git if you keep one somewhere unusual.
+
+Verify it the way it was verified here, by faking a Mac with no tools:
+
+```bash
+T=$(mktemp -d); mkdir -p "$T/stub"
+printf '#!/bin/sh\nexit 1\n' > "$T/stub/git"
+printf '#!/bin/sh\n[ "$1" = "-p" ] && exit 2\nexit 0\n' > "$T/stub/xcode-select"
+chmod +x "$T/stub"/*
+(cd /tmp && env -i HOME="$T" COS_HOME="$T/.cos" COS_SELFHUB="$T/selfhub" PATH="$T/stub:/usr/bin:/bin" \
+  node dist/cli/cos.js ui --port 4790 --no-open &)
+sleep 3
+curl -s localhost:4790/api/memory                       # history.on false, fix install-tools
+curl -s -X POST -d '{"text":"still saved"}' localhost:4790/api/wrap    # {"ok":true}
+cat "$T"/selfhub/journal/*.md                           # the note is there
+```
+
+Run from `/tmp`, and note `node dist/cli/cos.js` needs the repo path in front of it.
 
 ### The keys window
 

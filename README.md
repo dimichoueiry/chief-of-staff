@@ -12,7 +12,8 @@ the memory plus the initiative: it knows, and it speaks first.
 
 ## How it works
 
-Three memory stores, all plain markdown in a local git repo you own (`~/selfhub`):
+Three memory stores, all plain markdown in a local git repo you own (`~/selfhub`, made for you
+the first time the app runs):
 
 | Store | Holds | File |
 |---|---|---|
@@ -23,7 +24,8 @@ Three memory stores, all plain markdown in a local git repo you own (`~/selfhub`
 One tool-use loop, running on whichever model you choose, reads those stores plus your calendar and git activity,
 and answers through a small set of intents. The "specialists" are prompt templates,
 not services. Every write to memory is a git commit, so you can see and undo
-anything it did.
+anything it did. On a Mac without Apple's command line developer tools there is no git, so the
+memory is written and the history waits: ✦ › Memory says so and offers to install them.
 
 Full rationale: [`docs/EPIC.md`](docs/EPIC.md). Modules and contracts:
 [`docs/BUILD.md`](docs/BUILD.md). Execution plan: [`docs/BACKLOG.md`](docs/BACKLOG.md).
