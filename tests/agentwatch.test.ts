@@ -226,7 +226,8 @@ describe("Agent Grid's event stream", () => {
       await tick(60); // several more tries: no more lines
       expect(logged).toEqual(["agent watch paused: Agent Grid isn't running. Start it with `python3 -m agentgrid --web` from ~/AgentGrid."]);
       where = base; // it's back (the connection is read again on every try)
-      await until(() => fake.connections === 1);
+      // The server counts the connection before the client has its answer and says so: wait for both.
+      await until(() => fake.connections === 1 && logged.length === 2);
       expect(logged.at(-1)).toBe("agent watch: listening to Agent Grid again");
 
       allowed = false;
