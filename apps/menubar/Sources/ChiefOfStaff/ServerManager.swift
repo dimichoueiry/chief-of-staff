@@ -45,6 +45,7 @@ final class ServerManager {
     p.environment = env
     try? FileManager.default.createDirectory(at: ShellConfig.logs, withIntermediateDirectories: true)
     let log = ShellConfig.logs.appendingPathComponent("menubar-server.log")
+    Log.rotate(log)
     if !FileManager.default.fileExists(atPath: log.path) { FileManager.default.createFile(atPath: log.path, contents: nil) }
     if let handle = try? FileHandle(forWritingTo: log) {
       handle.seekToEndOfFile()

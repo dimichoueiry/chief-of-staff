@@ -26,7 +26,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     guard let config = ShellConfig.load() else {
-      alert("Chief of Staff is not set up yet.", "Run `npm run cos -- menubar build` in the repo; it writes ~/.cos/menubar.json.")
+      alert(
+        "Chief of Staff can't find the parts it runs on.",
+        "This copy of the app is incomplete, so it can't start. Install it again from the disk image you were sent, keeping the whole Chief of Staff app together."
+      )
       NSApp.terminate(nil)
       return
     }
@@ -67,7 +70,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     server.ensureRunning { [weak self] ok in
       guard let self else { return }
       guard ok else {
-        self.alert("The local server did not start.", "See ~/.cos/logs/menubar-server.log. Is the repo built (npm run build)?")
+        self.alert(
+          "Chief of Staff couldn't start.",
+          "It runs a small program on your own Mac and that didn't come up. Quitting and opening it again usually fixes it. If it keeps happening, the details are in ~/.cos/logs/menubar-server.log."
+        )
         return
       }
       self.ready = true
@@ -265,13 +271,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   @objc private func runSetup() { walk(Permission.allCases.filter { !$0.granted }) }
 
+  /// What the first run asks for. Screen Recording and Full Disk Access are left out on purpose:
+  /// Full Disk Access has no prompt at all (it means dragging the app into System Settings) and
+  /// only powers browser favorites, so both are asked for by the feature that needs them.
+  private static let firstRunPermissions: [Permission] = [.accessibility, .microphone, .speech]
+
   /// Once per build (a rebuild clears macOS's switches): if anything is off, offer to go through it.
   /// Returns true when a walk started, so the key offer waits for it rather than landing on top.
   @discardableResult
   private func offerSetup() -> Bool {
     let defaults = UserDefaults.standard
     guard defaults.string(forKey: "setupDoneForBuild") != Permission.build else { return false }
-    let off = Permission.allCases.filter { !$0.granted }
+    let off = AppDelegate.firstRunPermissions.filter { !$0.granted }
     guard !off.isEmpty else {
       defaults.set(Permission.build, forKey: "setupDoneForBuild")
       return false
@@ -295,7 +306,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   /// One permission at a time: macOS's prompt, or its page and a Next button once it's switched on.
   private func walk(_ steps: [Permission]) {
     guard let step = steps.first else {
-      let off = Permission.allCases.filter { !$0.granted }
+      let off = AppDelegate.firstRunPermissions.filter { !$0.granted }
       // Anything still off (Screen Recording and Full Disk Access only count after a reopen) is offered again
       // next launch; "Later" or "Stop" is what stops the asking for this build.
       if off.isEmpty { UserDefaults.standard.set(Permission.build, forKey: "setupDoneForBuild") }

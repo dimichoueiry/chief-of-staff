@@ -54,7 +54,8 @@ struct ShellConfig: Codable {
 
 /// The wake phrase settings, kept with the voice settings in ~/.cos/voice.json (`cos voice wake`, `cos voice name`).
 struct WakeSettings: Equatable {
-  var enabled = true
+  /// Off until asked for: an app someone was handed should not be listening to the room on day one.
+  var enabled = false
   var name = "Darius"
   /// both | turn | off: whether the "your turn" chime plays (`cos voice cues`).
   var cues = "both"
@@ -80,9 +81,22 @@ struct WakeSettings: Equatable {
 }
 
 enum Log {
+  /// Past this, a log is moved aside and started again, so ~/.cos/logs can't grow without end.
+  static let maxBytes = 2 * 1024 * 1024
+
+  /// Keep one previous copy (.1) and drop anything older.
+  static func rotate(_ url: URL, maxBytes: Int = Log.maxBytes) {
+    let fm = FileManager.default
+    guard let size = (try? fm.attributesOfItem(atPath: url.path))?[.size] as? Int, size > maxBytes else { return }
+    let previous = url.appendingPathExtension("1")
+    try? fm.removeItem(at: previous)
+    try? fm.moveItem(at: url, to: previous)
+  }
+
   static func write(_ line: String) {
     let url = ShellConfig.logs.appendingPathComponent("menubar.log")
     try? FileManager.default.createDirectory(at: ShellConfig.logs, withIntermediateDirectories: true)
+    rotate(url)
     let stamp = ISO8601DateFormatter().string(from: Date())
     let text = "\(stamp) \(line)\n"
     if let handle = try? FileHandle(forWritingTo: url) {
