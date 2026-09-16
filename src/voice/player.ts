@@ -12,6 +12,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { cosHome } from "../util/home.js";
+import { swiftFlags } from "../util/swift.js";
 
 const exec = promisify(execFile);
 export const PLAYER_SRC = join(dirname(fileURLToPath(import.meta.url)), "player", "cos-play.swift");
@@ -19,7 +20,7 @@ export const PLAYER_SRC = join(dirname(fileURLToPath(import.meta.url)), "player"
 export type Compile = (src: string, bin: string) => Promise<void>;
 
 const swiftc: Compile = async (src, bin) => {
-  await exec("swiftc", ["-O", "-o", bin, src], { timeout: 180_000 });
+  await exec("swiftc", [...swiftFlags(), "-o", bin, src], { timeout: 180_000 });
 };
 
 /** Where the build for this source lives; a changed source gets a new build. */

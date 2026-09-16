@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { STALE_SWITCH } from "../actions/permissions.js";
 import { cosHome } from "../util/home.js";
+import { swiftFlags } from "../util/swift.js";
 
 const exec = promisify(execFile);
 const here = dirname(fileURLToPath(import.meta.url));
@@ -58,7 +59,7 @@ export async function ensureScreenHelper(bin = helperBin()): Promise<string> {
   const [src, built] = await Promise.all([stat(HELPER_SRC), stat(bin).catch(() => null)]);
   if (built && built.mtimeMs >= src.mtimeMs) return bin;
   await mkdir(dirname(bin), { recursive: true });
-  await exec("swiftc", ["-O", "-o", bin, HELPER_SRC], { timeout: 180_000 });
+  await exec("swiftc", [...swiftFlags(), "-o", bin, HELPER_SRC], { timeout: 180_000 });
   return bin;
 }
 

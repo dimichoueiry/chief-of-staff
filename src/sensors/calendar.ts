@@ -9,6 +9,7 @@
 import { execFile } from "node:child_process";
 import { access, mkdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
+import { swiftFlags } from "../util/swift.js";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -100,7 +101,7 @@ export async function ensureEventKitHelper(bin: string = HELPER_BIN): Promise<st
   if (binStat && binStat.mtimeMs >= srcStat.mtimeMs) return bin;
   await mkdir(dirname(bin), { recursive: true });
   await exec("swiftc", [
-    "-O", "-o", bin, HELPER_SRC,
+    ...swiftFlags(), "-o", bin, HELPER_SRC,
     "-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist", "-Xlinker", HELPER_PLIST,
   ]);
   return bin;

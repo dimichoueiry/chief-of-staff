@@ -21,6 +21,7 @@ import { promisify } from "node:util";
 import { ensureEventKitHelper } from "../sensors/calendar.js";
 import { ensureScreenHelper } from "../sensors/screen.js";
 import { PLAYER_SRC, playerBin } from "../voice/player.js";
+import { MIN_MACOS, appleArch, swiftFlags, swiftTarget } from "../util/swift.js";
 import { copyRuntime } from "./deploy.js";
 import { APP_NAME } from "./menubar.js";
 import { ensureSigningIdentity } from "./signing.js";
@@ -50,10 +51,7 @@ export function parseArchs(output: string): string[] {
   return output.trim().split(/\s+/).filter(Boolean);
 }
 
-/** The architecture name lipo and Apple use for this process. */
-export function appleArch(nodeArch: string = process.arch): string {
-  return nodeArch === "x64" ? "x86_64" : nodeArch;
-}
+export { appleArch };
 
 /** "Chief-of-Staff-0.1.0-arm64.dmg" */
 export function dmgName(version: string, arch: string = appleArch()): string {
@@ -102,7 +100,9 @@ export async function packageApp(o: PackageOptions): Promise<PackageResult> {
   log("compiling the calendar, screen and player helpers");
   await ensureEventKitHelper(join(helpers, "cos-calendar"));
   await ensureScreenHelper(join(helpers, "cos-screen"));
-  await exec("swiftc", ["-O", "-o", join(helpers, basename(playerBin(PLAYER_SRC))), PLAYER_SRC], { timeout: 180_000 });
+  await exec("swiftc", [...swiftFlags(), "-o", join(helpers, basename(playerBin(PLAYER_SRC))), PLAYER_SRC], { timeout: 180_000 });
+
+  await checkDeploymentTargets(app, helpers, log);
 
   const signedWith = await sign(app, helpers, o.identity, pkgDir, log);
 
@@ -128,6 +128,44 @@ export async function packageApp(o: PackageOptions): Promise<PackageResult> {
     await rm(stage, { recursive: true, force: true });
   }
   return { app, dmg, signedWith };
+}
+
+/** What `vtool -show-build-version` reported as the oldest macOS a binary runs on. */
+export function parseMinOS(output: string): string | null {
+  return /minos (\d+(?:\.\d+)*)/.exec(output)?.[1] ?? null;
+}
+
+/**
+ * Every binary in the bundle must run on the macOS the bundle claims. A helper built with no
+ * -target is stamped with the toolchain's default, which is how a .dmg ends up opening on the
+ * machine that made it and nowhere else.
+ */
+async function checkDeploymentTargets(app: string, helpers: string, log: (line: string) => void): Promise<void> {
+  const ours = [join(app, "Contents", "MacOS", "ChiefOfStaff"), ...(await readdir(helpers)).filter((f) => f.startsWith("cos-")).map((f) => join(helpers, f))];
+  const tooNew: string[] = [];
+  for (const file of ours) {
+    const { stdout, stderr } = await exec("vtool", ["-show-build-version", file]).catch(() => ({ stdout: "", stderr: "" }));
+    const minos = parseMinOS(`${stdout}\n${stderr}`);
+    if (minos && compareVersions(minos, MIN_MACOS) > 0) tooNew.push(`${basename(file)} needs macOS ${minos}`);
+  }
+  if (tooNew.length) {
+    throw new Error(
+      `These would only run on a newer Mac than the app claims (${MIN_MACOS}):\n  ${tooNew.join("\n  ")}\n` +
+        `Build them with -target ${swiftTarget()} (see src/util/swift.ts).`,
+    );
+  }
+  log(`every binary runs on macOS ${MIN_MACOS} or newer`);
+}
+
+/** -1, 0, 1 for "13.0" against "14.0". */
+export function compareVersions(a: string, b: string): number {
+  const pa = a.split(".").map(Number);
+  const pb = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d) return d > 0 ? 1 : -1;
+  }
+  return 0;
 }
 
 /** Nested executables first, then the bundle. A Developer ID gets the hardened runtime, a timestamp and entitlements. */
