@@ -29,6 +29,94 @@ export interface AgentSession {
 
 export class AgentGridError extends Error {}
 
+// ---------- work areas and tickets (Agent Grid's areas.py and tickets.py) ----------
+
+/** A work area: a department-like grouping of agents. */
+export interface WorkArea {
+  id: string;
+  name: string;
+  /** The starter prompt agents started in it are given. */
+  prompt: string;
+}
+
+/** ~/.agentgrid/areas.json as GET /api/areas returns it: the areas, and which session sits in which. */
+export interface AreasFile {
+  areas: WorkArea[];
+  /** sessionId -> area id. A session that has since ended can still be listed here. */
+  members: Record<string, string>;
+}
+
+export const TICKET_STATUSES = ["backlog", "todo", "in_progress", "review", "done"] as const;
+export const TICKET_TYPES = ["task", "bug", "story", "spike", "chore"] as const;
+export const TICKET_PRIORITIES = ["low", "medium", "high", "urgent"] as const;
+export type TicketStatus = (typeof TICKET_STATUSES)[number];
+export type TicketType = (typeof TICKET_TYPES)[number];
+export type TicketPriority = (typeof TICKET_PRIORITIES)[number];
+
+/** One line of a ticket's history: created, moved, assigned, commented. */
+export interface TicketActivity {
+  at: string;
+  who: string;
+  kind: string;
+  text?: string;
+  from?: string;
+  to?: string;
+}
+
+export interface Ticket {
+  /** "DC-12": a project key and a number. */
+  id: string;
+  key: string;
+  number: number;
+  title: string;
+  body: string;
+  type: TicketType;
+  status: TicketStatus;
+  priority: TicketPriority;
+  /** The project folder it is filed under, or "". */
+  project: string;
+  projectName: string;
+  /** A name. Bound to a live agent when sessionId is set too. */
+  assignee: string;
+  sessionId: string;
+  reporter: string;
+  labels: string[];
+  /** YYYY-MM-DD or "". */
+  due: string;
+  rank: number;
+  created: string;
+  updated: string;
+  closed: string;
+  activity: TicketActivity[];
+}
+
+/** GET /api/tickets: every ticket plus the facets a filter needs. */
+export interface Board {
+  tickets: Ticket[];
+  statuses: { key: TicketStatus; label: string; count: number }[];
+  unassigned: number;
+  projects?: { path: string; name: string; key: string; count: number; open: number }[];
+  assignees?: { name: string; count: number }[];
+}
+
+/** The fields a plain edit may set (tickets.EDITABLE). Status and assignee have their own calls. */
+export interface TicketFields {
+  title?: string;
+  body?: string;
+  type?: TicketType;
+  priority?: TicketPriority;
+  labels?: string[];
+  project?: string;
+  due?: string;
+}
+
+export interface TicketReply {
+  ticket: Ticket;
+  message?: string;
+  /** assign only: whether the agent was told in its own chat. */
+  told?: boolean;
+}
+
 /** One status change from Agent Grid's event stream (GET /api/events). */
 export interface AgentEvent {
   id: string;
@@ -164,9 +252,17 @@ export class AgentGrid {
   }
 
   /** Start an agent in a folder (added to Agent Grid's projects, and created, if new), or on the Desktop with no folder. */
-  async start(o: { task: string; folder?: string; engine?: "claude" | "codex"; name?: string; visible?: boolean }): Promise<string> {
+  async start(o: {
+    task: string; folder?: string; engine?: "claude" | "codex"; name?: string; visible?: boolean;
+    /** File it in this work area from the start. */
+    areaId?: string;
+    /** Give it this ticket as its brief; Agent Grid adds the commands to report back. */
+    ticketId?: string;
+  }): Promise<string> {
     const engine = o.engine === "codex" ? "codex" : "claude";
     const spawn: Record<string, unknown> = { prompt: o.task, engine, name: o.name ?? "", interactive: Boolean(o.visible) };
+    if (o.areaId) spawn.areaId = o.areaId;
+    if (o.ticketId) spawn.ticketKey = o.ticketId;
     if (o.folder) {
       const cwd = resolve(o.folder.replace(/^~(?=$|\/)/, homedir()));
       const known = await this.projects();
@@ -181,6 +277,61 @@ export class AgentGrid {
     }
     const r = await this.call<{ message?: string }>("/api/spawn", spawn, 90_000);
     return r.message ?? `Started ${engine}.`;
+  }
+
+  /** Agent Grid's own page, signed in. Its ticket board is a toggle there; the page has no link straight to it. */
+  pageUrl(): string {
+    const { base, token } = this.connect();
+    return `${base}/?t=${encodeURIComponent(token)}`;
+  }
+
+  // ---------- work areas ----------
+
+  async areas(): Promise<AreasFile> {
+    const r = await this.call<Partial<AreasFile>>("/api/areas");
+    return { areas: r.areas ?? [], members: r.members ?? {} };
+  }
+
+  // ---------- tickets ----------
+
+  async board(): Promise<Board> {
+    const r = await this.call<Partial<Board>>("/api/tickets");
+    return { tickets: r.tickets ?? [], statuses: r.statuses ?? [], unassigned: r.unassigned ?? 0, projects: r.projects, assignees: r.assignees };
+  }
+
+  async createTicket(t: TicketFields & { title: string; status?: TicketStatus; assignee?: string; sessionId?: string }): Promise<TicketReply> {
+    return this.call<TicketReply>("/api/tickets/create", t);
+  }
+
+  async updateTicket(id: string, fields: TicketFields): Promise<TicketReply> {
+    return this.call<TicketReply>("/api/tickets/update", { id, ...fields });
+  }
+
+  /** A new column, and optionally the card it goes above; without one it lands at the bottom. */
+  async moveTicket(id: string, status: TicketStatus, before?: string): Promise<TicketReply> {
+    return this.call<TicketReply>("/api/tickets/move", { id, status, ...(before ? { before } : {}) });
+  }
+
+  /**
+   * Hand a ticket to a live agent (which Agent Grid then tells, in its own chat), or to a bare name, or to
+   * nobody (both empty). `start` also moves it to In progress.
+   */
+  async assignTicket(id: string, to: { sessionId?: string; assignee?: string; start?: boolean; notify?: boolean }): Promise<TicketReply> {
+    return this.call<TicketReply>("/api/tickets/assign", {
+      id,
+      sessionId: to.sessionId ?? "",
+      assignee: to.assignee ?? "",
+      start: Boolean(to.start),
+      notify: to.notify ?? true,
+    });
+  }
+
+  async commentTicket(id: string, text: string): Promise<TicketReply> {
+    return this.call<TicketReply>("/api/tickets/comment", { id, text });
+  }
+
+  async deleteTicket(id: string): Promise<void> {
+    await this.call("/api/tickets/delete", { id });
   }
 
   async transcript(sessionId: string): Promise<Array<{ kind: string; text?: string; name?: string; gist?: string; error?: boolean }>> {
