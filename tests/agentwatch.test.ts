@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentGrid, SseParser, type AgentEvent } from "../src/actions/agentgrid.js";
 import { describeFinish, lastSaid, watchAgents, type AgentFinished } from "../src/actions/agentwatch.js";
 import { loadConfig } from "../src/config.js";
@@ -238,6 +238,37 @@ describe("Agent Grid's event stream", () => {
       await w.done;
       await until(() => fake.connections === 0);
       expect(fake.lastIds).toEqual([""]);
+    });
+
+    it("leaves nothing behind after many failed tries: no listener piles up on its stop signal", async () => {
+      // Every wait used to add an abort listener to the watcher's stop signal and never remove it; after 11, Node warned.
+      const warnings: string[] = [];
+      const onWarning = (w: Error) => void warnings.push(w.name);
+      process.on("warning", onWarning);
+      vi.useFakeTimers();
+      let tries = 0;
+      const broken = {
+        transcript: async () => [],
+        events: () => {
+          tries++;
+          throw new Error("no route to host");
+        },
+      } as unknown as AgentGrid;
+      const w = watchAgents({ grid: broken, retryMs: 1, onFinished: () => {} });
+      try {
+        for (let i = 0; i < 30; i++) await vi.advanceTimersByTimeAsync(60_000); // the wait tops out at a minute
+        expect(tries).toBeGreaterThanOrEqual(25);
+        w.stop();
+        await w.done;
+        vi.useRealTimers();
+        await tick(20); // a warning is emitted on the next tick, if at all
+        expect(warnings).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+        process.off("warning", onWarning);
+        w.stop();
+        await w.done;
+      }
     });
 
     it("from the UI server: a notification and a line in the conversation, once, while it listens", async () => {
