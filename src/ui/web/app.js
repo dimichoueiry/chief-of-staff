@@ -343,6 +343,8 @@ function updateShowChat() {
 let conversationId = null;
 let otherChats = false;
 let listOpen = false;
+// An aside ("Darius, by the way…"): a quick side exchange the main chat never sees, thrown away on "back on topic".
+let inAside = false;
 let busy = false;
 let lastReply = "";
 
@@ -411,11 +413,15 @@ function addTurn(turn) {
   return node;
 }
 
-/** The chat's name in the header, and whether there are other chats to go back to. */
+/** The chat's name in the header, whether there are other chats to go back to, and whether this is an aside. */
 function showChatInfo(c) {
   currentTitle = c.title || "Chief of staff";
   $("answer-title").textContent = listOpen ? "Your chats" : currentTitle;
   if (typeof c.others === "number") otherChats = c.others > 0;
+  if (typeof c.aside === "boolean") {
+    inAside = c.aside;
+    root.dataset.aside = c.aside ? "1" : "0";
+  }
   updateShowChat();
 }
 
@@ -452,6 +458,55 @@ async function newConversation() {
   closeChats();
   renderThread(await post("/api/conversation/new", {}));
   input.focus();
+}
+
+/**
+ * "Darius, by the way…": step out of the chat for a quick unrelated exchange. The main chat waits as it
+ * is; what's said here is answered on its own and thrown away on "back on topic". A question said in the
+ * same breath is asked right away; otherwise, by voice, it says "go ahead" and listens.
+ */
+async function startAside(question, fromVoice) {
+  if (busy) return;
+  closeChats();
+  let r;
+  try {
+    r = await post("/api/conversation/aside", {});
+  } catch {
+    return flash("Couldn't reach the app, so nothing changed.");
+  }
+  if (r.error) return flash(r.error);
+  renderThread(r);
+  if (!fromVoice && chatHidden) setChatHidden(false);
+  if (question) {
+    await send({ text: question, mode: inputMode }, `Aside · “${question}”`, fromVoice);
+    return;
+  }
+  flash("Aside · say “back on topic” to return");
+  const spoken = fromVoice && (await speakText("Go ahead.", { turn: true }));
+  if (spoken) listenForReply(spoken);
+  else if (!fromVoice) input.focus();
+}
+
+/** "Darius, back on topic": throw the aside away and pick the main chat up where it was. */
+async function endAside(fromVoice) {
+  if (busy) return;
+  let r;
+  try {
+    r = await post("/api/conversation/resume", {});
+  } catch {
+    return flash("Couldn't reach the app, so nothing changed.");
+  }
+  if (r.error) {
+    flash(r.error);
+    syncConversation(); // the page thought it was in an aside; the server knows better
+    return;
+  }
+  renderThread(r);
+  if (!fromVoice && chatHidden) setChatHidden(false);
+  flash(`Back on “${r.title || "topic"}”`);
+  const spoken = fromVoice && (await speakText("Back on topic.", { turn: true }));
+  if (spoken) listenForReply(spoken);
+  else if (!fromVoice) input.focus();
 }
 
 // ---------- the list of chats ----------
@@ -726,19 +781,34 @@ async function submit(text, fromVoice = false) {
     setState("idle");
     return;
   }
-  if (COMPACT_PILL.test(t) || FULL_PILL.test(t)) {
+  // "Darius, …" in front: what follows is a command ("Darius, new chat") if it reads as one, and an
+  // aside or the way back needs the name (or an aside in progress) so ordinary talk is never taken for it.
+  // Anything that isn't a command goes to the model as said, name and all.
+  const { named, rest: c } = cosCommands.addressed(t);
+  const quick = named ? cosCommands.aside(c) : null;
+  if (quick !== null) {
     input.value = "";
-    setPillCompact(COMPACT_PILL.test(t));
+    await startAside(quick, fromVoice);
+    return;
+  }
+  if ((named || inAside) && cosCommands.backOnTopic(c)) {
+    input.value = "";
+    await endAside(fromVoice);
+    return;
+  }
+  if (COMPACT_PILL.test(c) || FULL_PILL.test(c)) {
+    input.value = "";
+    setPillCompact(COMPACT_PILL.test(c));
     setState("idle");
     return;
   }
-  if (HIDE_CHAT.test(t) || SHOW_CHAT.test(t)) {
+  if (HIDE_CHAT.test(c) || SHOW_CHAT.test(c)) {
     input.value = "";
-    setChatHidden(HIDE_CHAT.test(t));
+    setChatHidden(HIDE_CHAT.test(c));
     setState("idle");
     return;
   }
-  if (NEW_CHAT.test(t)) {
+  if (NEW_CHAT.test(c)) {
     input.value = "";
     await newConversation();
     flash("New chat");
@@ -746,13 +816,13 @@ async function submit(text, fromVoice = false) {
     if (spoken) listenForReply(spoken);
     return;
   }
-  if (LIST_CHATS.test(t)) {
+  if (LIST_CHATS.test(c)) {
     input.value = "";
     await openChats(!fromVoice);
     setState("idle");
     return;
   }
-  const asked = SWITCH_CHAT.exec(t);
+  const asked = SWITCH_CHAT.exec(c);
   if (asked) {
     const r = await switchTo({ query: asked[1] || asked[2] });
     if (r) {
@@ -767,7 +837,7 @@ async function submit(text, fromVoice = false) {
   if (listOpen) closeChats();
   // A typed question needs its answer on screen; a spoken one is heard, so the chat can stay hidden.
   if (!fromVoice && chatHidden) setChatHidden(false);
-  if (fromVoice && DONE_TALKING.test(t)) {
+  if (fromVoice && DONE_TALKING.test(c)) {
     input.value = "";
     setState("idle");
     toShell({ type: "hide" });
@@ -1052,5 +1122,9 @@ if (SHELL) {
 setState("idle");
 loadBrief();
 syncConversation();
+// The name it answers to (cos voice name), so "Darius, new chat" is heard as a command.
+get("/api/voice")
+  .then((v) => v.wakeName && cosCommands.setName(v.wakeName))
+  .catch(() => undefined);
 // Keep it current while it sits open: an agent may finish, or an action land, between messages.
 setInterval(syncConversation, 20_000);

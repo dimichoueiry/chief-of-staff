@@ -126,6 +126,8 @@ describe("ui server (offline)", () => {
     expect(html).toContain('id="pill"');
     const js = await (await fetch(`${base}/app.js`)).text();
     expect(js).toContain("window.cosShell");
+    expect(html).toContain('src="/commands.js"');
+    expect(await (await fetch(`${base}/commands.js`)).text()).toContain("window.cosCommands");
     expect(js).toContain("messageHandlers.shell");
     expect((await fetch(`${base}/app.js`)).headers.get("content-type")).toContain("javascript");
     expect((await fetch(`${base}/../package.json`)).status).not.toBe(200);
@@ -288,7 +290,7 @@ describe("ui server (offline)", () => {
     expect((await current()).id).toBe(aside.id);
     // Said in the aside, answered in the aside.
     const quick = await (await post({ text: "open slate" })).json();
-    expect(quick.conversation).toBe(aside.id);
+    expect(quick).toMatchObject({ conversation: aside.id, title: "Aside" });
     expect((await current()).turns.map((t: { text: string }) => t.text)).toEqual(["open slate", "Opened Slate."]);
     // Not a chat: never listed, and the main one is as it was.
     const listed = await (await fetch(`${base}/api/conversations`)).json();

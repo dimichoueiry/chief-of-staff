@@ -523,7 +523,7 @@ export function createUiServer(o: UiOptions): Server {
     );
     summarizeSoon();
     const { steps: _steps, done: _done, ...shown } = reply;
-    return { status: 200, body: { ...shown, conversation: convo.id, title: displayTitle(convo), user: said } };
+    return { status: 200, body: { ...shown, conversation: convo.id, title: convo.asideOf ? "Aside" : displayTitle(convo), user: said } };
   }
 
   /** What the last reply left waiting that can still be done. */

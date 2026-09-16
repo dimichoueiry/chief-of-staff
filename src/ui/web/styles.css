@@ -93,6 +93,9 @@ body {
 .answer-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-weight: 600; cursor: grab; }
 .answer-head .spark { color: var(--accent); }
 .answer-head #answer-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: 45%; cursor: pointer; }
+/* An aside: the header says so, and how to get back, until "back on topic". */
+:root[data-aside="1"] .answer-head #answer-title { color: var(--accent); max-width: none; }
+:root[data-aside="1"] .answer-head #answer-title::after { content: " · say “back on topic” to return"; color: var(--muted); font-weight: 400; font-size: 12px; }
 .answer-head .model { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-weight: 400; font-size: 12px; font-family: var(--mono); }
 .answer-head .chip { white-space: nowrap; }
 .answer-head .chip.icon { padding: 3px 10px; font-size: 15px; line-height: 1.2; color: #d6dae2; }
