@@ -14,11 +14,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private var keysItem: NSMenuItem!
   private var memoryItem: NSMenuItem!
   private var loginItem: NSMenuItem!
+  private var connectionsItem: NSMenuItem!
   private var loggedWakeProblem: String?
   private let focusMenu = NSMenu()
   private let modelMenu = NSMenu()
   private let memoryMenu = NSMenu()
   private var keysWindow: KeysWindow!
+  private var connectionsWindow: ConnectionsWindow!
   private let permissionsMenu = NSMenu()
   private var permissionsItem: NSMenuItem!
   private var view = "pill"
@@ -37,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     server = ServerManager(config: config)
     keysWindow = KeysWindow(server: server)
+    connectionsWindow = ConnectionsWindow(server: server)
     installEditMenu()
     buildStatusItem()
 
@@ -137,6 +140,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     model.submenu = modelMenu
     menu.addItem(model)
     keysItem = add(menu, "API keys…", #selector(showKeys))
+    connectionsItem = add(menu, "Connections…", #selector(showConnections))
     memoryItem = NSMenuItem(title: "Memory", action: nil, keyEquivalent: "")
     memoryItem.submenu = memoryMenu
     menu.addItem(memoryItem)
@@ -171,6 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     refreshModelMenu()
     refreshKeysItem()
     refreshMemoryMenu()
+    refreshConnectionsItem()
     loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
   }
 
@@ -495,6 +500,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
 
   @objc private func showKeys() { keysWindow.show() }
+
+  @objc private func showConnections() { connectionsWindow.show() }
+
+  /// How many connections are on, so the menu says whether there are any without opening the window.
+  private func refreshConnectionsItem() {
+    guard ready else { return }
+    server.getJSON("api/connections") { [weak self] obj in
+      guard let self, let state = obj as? [String: Any] else { return }
+      let all = state["connections"] as? [[String: Any]] ?? []
+      let on = all.filter { $0["enabled"] as? Bool ?? false }.count
+      self.connectionsItem.title = all.isEmpty ? "Connections…" : "Connections  (\(on) on)"
+    }
+  }
 
   /// Where memory lives, whether its history is being kept, and whatever the server says fixes it.
   /// Every item is described by the server (api/memory), drawn by runMenuAction like the model ones.
