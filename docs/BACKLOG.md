@@ -349,6 +349,27 @@ Deliberately not done:
 
 ---
 
+## EPIC 10 — Agents on the model you name   [S]   (done 2026-09-16, AG-1)
+
+Goal: "start an agent on Opus 5" starts Claude Code on claude-opus-5, and the model is known
+before the OK and visible after.
+
+Done, here: `model` on `start_agent` (said any way, matched against Agent Grid's list, the engine
+following from it), the model in the confirmation, `get_agent_models`, and the model each session
+runs on in `get_agents`, `get_work_areas` and `cos agents`. Done, in Agent Grid (same branch name,
+`feat/agent-model`): readable names in `GET /api/models`, no `<synthetic>` or hidden Codex models,
+models a session used remembered in `~/.agentgrid/models.json`, a malformed ID refused before
+anything runs, and a model the CLI refuses reported at launch rather than as a session that does
+nothing. `claude --bg` exits 0 whatever the model, so Agent Grid reads the session's screen for up
+to ten seconds when the model isn't one it lists.
+
+Deliberately not done:
+- A New agent… item in the ✦ menu. Starting agents stays a sentence; Agent Grid's own sheet has a
+  model picker for when a form is wanted.
+- An entitlement check. The list is what this Mac has used; the CLI decides what the account may run.
+
+---
+
 ## What keeps this from turning into back-and-forth
 
 1. Contracts and schema are locked above and in BUILD.md — the agent implements to them.
