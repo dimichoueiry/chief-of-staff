@@ -121,6 +121,7 @@ const DOING: Record<string, string> = {
   run_command: "Running a command…",
   get_agents: "Checking your agents…",
   start_agent: "Starting an agent…",
+  get_agent_models: "Checking which models agents can use…",
   get_agent_output: "Reading what the agent did…",
   look_at_screen: "Looking at your screen…",
   message_agent: "Messaging the agent…",
