@@ -344,6 +344,29 @@ cos access agents ask
 cos agents                    # your Agent Grid sessions, as the assistant sees them
 ```
 
+### Work areas and tickets
+
+Agent Grid groups agents into **work areas** (Engineering, Marketing, …) and keeps a shared **ticket
+board**. The assistant sees both, and joins them the way you think about them: an area, the agents
+running in it, and the ticket each one holds.
+
+- "What's engineering doing?" — the areas, who's running, who needs you, what they hold.
+- "What's in review?", "what's unassigned in drawcal?", "show me DC-12" — the board, filtered, or
+  one ticket in full with its history.
+- "File a bug: the Safari export is broken, urgent, for the drawcal project" — a new ticket.
+- "Move DC-12 to review", "give it to the exporter agent and start it", "comment that the fix
+  landed", "delete DC-9" — every change to a ticket.
+- "Start an agent in Engineering on DC-12" — Agent Grid hands it the ticket as its brief.
+
+Changes follow the same rule as starting or messaging an agent (`cos access agents`): in the default
+**ask** mode you get a one-line confirmation first; in **auto** it just does it. Deleting a ticket
+always asks, because Agent Grid can't undo one. Giving a ticket to a running agent also tells that
+agent, in its own chat.
+
+The **✦ › Agent Grid** menu shows the same thing at a glance: each work area opens to its agents,
+the title says when any need you, the board is summarised in a line with what's in review, and
+**New ticket…** files one in a sentence.
+
 ## Connections
 
 The other tools you use, added from **✦ › Connections** rather than written into the app. A

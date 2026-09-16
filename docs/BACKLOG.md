@@ -331,6 +331,24 @@ nothing in context, and a server that hangs loses only its own call.
 
 ---
 
+## EPIC 9 — Agent Grid's work areas and tickets   [M]   (done 2026-09-16)
+
+Goal: the assistant sees Agent Grid's work areas, the agents in each and the tickets they hold, and
+can do everything to a ticket that a person on the board can.
+
+Done: the client (areas.py and tickets.py shapes, every ticket route), the join (area -> agents ->
+tickets), three tools (`get_work_areas`, `get_tickets`, `change_ticket`), area and ticket on
+`start_agent`, the ✦ › Agent Grid menu, and a round trip against the live board.
+
+Deliberately not done:
+- Creating, renaming and deleting work areas, or moving an agent between them. Asked for was
+  visibility into the hierarchy; the calls exist (`POST /api/areas`) when it's wanted.
+- A link straight to the ticket board. Agent Grid's page reads only `?t=`; the board is a toggle.
+- Tickets in the morning brief. "In review: waiting on you" is the obvious line; it belongs with E7.9,
+  since the brief should be scheduled inside the app first.
+
+---
+
 ## What keeps this from turning into back-and-forth
 
 1. Contracts and schema are locked above and in BUILD.md — the agent implements to them.
