@@ -344,6 +344,24 @@ cos access agents ask
 cos agents                    # your Agent Grid sessions, as the assistant sees them
 ```
 
+## Connections
+
+The other tools you use, added from **✦ › Connections** rather than written into the app. A
+connection is an MCP server: a command on this Mac, or an address someone hosts.
+
+- **Add one** from the pull-down of named services, or "Something else…" for your own, by command
+  (`npx -y some-server`) or address (`https://mcp.example.com/mcp`).
+- **It is checked as you save**, and the row says what came back: how many tools, from which
+  server, how long it took, or what to try next.
+- **Secrets stay in the keys file.** A connection names the variables it needs; the values live in
+  `~/.cos/.env` with the API keys, and a server is handed only the ones it named.
+- **Turn one off** and it costs nothing. **Remove** it and its token stays, so adding it back is quick.
+- A connection is somebody else's program running with your access. The window says so.
+
+Not wired into the assistant's tool loop yet: it can be added and checked, and the window is honest
+about the difference. See E8 in [`docs/BACKLOG.md`](docs/BACKLOG.md); the open question is how many
+tools can be in front of the model at once before it gets worse rather than better.
+
 ## Models and providers
 
 The brain is model-agnostic. Add a key for any provider you use (✦ › API keys, or the file),

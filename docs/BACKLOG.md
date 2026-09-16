@@ -296,17 +296,21 @@ User stories
   anything that changes something elsewhere.
 - US8.4 A broken or slow connection never breaks a conversation.
 
+Done 2026-09-15: T8.1, T8.2, T8.6, T8.7, T8.8 — a connection can be added, checked against the
+real server, turned on and off and removed, with its secrets in the keys file. What remains is the
+half that lets the assistant *use* them: T8.3, T8.4, T8.5. Until then the window says so itself.
+
 Tasks
-- T8.1 A connection registry in `~/.cos/connections.json`: id, label, transport
+- [x] T8.1 A connection registry in `~/.cos/connections.json`: id, label, transport
   (`stdio` command+args, or `http`/`sse` URL), env value names, enabled, plus a small
   built-in catalogue (Gmail, Google Drive/Docs, Notion, GitHub, Airtable, Stripe, Zapier,
   Hugging Face, Canva) that is only a prefilled command and a link to its docs.  [M]
-- T8.2 A client pool: connect lazily, list tools once, cache, reconnect on failure, hard
+- [x] T8.2 A client pool: connect lazily, list tools once, cache, reconnect on failure, hard
   timeout per call, and never let one server's failure escape into the loop.  [M]
 - T8.3 Expose the tools: namespace them (`notion__search`), merge into `toolsFor(intent)`,
   and dispatch unknown names through the pool in `ToolRuntime`. Both are single seams today
   (`brain/tools.ts` lines ~349 and ~375).  [M]
-- T8.4 **The hard part: context budget.** There are about thirty built-in tools now; ten
+- T8.4 **The hard part, and the next thing to do: context budget.** There are about thirty built-in tools now; ten
   servers with twenty tools each will not fit in a request, and a long tool list makes the
   model worse, not better. Needs a selection strategy — per-connection enable, per-intent
   scoping, or a first pass that picks the connection before the tools are shown. Prototype
@@ -314,11 +318,11 @@ Tasks
 - T8.5 Consent: connections join `actions/access.ts` (off / ask / auto) with a per-connection
   override, and every write through a connection lands in the existing pending-confirmation
   flow. A tool that sends an email is not the same as one that reads a page.  [M]
-- T8.6 Secrets: per-connection values in `~/.cos/.env` (or a 0600 file beside it) through the
+- [x] T8.6 Secrets: per-connection values in `~/.cos/.env` (or a 0600 file beside it) through the
   same code that already writes keys, masked in the UI, never logged.  [S]
-- T8.7 A Connections window, built like the keys one: a row per connection with its state, a
+- [x] T8.7 A Connections window, built like the keys one: a row per connection with its state, a
   "Get a token" link, an Add-your-own sheet (command or URL), and a live check on save.  [M]
-- T8.8 A trust note in the UI: an MCP server is code someone else wrote, running as you. Say
+- [x] T8.8 A trust note in the UI: an MCP server is code someone else wrote, running as you. Say
   that once, plainly, where they add one.  [S]
 
 DoD: Notion and one hand-written MCP server are added from the menu on a machine with no
