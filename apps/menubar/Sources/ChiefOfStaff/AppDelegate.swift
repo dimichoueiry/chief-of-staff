@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private var statusItem: NSStatusItem!
@@ -12,6 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private var homeItem: NSMenuItem!
   private var keysItem: NSMenuItem!
   private var memoryItem: NSMenuItem!
+  private var loginItem: NSMenuItem!
   private var loggedWakeProblem: String?
   private let focusMenu = NSMenu()
   private let modelMenu = NSMenu()
@@ -78,8 +80,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       }
       self.ready = true
       self.resumeWake()
-      self.panel.load(URL(string: "\(config.baseURL)/?shell=1&mode=pill")!)
-      Log.write("ready at \(config.baseURL)")
+      self.panel.load(URL(string: "\(self.server.config.baseURL)/?shell=1&mode=pill")!)
+      Log.write("ready at \(self.server.config.baseURL)")
       DispatchQueue.main.async {
         let walking = self.offerSetup()
         self.refreshKeysItem()
@@ -139,6 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     memoryItem.submenu = memoryMenu
     menu.addItem(memoryItem)
     add(menu, "Read the brief aloud", #selector(readAloud))
+    loginItem = add(menu, "Open at login", #selector(toggleLogin))
     menu.addItem(.separator())
     add(menu, "Rebuild the brief", #selector(rebuildBrief))
     add(menu, "Open in browser", #selector(openInBrowser))
@@ -146,6 +149,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     permissionsItem.submenu = permissionsMenu
     menu.addItem(permissionsItem)
     menu.addItem(.separator())
+    add(menu, "Remove Chief of Staff…", #selector(uninstall))
     add(menu, "Quit Chief of Staff", #selector(quit), key: "q")
     statusItem.menu = menu
   }
@@ -167,6 +171,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     refreshModelMenu()
     refreshKeysItem()
     refreshMemoryMenu()
+    loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
   }
 
   // MARK: the wake phrase
@@ -429,6 +434,63 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       alert("That didn't work.", error)
     } else if let message = result["message"] as? String {
       alert(message, result["detail"] as? String ?? "")
+    }
+  }
+
+  /// Open at login, through macOS's own list (System Settings › General › Login Items), so it can
+  /// always be turned off there too. The older way, a LaunchAgent we wrote, is left to `cos`.
+  @objc private func toggleLogin() {
+    let service = SMAppService.mainApp
+    do {
+      if service.status == .enabled {
+        try service.unregister()
+        Log.write("open at login: off")
+      } else {
+        try service.register()
+        Log.write("open at login: on")
+      }
+    } catch {
+      let denied = service.status == .requiresApproval
+      alert(
+        denied ? "macOS wants you to allow this" : "Couldn't change that",
+        denied
+          ? "Open System Settings › General › Login Items & Extensions and switch Chief of Staff on there."
+          : "\(error.localizedDescription)"
+      )
+      if denied { SMAppService.openSystemSettingsLoginItems() }
+    }
+    loginItem.state = service.status == .enabled ? .on : .off
+  }
+
+  /// Take it off this Mac: the login item, its own folder, and the app. Memory is left alone
+  /// unless they ask, because that is theirs and it is the only copy.
+  @objc private func uninstall() {
+    NSApp.activate(ignoringOtherApps: true)
+    let home = ShellConfig.home.path
+    let a = NSAlert()
+    a.messageText = "Remove Chief of Staff from this Mac?"
+    a.informativeText = """
+      This quits it, stops it opening at login, moves the app to the Trash, and moves \(home)       (its settings, keys and logs) to the Trash too.
+
+      Your memory folder is not touched: the notes, projects and journal stay where they are.       Privacy & Security will still list Chief of Staff until you remove it there yourself.
+      """
+    a.addButton(withTitle: "Remove")
+    a.addButton(withTitle: "Cancel")
+    a.buttons.first?.hasDestructiveAction = true
+    guard a.runModal() == .alertFirstButtonReturn else { return }
+
+    try? SMAppService.mainApp.unregister()
+    server.stop()
+    var failed: [String] = []
+    for url in [ShellConfig.home, Bundle.main.bundleURL] {
+      guard FileManager.default.fileExists(atPath: url.path) else { continue }
+      var trashed: NSURL?
+      do { try FileManager.default.trashItem(at: url, resultingItemURL: &trashed) } catch { failed.append(url.lastPathComponent) }
+    }
+    if failed.isEmpty {
+      NSApp.terminate(nil)
+    } else {
+      alert("Some of it is still here", "Couldn't move \(failed.joined(separator: " and ")) to the Trash. Drag them there yourself: \(home) and this app.")
     }
   }
 
