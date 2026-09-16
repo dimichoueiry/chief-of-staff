@@ -32,6 +32,11 @@ import { markdownToSpeech, renderBriefSpeech } from "../output/render.js";
 import { eventsInRange } from "../sensors/calendar.js";
 import { activityRoots, applyActivity, scanActivity } from "../sensors/git.js";
 import { readAccess } from "../actions/access.js";
+import {
+  CATALOGUE, REGISTRY_URL, describe as describeConnection, missingEnv, readConnections, removeConnection,
+  saveConnection, setEnabled, validate, type Connection,
+} from "../actions/connections.js";
+import { probe as probeConnection } from "../actions/mcp.js";
 import { findBookmarks, formatBookmarks, readBookmarks, type BookmarkRead } from "../actions/bookmarks.js";
 import { readConsent } from "../actions/consent.js";
 import { LOOK_REQUEST, SCREEN_PERMISSION_HELP, ScreenPermissionError, describeShot, helperCapturer, type ScreenCapturer, type Screenshot } from "../sensors/screen.js";
@@ -92,6 +97,8 @@ export interface UiOptions {
   screen?: ScreenCapturer;
   /** How a model is checked before it's used from the menu (tests). */
   modelTester?: (spec: ModelSpec) => Promise<{ ms: number; servedBy: string }>;
+  /** Replace the live MCP check (tests). */
+  connectionProbe?: (c: Connection) => Promise<{ ok: boolean; server?: string; tools: { name: string }[]; error?: string; ms: number }>;
   /**
    * Tell them when an Agent Grid agent finishes: a notification, and a line in the conversation so the
    * assistant knows too. Agent Grid's event stream is listened to while the server listens; `cos ui`
@@ -253,6 +260,32 @@ export function createUiServer(o: UiOptions): Server {
     };
   }
 
+  /** What the connections window draws: what is added, what each one needs, and what to add next. */
+  function connectionsView() {
+    const connections = readConnections();
+    return {
+      connections: connections.map((c) => ({
+        id: c.id,
+        label: c.label,
+        transport: c.transport,
+        address: describeConnection(c),
+        enabled: c.enabled,
+        env: c.env ?? [],
+        missing: missingEnv(c),
+        note: c.note ?? null,
+      })),
+      /** Services worth naming, minus the ones already added. */
+      catalogue: CATALOGUE.filter((e) => !connections.some((c) => c.id === e.id)),
+      registry: REGISTRY_URL,
+      /** Said once, where someone adds one: this is somebody else's code, running as them. */
+      trust:
+        "A connection is a program or a website someone else wrote, and it runs with your access. " +
+        "Add the ones you would give a password to, and nothing else.",
+      /** Off until the tools are wired into the loop; the window says so rather than implying more. */
+      usable: false,
+    };
+  }
+
   /** The memory folder, and the menu items that fix whatever is wrong with it. */
   async function memoryView() {
     const state = await memoryState(config.selfhubDir);
@@ -284,6 +317,26 @@ export function createUiServer(o: UiOptions): Server {
     } catch {
       /* leave the choice alone if it won't take */
     }
+  }
+
+  /**
+   * A first launch has no memory folder and nobody to run `cos init`, so the stores are made here —
+   * once, and only when there is nothing at all, so a store deleted on purpose stays deleted. It
+   * finishes before the first answer goes out rather than at some moment of its own: a background
+   * job that writes to the memory folder is a job that can land in the middle of a note.
+   */
+  let firstRunDone: Promise<void> | null = null;
+  function firstRun(): Promise<void> {
+    firstRunDone ??= (async () => {
+      const r = await ensureStoresOnFirstRun(config.selfhubDir);
+      if (r?.created.length) Log(`memory: made ${r.created.join(", ")} in ${config.selfhubDir}${r.commit ? ` (commit ${r.commit})` : ""}`);
+      // git may have arrived since the last run: take whatever was written without it into the history.
+      const caught = await catchUpHistory(config.selfhubDir);
+      if (caught) Log(`memory: committed what was written while git was missing (${caught})`);
+    })().catch((err) => {
+      Log(`memory: couldn't set up ${config.selfhubDir}: ${(err as Error).message}`);
+    });
+    return firstRunDone;
   }
 
   async function json(res: ServerResponse, status: number, body: unknown): Promise<void> {
@@ -599,6 +652,73 @@ export function createUiServer(o: UiOptions): Server {
           return json(res, 422, { error: `${name} didn't work, so nothing changed: ${why}` });
         }
       }
+      case "GET /api/connections":
+        return json(res, 200, connectionsView());
+      case "POST /api/connections": {
+        const b = await body(req);
+        const checked = validate({
+          id: b.id ? String(b.id) : undefined,
+          label: b.label ? String(b.label) : undefined,
+          transport: b.transport === "http" ? "http" : "stdio",
+          command: b.command ? String(b.command) : undefined,
+          args: Array.isArray(b.args) ? b.args.map(String) : typeof b.args === "string" ? String(b.args).split(/\s+/).filter(Boolean) : undefined,
+          url: b.url ? String(b.url) : undefined,
+          env: Array.isArray(b.env) ? b.env.map(String) : typeof b.env === "string" ? String(b.env).split(/[\s,]+/).filter(Boolean) : undefined,
+          note: b.note ? String(b.note) : undefined,
+          enabled: b.enabled === undefined ? true : Boolean(b.enabled),
+        });
+        if ("error" in checked) return json(res, 400, { error: checked.error });
+        saveConnection(checked.connection);
+        Log(`connection saved: ${checked.connection.id} (${describeConnection(checked.connection)})`);
+        // Say straight away whether it works, the way a saved key is checked.
+        const r = await (o.connectionProbe ?? probeConnection)(checked.connection);
+        const missing = missingEnv(checked.connection);
+        return json(res, 200, {
+          ok: true,
+          works: r.ok,
+          message: r.ok ? `${checked.connection.label} is connected` : `Saved, but ${checked.connection.label} didn't answer`,
+          detail: r.ok
+            ? `${r.tools.length} ${r.tools.length === 1 ? "tool" : "tools"}${r.server ? ` from ${r.server}` : ""}, in ${(r.ms / 1000).toFixed(1)} s.`
+            : `${r.error}${missing.length ? `\n\nStill needed: ${missing.join(", ")}. Add those under API keys.` : ""}`,
+          tools: r.tools.map((t) => t.name),
+          ...connectionsView(),
+        });
+      }
+      case "POST /api/connections/enable": {
+        const b = await body(req);
+        const id = String(b.id ?? "");
+        const enabled = Boolean(b.enabled);
+        if (!readConnections().some((c) => c.id === id)) return json(res, 404, { error: "There's no connection with that name." });
+        setEnabled(id, enabled);
+        Log(`connection ${id}: ${enabled ? "on" : "off"}`);
+        return json(res, 200, { ok: true, message: `${id} is ${enabled ? "on" : "off"}`, ...connectionsView() });
+      }
+      case "POST /api/connections/remove": {
+        const b = await body(req);
+        const id = String(b.id ?? "");
+        const gone = readConnections().find((c) => c.id === id);
+        if (!gone) return json(res, 404, { error: "There's no connection with that name." });
+        removeConnection(id);
+        Log(`connection removed: ${id}`);
+        return json(res, 200, { ok: true, message: `Removed ${gone.label}`, detail: "Any token it used is still under API keys.", ...connectionsView() });
+      }
+      case "POST /api/connections/check": {
+        const b = await body(req);
+        const connection = readConnections().find((c) => c.id === String(b.id ?? ""));
+        if (!connection) return json(res, 404, { error: "There's no connection with that name." });
+        const r = await (o.connectionProbe ?? probeConnection)(connection);
+        const missing = missingEnv(connection);
+        return json(res, 200, {
+          ok: true,
+          works: r.ok,
+          message: r.ok ? `${connection.label} is working` : `${connection.label} didn't answer`,
+          detail: r.ok
+            ? `${r.tools.length} ${r.tools.length === 1 ? "tool" : "tools"}${r.server ? ` from ${r.server}` : ""}, in ${(r.ms / 1000).toFixed(1)} s.`
+            : `${r.error}${missing.length ? `\n\nStill needed: ${missing.join(", ")}.` : ""}`,
+          tools: r.tools.map((t) => t.name),
+          ...connectionsView(),
+        });
+      }
       case "GET /api/memory":
         return json(res, 200, await memoryView());
       case "POST /api/memory/init": {
@@ -806,26 +926,16 @@ export function createUiServer(o: UiOptions): Server {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     // Keys added to ~/.cos/.env apply to the next request; no restart.
-    if (url.pathname.startsWith("/api/")) reloadHomeEnv();
+    if (url.pathname.startsWith("/api/")) {
+      reloadHomeEnv();
+      await firstRun(); // done before anything is answered, so nothing changes mid-conversation
+    }
     try {
       if (url.pathname.startsWith("/api/")) await api(req, res, url);
       else await serveStatic(res, url.pathname);
     } catch (err) {
       await json(res, 500, { error: (err as Error).message });
     }
-  });
-
-  // A first launch has no memory folder and nobody to run `cos init`: make the stores once, here.
-  // Only when there is nothing at all, so a store deleted on purpose stays deleted.
-  server.on("listening", () => {
-    void ensureStoresOnFirstRun(config.selfhubDir)
-      .then(async (r) => {
-        if (r?.created.length) Log(`memory: made ${r.created.join(", ")} in ${config.selfhubDir}${r.commit ? ` (commit ${r.commit})` : ""}`);
-        // git may have arrived since the last run: take whatever was written without it into the history.
-        const caught = await catchUpHistory(config.selfhubDir);
-        if (caught) Log(`memory: committed what was written while git was missing (${caught})`);
-      })
-      .catch((err) => Log(`memory: couldn't set up ${config.selfhubDir}: ${(err as Error).message}`));
   });
 
   if (o.agentWatch) {

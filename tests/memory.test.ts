@@ -204,7 +204,6 @@ describe("the memory endpoint the menu draws", () => {
   });
   afterEach(async () => {
     await new Promise((r) => server.close(() => r(undefined)));
-    await new Promise((r) => setTimeout(r, 100)); // let the first-run scaffolding finish before removing it
     realGit();
     await rm(dir, { recursive: true, force: true });
   });
@@ -212,7 +211,7 @@ describe("the memory endpoint the menu draws", () => {
   it("sets the stores up when the server starts, so nobody has to run cos init", async () => {
     realGit();
     await start();
-    await new Promise((r) => setTimeout(r, 300)); // the listening hook
+    // The setup finishes before the first answer, so one request is enough: no waiting around.
     const state = await (await fetch(`${url}/api/memory`)).json();
     expect(state).toMatchObject({ dir, exists: true, ready: true, missing: [] });
     expect(state.history.on).toBe(true);
@@ -243,7 +242,6 @@ describe("the memory endpoint the menu draws", () => {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "README.md"), "my own notes\n");
     await start();
-    await new Promise((r) => setTimeout(r, 300));
     expect((await (await fetch(`${url}/api/memory`)).json()).ready).toBe(false);
 
     const r = await (await fetch(`${url}/api/memory/init`, { method: "POST" })).json();
@@ -251,4 +249,64 @@ describe("the memory endpoint the menu draws", () => {
     expect(r.detail).toContain("ledger, reminders, notes");
     expect(readFileSync(join(dir, "README.md"), "utf8")).toBe("my own notes\n");
   });
+});
+
+describe("two writes at once", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "cos-race-"));
+    realGit();
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("keeps every one of them, because commits queue instead of colliding", async () => {
+    await ensureStores(dir);
+    const journal = new Journal(dir);
+    // Several surfaces writing at the same moment used to fight over git's index.lock.
+    const days = ["2026-09-11", "2026-09-12", "2026-09-13", "2026-09-14", "2026-09-15"];
+    const commits = await Promise.all(days.map((d) => journal.append(d, `entry for ${d}`)));
+    expect(commits.every((c) => typeof c === "string" && c.length > 0)).toBe(true);
+    for (const d of days) expect(readFileSync(join(dir, "journal", `${d}.md`), "utf8")).toContain(`entry for ${d}`);
+
+    const { git } = await import("../src/core/git.js");
+    const tracked = (await git(dir, ["ls-files", "journal"])).trim().split("\n").sort();
+    expect(tracked).toEqual(days.map((d) => `journal/${d}.md`));
+    // A clean repo: nothing half-staged and nothing left behind.
+    expect((await git(dir, ["status", "--porcelain"])).trim()).toBe("");
+  }, 60_000);
+
+  it("does nothing at all when the history is already up to date", async () => {
+    await ensureStores(dir);
+    await new Journal(dir).append("2026-09-15", "written and committed");
+    expect(await catchUpHistory(dir)).toBeNull();
+    const { uncommitted } = await import("../src/core/git.js");
+    expect(await uncommitted(dir, ["goals/projects.md", "journal/2026-09-15.md"])).toEqual([]);
+  });
+});
+
+describe("scaffolding while something else is writing", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "cos-clobber-"));
+    realGit();
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it("never puts an empty template over a note that arrived first", async () => {
+    // The first launch and a first capture can happen in the same instant.
+    const ledger = new Ledger(dir);
+    const [, scaffold] = await Promise.all([
+      ledger.writeProject("drawcal", { why: "a calendar that draws", next: "record the intro" }),
+      ensureStores(dir),
+    ]);
+    expect(readFileSync(join(dir, "goals", "projects.md"), "utf8")).toContain("drawcal");
+    // Whichever order they landed in, the project survives and the other stores still exist.
+    expect(scaffold.created).not.toContain("ledger-overwritten");
+    const state = await memoryState(dir);
+    expect(state.ready).toBe(true);
+  }, 30_000);
 });

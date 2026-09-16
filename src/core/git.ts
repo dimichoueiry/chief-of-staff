@@ -133,6 +133,37 @@ export async function installDeveloperTools(): Promise<{ started: boolean; messa
   }
 }
 
+/**
+ * One write at a time per repo. Several surfaces commit to the same memory folder — the pill, the
+ * brief, a background catch-up — and two overlapping commits fight over git's index.lock, which
+ * surfaces as a write that simply failed. Reads don't queue; only the things that take the lock do.
+ */
+const writing = new Map<string, Promise<unknown>>();
+
+export function serializeWrites<T>(repoDir: string, work: () => Promise<T>): Promise<T> {
+  const queued = (writing.get(repoDir) ?? Promise.resolve()).then(work, work);
+  // Keep the chain going whatever happened, and let it be collected once it is the last one.
+  const settled = queued.then(
+    (v) => v,
+    (e) => {
+      throw e;
+    },
+  );
+  writing.set(
+    repoDir,
+    settled.catch(() => undefined),
+  );
+  void settled.catch(() => undefined).finally(() => {
+    if (writing.get(repoDir) === undefined) writing.delete(repoDir);
+  });
+  return settled;
+}
+
+/** Another process is mid-write. Waiting a moment is almost always enough. */
+function isLocked(err: unknown): boolean {
+  return /index\.lock|Another git process/i.test(String((err as Error)?.message ?? ""));
+}
+
 export async function git(repoDir: string, args: string[]): Promise<string> {
   const have = await gitAvailability();
   if (!have.ok) throw new GitUnavailableError(have.reason);
@@ -174,7 +205,11 @@ export async function ensureRepo(dir: string): Promise<boolean> {
   if (!(await gitAvailability()).ok) return false;
   const top = await topLevel(dir);
   if (top && top === (await realpath(dir))) return true;
-  await git(dir, ["init", "-q", "-b", "main"]);
+  await serializeWrites(dir, async () => {
+    // Another caller may have made it while this one waited.
+    if ((await topLevel(dir)) === (await realpath(dir))) return;
+    await git(dir, ["init", "-q", "-b", "main"]);
+  });
   return true;
 }
 
@@ -192,11 +227,33 @@ export async function commitPaths(
   message: string,
 ): Promise<string | null> {
   if (!(await gitAvailability()).ok) return null;
-  await git(repoDir, ["add", "--", ...paths]);
-  const staged = await git(repoDir, ["diff", "--cached", "--name-only", "--", ...paths]);
-  if (!staged.trim()) return null;
-  await git(repoDir, ["commit", "-q", "-m", message, "--", ...paths]);
-  return (await git(repoDir, ["rev-parse", "--short", "HEAD"])).trim();
+  return serializeWrites(repoDir, async () => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await git(repoDir, ["add", "--", ...paths]);
+        const staged = await git(repoDir, ["diff", "--cached", "--name-only", "--", ...paths]);
+        if (!staged.trim()) return null;
+        await git(repoDir, ["commit", "-q", "-m", message, "--", ...paths]);
+        return (await git(repoDir, ["rev-parse", "--short", "HEAD"])).trim();
+      } catch (err) {
+        // Another process (the CLI, the scheduler) held the lock. Wait once, then give up quietly:
+        // the file is already written, and the history is allowed to lag.
+        if (!isLocked(err) || attempt > 0) throw err;
+        await new Promise((r) => setTimeout(r, 400));
+      }
+    }
+  });
+}
+
+/** Which of these paths git doesn't have the current contents of: untracked or changed. */
+export async function uncommitted(repoDir: string, paths: string[]): Promise<string[]> {
+  if (!paths.length || !(await gitAvailability()).ok) return [];
+  try {
+    const out = await git(repoDir, ["ls-files", "--others", "--modified", "--exclude-standard", "--", ...paths]);
+    return [...new Set(out.split("\n").map((l) => l.trim()).filter(Boolean))];
+  } catch {
+    return paths; // can't tell, so let the caller try
+  }
 }
 
 /** Author date (ISO) of the most recent commit in `dir`, or null if none. */

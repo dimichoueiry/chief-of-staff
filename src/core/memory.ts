@@ -7,7 +7,7 @@
  */
 import { access, mkdir, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
-import { commitPaths, ensureRepo, gitAvailability, lastCommitDate } from "./git.js";
+import { commitPaths, ensureRepo, gitAvailability, lastCommitDate, uncommitted } from "./git.js";
 import { selfhubPaths } from "./paths.js";
 
 export const LEDGER_TEMPLATE = `# Projects
@@ -90,16 +90,26 @@ export async function ensureStores(selfhubDir: string): Promise<ScaffoldResult> 
   await ensureRepo(selfhubDir); // makes the folder with or without git
   await mkdir(selfhubPaths(selfhubDir).journalDir, { recursive: true });
   if (!missing.length) return { created: [], commit: null };
+  const written: StoreFile[] = [];
   for (const file of missing) {
     await mkdir(dirname(file.path), { recursive: true });
-    await writeFile(file.path, file.template, "utf8");
+    try {
+      // "wx" fails rather than overwrites. Between the check above and this line something else
+      // may have written a real note here — the first launch and a first capture can land together
+      // — and an empty template must never land on top of it.
+      await writeFile(file.path, file.template, { encoding: "utf8", flag: "wx" });
+      written.push(file);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+    }
   }
+  if (!written.length) return { created: [], commit: null };
   const commit = await commitPaths(
     selfhubDir,
-    missing.map((m) => relative(selfhubDir, m.path)),
+    written.map((m) => relative(selfhubDir, m.path)),
     "cos: initialise memory stores",
   );
-  return { created: missing.map((m) => m.name), commit };
+  return { created: written.map((m) => m.name), commit };
 }
 
 /**
@@ -120,6 +130,10 @@ export async function catchUpHistory(selfhubDir: string): Promise<string | null>
   const there = await Promise.all(paths.map(exists));
   const relatives = paths.filter((_, i) => there[i]).map((p) => relative(selfhubDir, p));
   if (!relatives.length) return null;
+  // Normally there is nothing to do, and then this touches git at all: no staging, no commit,
+  // nothing that could collide with a note being saved at the same moment.
+  const behind = await uncommitted(selfhubDir, relatives);
+  if (!behind.length) return null;
   return commitPaths(selfhubDir, relatives, "cos: memory written while git was unavailable");
 }
 
