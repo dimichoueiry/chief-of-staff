@@ -19,6 +19,8 @@ import { Notes } from "../core/notes.js";
 import { Reminders } from "../core/reminders.js";
 import { readAccess, type Access, type AccessMode } from "../actions/access.js";
 import { AgentGrid, findSession, formatSessions, formatTranscript } from "../actions/agentgrid.js";
+import { areaTree, filterTickets, findArea, findTicket, formatAreaTree, formatBoardSummary, formatTicket, formatTickets, parseStatus, type AreaNode } from "../actions/gridboard.js";
+import { performTicketChange, planTicketChange } from "../actions/tickets.js";
 import { openOrQueue, safeWebUrl, checkPath, macOpen, type Runner } from "../actions/open.js";
 import { findBookmarks, formatBookmarks, readBookmarks, type BookmarkRead } from "../actions/bookmarks.js";
 import { baseDomain, consequentialClick, sharedBrowser, siteOf, type AssistantBrowser, type ScrollSpeed, type ScrollTo } from "../actions/browser.js";
@@ -237,8 +239,64 @@ export const TOOLS: Record<string, ToolSpec> = {
         engine: { type: "string", enum: ["claude", "codex"], description: "claude (default) or codex" },
         name: s("A short label shown in Agent Grid, e.g. \"module 6 quiz\""),
         visible: { type: "boolean", description: "Open it in a Terminal tab they can watch and type into, instead of in the background" },
+        area: s("Start it in this Agent Grid work area, e.g. Engineering (see get_work_areas)"),
+        ticket: s("Start it on this ticket, e.g. DC-12: Agent Grid gives it the ticket as its brief and assigns it"),
       },
       required: ["task"],
+    },
+  },
+  get_work_areas: {
+    name: "get_work_areas",
+    description:
+      "Agent Grid's work areas (Engineering, Marketing, …), the agents running in each, which of them need the user, and the ticket each agent holds; " +
+      "then a summary of the ticket board. Use it for \"what's engineering doing\", \"what's everyone working on\".",
+    parameters: { type: "object", properties: { area: s("Only this work area") } },
+  },
+  get_tickets: {
+    name: "get_tickets",
+    description:
+      "Agent Grid's ticket board. With `ticket`, one ticket in full: description, who has it, and its history. Without, a list, open tickets only unless " +
+      "status is done or include_done is set, narrowed by any of the filters.",
+    parameters: {
+      type: "object",
+      properties: {
+        ticket: s("One ticket: its id (DC-12) or words from its title"),
+        status: s("backlog, todo, in_progress, review or done (\"in review\", \"doing\" also work)"),
+        assignee: s("Who has it; \"none\" for unassigned"),
+        project: s("Project folder or name"),
+        area: s("Only tickets held by agents in this work area"),
+        query: s("Words that must appear in the title or description"),
+        include_done: { type: "boolean", description: "Include done tickets" },
+      },
+    },
+  },
+  change_ticket: {
+    name: "change_ticket",
+    description:
+      "Change Agent Grid's ticket board. action: create (title, and optionally body, type, priority, status, project, labels, due, and agent or assignee); " +
+      "edit (ticket plus any of title, body, type, priority, project, labels, due); move (ticket, status, optionally before: the ticket it goes above); " +
+      "assign (ticket plus agent: a running agent, which is told in its own chat; or assignee: a plain name, or \"none\"; start moves it to In progress); " +
+      "comment (ticket, text); delete (ticket, always waits for the user's OK). Work out dates as YYYY-MM-DD first. May wait for the user's OK.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["create", "edit", "move", "assign", "comment", "delete"], description: "What to do" },
+        ticket: s("The ticket: its id (DC-12) or words from its title. Not for create"),
+        title: s("One line saying what the work is"),
+        body: s("The detail: what, why, and what done looks like"),
+        type: { type: "string", enum: ["task", "bug", "story", "spike", "chore"], description: "Kind of work" },
+        priority: { type: "string", enum: ["low", "medium", "high", "urgent"], description: "Priority" },
+        status: s("backlog, todo, in_progress, review or done"),
+        project: s("Project folder, or the name of one Agent Grid knows; \"none\" to clear"),
+        labels: { type: "array", items: { type: "string" }, description: "Labels (replaces the existing ones)" },
+        due: s("YYYY-MM-DD, or \"none\" to clear"),
+        agent: s("A running agent: session id or part of its title"),
+        assignee: s("A plain name, not a running agent; \"none\" to unassign"),
+        start: { type: "boolean", description: "assign: also move it to In progress" },
+        before: s("move: the ticket it goes above"),
+        text: s("comment: what to say"),
+      },
+      required: ["action"],
     },
   },
   get_agent_output: {
@@ -352,7 +410,7 @@ export function toolsFor(intent: Intent): ToolSpec[] {
     "silence-check": [],
     ask: ALL,
     capture: [...WRITES, "get_project", "get_calendar", "find_folder"],
-    focus: ["get_project", "upsert_project", "get_git_log", "get_calendar", "open", "get_conversations", "find_folder", "run_command", "get_agents", "start_agent", "get_agent_output", "confirm_pending", "look_at_screen"],
+    focus: ["get_project", "upsert_project", "get_git_log", "get_calendar", "open", "get_conversations", "find_folder", "run_command", "get_agents", "start_agent", "get_agent_output", "confirm_pending", "look_at_screen", "get_work_areas", "get_tickets", "change_ticket"],
     wrap: ["get_project", "append_journal", "touch_project", "upsert_project", "get_git_log", "get_conversations"],
   };
   return names[intent].map((n) => TOOLS[n]);
@@ -639,20 +697,103 @@ export class ToolRuntime {
         const folder = folderRaw ? resolve(expandHome(folderRaw)) : undefined;
         if (folder && folder !== homedir() && !folder.startsWith(`${homedir()}/`)) throw new Error("agents can only work in folders inside the home folder");
         const engine = this.str(input, "engine") === "codex" ? "codex" : "claude";
-        const job = { task, folder, engine, name: this.str(input, "name") || undefined, visible: input.visible === true } as const;
+        const grid = this.grid();
+        let areaId: string | undefined;
+        let areaName = "";
+        const areaRef = this.str(input, "area");
+        if (areaRef) {
+          const area = findArea((await grid.areas()).areas, areaRef);
+          if ("error" in area) throw new Error(area.error);
+          areaId = area.id;
+          areaName = area.name;
+        }
+        let ticketId: string | undefined;
+        const ticketRef = this.str(input, "ticket");
+        if (ticketRef) {
+          const t = findTicket((await grid.board()).tickets, ticketRef);
+          if ("error" in t) throw new Error(t.error);
+          ticketId = t.id;
+        }
+        const job = { task, folder, engine, name: this.str(input, "name") || undefined, visible: input.visible === true, areaId, ticketId } as const;
+        const where = `${areaName ? ` in ${areaName}` : ""}${ticketId ? `, on ${ticketId}` : ""}`;
         if (mode === "ask") {
-          const detail = `${engine} in ${folder ? tildePath(folder) : "~/Desktop (no project)"}${job.visible ? ", in a Terminal tab" : ""}\nTask: ${task}`;
+          const detail = `${engine} in ${folder ? tildePath(folder) : "~/Desktop (no project)"}${where}${job.visible ? ", in a Terminal tab" : ""}\nTask: ${task}`;
           const twice = this.repeated("agent-start", detail);
           if (twice) return twice;
           this.pending.push(queue("agent-start", job, { label: `${engine} agent${job.name ? `: ${job.name}` : ""}`, detail, verb: "Start agent" }));
           return "Not started yet. Ask them in one short sentence whether to start it, saying what the agent will do. They can just say yes.";
         }
-        const detail = `${engine} in ${folder ? tildePath(folder) : "~/Desktop (no project)"}${job.visible ? ", in a Terminal tab" : ""}\nTask: ${task}`;
+        const detail = `${engine} in ${folder ? tildePath(folder) : "~/Desktop (no project)"}${where}${job.visible ? ", in a Terminal tab" : ""}\nTask: ${task}`;
         const again = this.repeated("agent-start", detail);
         if (again) return again;
-        const started = await this.grid().start(job);
+        const started = await grid.start(job);
         this.done.push({ kind: "agent-start", detail });
         return started;
+      }
+      case "get_work_areas": {
+        this.agentsAllowed();
+        const grid = this.grid();
+        const [file, sessions] = await Promise.all([grid.areas(), grid.sessions()]);
+        // An older Agent Grid has areas but no board: show the areas and say so, rather than failing both.
+        const board = await grid.board().catch((err: Error) => err);
+        let tree = areaTree(file, sessions);
+        const areaRef = this.str(input, "area");
+        if (areaRef) {
+          const area = findArea(file.areas, areaRef);
+          if ("error" in area) throw new Error(area.error);
+          tree = { ...tree, areas: tree.areas.filter((n) => n.area.id === area.id), unfiled: [] };
+        }
+        const tickets = board instanceof Error ? [] : board.tickets;
+        const summary = board instanceof Error ? `(The ticket board couldn't be read: ${board.message})` : formatBoardSummary(tickets);
+        return `${formatAreaTree(tree, tickets)}\n\nTickets — ${summary}`;
+      }
+      case "get_tickets": {
+        this.agentsAllowed();
+        const grid = this.grid();
+        const board = await grid.board();
+        const one = this.str(input, "ticket");
+        if (one) {
+          const t = findTicket(board.tickets, one);
+          if ("error" in t) throw new Error(t.error);
+          return formatTicket(t);
+        }
+        const statusRaw = this.str(input, "status");
+        const status = statusRaw ? parseStatus(statusRaw) : null;
+        if (statusRaw && !status) throw new Error(`"${statusRaw}" isn't a column. Use backlog, todo, in_progress, review or done.`);
+        let area: AreaNode | undefined;
+        const areaRef = this.str(input, "area");
+        if (areaRef) {
+          const [file, sessions] = await Promise.all([grid.areas(), grid.sessions()]);
+          const found = findArea(file.areas, areaRef);
+          if ("error" in found) throw new Error(found.error);
+          area = areaTree(file, sessions).areas.find((n) => n.area.id === found.id);
+        }
+        const list = filterTickets(board.tickets, {
+          status: status ?? undefined,
+          assignee: this.str(input, "assignee") || undefined,
+          project: this.str(input, "project") || undefined,
+          area,
+          query: this.str(input, "query") || undefined,
+          includeDone: input.include_done === true,
+        });
+        const total = board.tickets.length;
+        return `${list.length} of ${total} ticket${total === 1 ? "" : "s"}:\n${formatTickets(list)}`;
+      }
+      case "change_ticket": {
+        const mode = this.agentsAllowed();
+        const grid = this.grid();
+        const plan = await planTicketChange(input, grid);
+        if (mode === "ask" || plan.alwaysAsk) {
+          const twice = this.repeated("ticket", plan.detail);
+          if (twice) return twice;
+          this.pending.push(queue("ticket", plan.change, { label: plan.label, detail: plan.detail, verb: plan.verb }));
+          return `Not done yet. Ask them in one short sentence whether to ${plan.label}${plan.change.action === "delete" ? " — say it can't be undone" : ""}. They can just say yes.`;
+        }
+        const again = this.repeated("ticket", plan.detail);
+        if (again) return again;
+        const out = await performTicketChange(plan.change, grid);
+        this.done.push({ kind: "ticket", detail: plan.detail });
+        return out;
       }
       case "get_agent_output": {
         this.agentsAllowed();

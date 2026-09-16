@@ -3,6 +3,7 @@ import { AgentGrid } from "./agentgrid.js";
 import { sharedBrowser, type AssistantBrowser, type Element } from "./browser.js";
 import { macOpen, performOpen, type OpenAction, type Runner } from "./open.js";
 import type { Pending } from "./pending.js";
+import { performTicketChange, type TicketChange } from "./tickets.js";
 import { classifyCommand, formatResult, runCommand, runVisible, type CommandRequest, type Shell } from "./terminal.js";
 
 export interface PerformDeps {
@@ -25,7 +26,7 @@ export async function performPending(p: Pending, deps: PerformDeps = {}): Promis
       return formatResult(await runCommand(req, { shell: deps.shell, confirmed: true }));
     }
     case "agent-start": {
-      const job = p.payload as { task: string; folder?: string; engine?: "claude" | "codex"; name?: string; visible?: boolean };
+      const job = p.payload as { task: string; folder?: string; engine?: "claude" | "codex"; name?: string; visible?: boolean; areaId?: string; ticketId?: string };
       return (deps.agentGrid ?? new AgentGrid()).start(job);
     }
     case "agent-message": {
@@ -33,6 +34,8 @@ export async function performPending(p: Pending, deps: PerformDeps = {}): Promis
       await (deps.agentGrid ?? new AgentGrid()).message(m.sessionId, m.message);
       return `Sent to ${m.title}.`;
     }
+    case "ticket":
+      return performTicketChange(p.payload as TicketChange, deps.agentGrid ?? new AgentGrid());
     case "browser-site": {
       const { url } = p.payload as { url: string };
       const browser = deps.browser ?? sharedBrowser();
