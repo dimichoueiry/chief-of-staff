@@ -40,7 +40,9 @@ export function loadDotenv(): void {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const roots = (env.COS_PROJECT_ROOTS ?? join(homedir(), "Desktop"))
+  // No default: "last touched" from git activity is worth having, but not worth reading a folder
+  // nobody named. An unset value means no scanning, and no macOS prompt for someone's Desktop.
+  const roots = (env.COS_PROJECT_ROOTS ?? "")
     .split(":")
     .map((s) => s.trim())
     .filter(Boolean)
