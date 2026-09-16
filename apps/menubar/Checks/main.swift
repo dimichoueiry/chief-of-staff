@@ -7,6 +7,8 @@ func check(_ label: String, _ ok: Bool) {
   if !ok { failures += 1 }
 }
 
+checkPorts(check)
+
 let t0 = Date(timeIntervalSince1970: 1_000_000)
 func at(_ s: TimeInterval) -> Date { t0.addingTimeInterval(s) }
 

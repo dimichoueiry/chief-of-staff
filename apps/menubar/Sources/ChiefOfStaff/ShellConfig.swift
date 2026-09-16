@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// Written by `cos menubar build`: how to start the local server this shell talks to.
@@ -50,6 +51,31 @@ struct ShellConfig: Codable {
   }
 
   var baseURL: URL { URL(string: "http://127.0.0.1:\(port)")! }
+
+  /// Whether a server of ours could be started on this port: nothing else is holding it.
+  static func free(_ port: Int) -> Bool {
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    guard fd >= 0 else { return false }
+    defer { close(fd) }
+    var yes: Int32 = 1
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
+    var addr = sockaddr_in()
+    addr.sin_family = sa_family_t(AF_INET)
+    addr.sin_port = in_port_t(UInt16(port).bigEndian)
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+    let bound = withUnsafePointer(to: &addr) {
+      $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+    }
+    return bound == 0
+  }
+
+  /// A port to serve on: the usual one, or the next free one after it. Something else on 4747
+  /// used to mean the app simply didn't start, with no way to change it but a text editor.
+  static func choosePort(preferred: Int, isFree: (Int) -> Bool = ShellConfig.free) -> Int {
+    if isFree(preferred) { return preferred }
+    for candidate in (preferred + 1)...(preferred + 40) where isFree(candidate) { return candidate }
+    return preferred // nothing free nearby: let the server say so
+  }
 }
 
 /// The wake phrase settings, kept with the voice settings in ~/.cos/voice.json (`cos voice wake`, `cos voice name`).

@@ -2,14 +2,21 @@ import Foundation
 
 /// Starts `cos ui` as a child process if nothing is already listening, and stops it on quit.
 final class ServerManager {
-  let config: ShellConfig
+  /// Not let: if the chosen port is taken by something that isn't us, we move to a free one.
+  private(set) var config: ShellConfig
   private var process: Process?
 
   init(config: ShellConfig) { self.config = config }
 
   func ensureRunning(_ done: @escaping (Bool) -> Void) {
     ping { alive in
+      // Something already answering our API on that port is our own server, from a previous run.
       if alive { done(true); return }
+      let port = ShellConfig.choosePort(preferred: self.config.port)
+      if port != self.config.port {
+        Log.write("port \(self.config.port) is taken by something else; using \(port)")
+        self.config.port = port
+      }
       self.start()
       self.waitUntilUp(triesLeft: 60, done)
     }
