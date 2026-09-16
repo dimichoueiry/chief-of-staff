@@ -22,12 +22,39 @@ export interface AgentSession {
   project?: string;
   cwd?: string;
   engine?: string;
+  /** The model its replies came from. */
+  model?: string | null;
   idleSeconds?: number;
   prompt?: string;
   customName?: string;
 }
 
-export class AgentGridError extends Error {}
+export const AGENT_ENGINES = ["claude", "codex"] as const;
+export type AgentEngine = (typeof AGENT_ENGINES)[number];
+
+/** GET /api/models: per engine, [id, label] rows. The "" row is the CLI's own default. */
+export type ModelCatalog = Record<AgentEngine, Array<[string, string]>>;
+
+/** What starting an agent takes, from the tool through the OK to the request. */
+export interface AgentStart {
+  task: string;
+  folder?: string;
+  engine?: AgentEngine;
+  /** An exact model ID. Left out, the CLI's own default. */
+  model?: string;
+  name?: string;
+  visible?: boolean;
+  /** File it in this work area from the start. */
+  areaId?: string;
+  /** Give it this ticket as its brief; Agent Grid adds the commands to report back. */
+  ticketId?: string;
+}
+
+export class AgentGridError extends Error {
+  constructor(message: string, readonly status?: number) {
+    super(message);
+  }
+}
 
 // ---------- work areas and tickets (Agent Grid's areas.py and tickets.py) ----------
 
@@ -237,7 +264,7 @@ export class AgentGrid {
     }
     const data = (await res.json().catch(() => ({}))) as T & { error?: string };
     if (res.status === 403) throw new AgentGridError(REJECTED);
-    if (!res.ok) throw new AgentGridError(data.error ?? `Agent Grid answered ${res.status}.`);
+    if (!res.ok) throw new AgentGridError(data.error ?? `Agent Grid answered ${res.status}.`, res.status);
     return data;
   }
 
@@ -252,15 +279,10 @@ export class AgentGrid {
   }
 
   /** Start an agent in a folder (added to Agent Grid's projects, and created, if new), or on the Desktop with no folder. */
-  async start(o: {
-    task: string; folder?: string; engine?: "claude" | "codex"; name?: string; visible?: boolean;
-    /** File it in this work area from the start. */
-    areaId?: string;
-    /** Give it this ticket as its brief; Agent Grid adds the commands to report back. */
-    ticketId?: string;
-  }): Promise<string> {
+  async start(o: AgentStart): Promise<string> {
     const engine = o.engine === "codex" ? "codex" : "claude";
     const spawn: Record<string, unknown> = { prompt: o.task, engine, name: o.name ?? "", interactive: Boolean(o.visible) };
+    if (o.model) spawn.model = o.model;
     if (o.areaId) spawn.areaId = o.areaId;
     if (o.ticketId) spawn.ticketKey = o.ticketId;
     if (o.folder) {
@@ -277,6 +299,17 @@ export class AgentGrid {
     }
     const r = await this.call<{ message?: string }>("/api/spawn", spawn, 90_000);
     return r.message ?? `Started ${engine}.`;
+  }
+
+  /** The models each engine offers, or null from an Agent Grid too old to say. */
+  async models(): Promise<ModelCatalog | null> {
+    try {
+      const r = await this.call<{ models?: Partial<ModelCatalog> }>("/api/models");
+      return { claude: r.models?.claude ?? [], codex: r.models?.codex ?? [] };
+    } catch (err) {
+      if (err instanceof AgentGridError && err.status === 404) return null;
+      throw err;
+    }
   }
 
   /** Agent Grid's own page, signed in. Its ticket board is a toggle there; the page has no link straight to it. */
@@ -415,6 +448,13 @@ function idle(seconds?: number): string {
   return `${Math.round(seconds / 86_400)} days ago`;
 }
 
+/** "claude", or "claude on claude-opus-5" once its replies say which model. */
+export function runsOn(s: Pick<AgentSession, "engine" | "model">): string {
+  const engine = s.engine ?? "claude";
+  // A codex session with no recorded model reports the engine's name; an API error reports <synthetic>.
+  return s.model && s.model !== engine && !s.model.startsWith("<") ? `${engine} on ${s.model}` : engine;
+}
+
 export function findSession(sessions: AgentSession[], ref: string): AgentSession | { error: string } {
   const want = ref.trim().toLowerCase();
   const exact = sessions.find((s) => s.sessionId === ref.trim() || s.sessionId.startsWith(ref.trim()));
@@ -445,7 +485,7 @@ export function formatSessions(sessions: AgentSession[], limit = 15): string {
   return [
     `${sessions.length} session${sessions.length === 1 ? "" : "s"}: ${count("blocked")} need you, ${count("working")} working.${sessions.length > shown.length ? ` Showing ${shown.length}: all that need you or are working come first.` : ""}`,
     ...shown.map((s) =>
-      `- ${s.title || s.customName || "untitled"} [${STATUS_WORDS[s.status] ?? s.status}] ${s.engine ?? "claude"} in ${tilde(s.cwd) || s.project || "?"}, last active ${idle(s.idleSeconds)} (id ${s.sessionId.slice(0, 8)})${s.prompt ? `\n  the user's last message to it: ${s.prompt.replace(/\s+/g, " ").slice(0, 140)}` : ""}`,
+      `- ${s.title || s.customName || "untitled"} [${STATUS_WORDS[s.status] ?? s.status}] ${runsOn(s)} in ${tilde(s.cwd) || s.project || "?"}, last active ${idle(s.idleSeconds)} (id ${s.sessionId.slice(0, 8)})${s.prompt ? `\n  the user's last message to it: ${s.prompt.replace(/\s+/g, " ").slice(0, 140)}` : ""}`,
     ),
   ].join("\n");
 }
@@ -469,4 +509,113 @@ export function formatTranscript(session: AgentSession, blocks: Awaited<ReturnTy
   const head = `${session.title || "Session"} [${STATUS_WORDS[session.status] ?? session.status}] in ${tilde(session.cwd)}`;
   const note = kept.length < lines.length ? `Showing the last ${kept.length} of ${lines.length} entries.` : `${lines.length} entries.`;
   return [head, note, ...kept].join("\n");
+}
+
+// ---------- choosing a model ----------
+
+/** Words that say nothing about which model: "the latest opus" is "opus". */
+const FILLER = new Set(["the", "a", "latest", "newest", "model"]);
+const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]{0,127}$/;
+
+function words(text: string): string[] {
+  return text.toLowerCase().replace(/\[1m\]/g, " 1m ").split(/[^a-z0-9]+/).filter((w) => w && !FILLER.has(w));
+}
+
+/** The words that pick a model out, "claude" aside: "Claude Opus 5" and claude-opus-5 are both "opus-5". */
+function key(text: string): string {
+  const w = words(text);
+  return (w[0] === "claude" ? w.slice(1) : w).join("-");
+}
+
+function engineOf(model: string): AgentEngine | undefined {
+  if (/^(claude|fable|opus|sonnet|haiku)\b/i.test(model)) return "claude";
+  if (/^(gpt|codex|o\d)\b/i.test(model)) return "codex";
+  return undefined;
+}
+
+const ENGINE_NAMES: Record<AgentEngine, string> = { claude: "Claude", codex: "Codex" };
+
+interface ModelRow {
+  engine: AgentEngine;
+  id: string;
+  label: string;
+}
+
+function rows(catalog: ModelCatalog | null, engine?: AgentEngine): ModelRow[] {
+  if (!catalog) return [];
+  return (engine ? [engine] : AGENT_ENGINES).flatMap((e) =>
+    (catalog[e] ?? []).filter(([id]) => id).map(([id, label]) => ({ engine: e, id, label: label || id })),
+  );
+}
+
+/** "claude-opus-5 (Claude Opus 5)", "opus (Opus, alias)", "gpt-5.5": the ID first, since that is what gets passed. */
+function named(r: ModelRow): string {
+  return r.label.toLowerCase() === r.id.toLowerCase() ? r.id : `${r.id} (${r.label.replace(/ \((.*)\)$/, ", $1")})`;
+}
+
+export type ModelChoice = { engine: AgentEngine; model?: string; label?: string; note?: string } | { error: string };
+
+/**
+ * A model as the user said it ("Opus 5", "claude-opus-5", "the latest sonnet", "gpt 5.5"), matched against what Agent
+ * Grid offers: an exact ID, then the same name written another way, then every word said. The engine follows from the
+ * model unless one was asked for, and a model of the other engine is refused. A well-formed ID that isn't listed goes
+ * through as given, because the list only holds what this Mac has used; Agent Grid checks it when the agent starts.
+ */
+export function resolveModel(catalog: ModelCatalog | null, said: string, engine?: AgentEngine): ModelChoice {
+  const ref = said.trim();
+  if (!ref || /^(the )?default$/i.test(ref)) return { engine: engine ?? "claude" };
+  const all = rows(catalog);
+  const pick = (found: ModelRow[]): ModelChoice | undefined => {
+    if (!found.length) return undefined;
+    const fits = engine ? found.filter((r) => r.engine === engine) : found;
+    if (!fits.length) {
+      const other = found[0];
+      return { error: `${named(other)} is a ${ENGINE_NAMES[other.engine]} model; start a ${other.engine} agent for it, or pick a ${ENGINE_NAMES[engine!]} model.` };
+    }
+    const unique = [...new Map(fits.map((r) => [`${r.engine}:${r.id}`, r])).values()];
+    if (unique.length === 1) return { engine: unique[0].engine, model: unique[0].id, label: unique[0].label };
+    return { error: `"${ref}" could be ${unique.slice(0, 6).map(named).join(", ")}${unique.length > 6 ? ", …" : ""}. Say which.` };
+  };
+
+  const want = key(ref);
+  const spoken = words(ref);
+  const chosen =
+    pick(all.filter((r) => r.id.toLowerCase() === ref.toLowerCase())) ??
+    pick(all.filter((r) => want && (key(r.id) === want || key(r.label) === want))) ??
+    pick(all.filter((r) => spoken.length && spoken.every((w) => words(`${r.id} ${r.label}`).includes(w))));
+  if (chosen) return chosen;
+
+  let model: string | undefined;
+  if (MODEL_ID.test(ref)) model = ref;
+  else if (/^(opus|sonnet|haiku|fable)(-\d+){1,2}$/.test(want)) model = `claude-${want}`;
+  if (!model) {
+    const offered = rows(catalog, engine);
+    return {
+      error: `No ${engine ? `${ENGINE_NAMES[engine]} ` : ""}model called "${ref}".${offered.length ? ` There's ${offered.map(named).join(", ")}.` : ""}`,
+    };
+  }
+  const inferred = engineOf(model);
+  if (engine && inferred && inferred !== engine) {
+    return { error: `${model} looks like a ${ENGINE_NAMES[inferred]} model; start a ${inferred} agent for it, or pick a ${ENGINE_NAMES[engine]} model.` };
+  }
+  return {
+    engine: engine ?? inferred ?? "claude",
+    model,
+    note: catalog
+      ? `${model} isn't one this Mac has used yet; if the CLI doesn't know it, Agent Grid says so when the agent starts.`
+      : `This Agent Grid can't list its models, so ${model} goes to the CLI as given.`,
+  };
+}
+
+/** The models to offer, per engine, for the model to pick from. */
+export function formatModels(catalog: ModelCatalog, engine?: AgentEngine): string {
+  const lines = (engine ? [engine] : AGENT_ENGINES).map((e) => {
+    const models = rows(catalog, e);
+    return `${ENGINE_NAMES[e]}: ${models.length ? models.map(named).join(", ") : "no models listed"}.`;
+  });
+  return [
+    ...lines,
+    "Leave the model out for each CLI's own default. An alias (opus, sonnet, haiku, fable) is the latest of that family. " +
+      "Any other exact ID works too: Agent Grid checks it when the agent starts.",
+  ].join("\n");
 }

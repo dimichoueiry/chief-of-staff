@@ -324,6 +324,16 @@ messages them. Starting or messaging an agent waits for your OK in `ask` mode. W
 capability it doesn't have, it can have an agent build a small script in `~/cos-tools` and then
 run it.
 
+**On the model you name.** "Start an agent on Opus 5 to review the export code" starts Claude
+Code on `claude-opus-5`; "use gpt 5.5" starts Codex, since the model decides the engine. Say it any
+way: "Claude Opus 5", "opus 4.8", "the latest sonnet" (the `sonnet` alias), an exact ID. Names are
+matched against the models Agent Grid lists (the ones this Mac has used, plus the aliases), and
+the model is in the confirmation before anything starts. A name that fits several ("opus 4") gets
+a question back; a Claude model asked of Codex is refused. An exact ID it hasn't seen goes through
+as given, and if the CLI doesn't know it, Agent Grid says so instead of starting a session that
+does nothing. Name no model and each CLI uses its own default. "Which models can agents use?"
+lists them; `cos agents` shows the model each session runs on.
+
 Agent Grid mints a new key every time it starts; it now writes it to `~/.agentgrid/web.json`
 (owner-only) so the assistant can connect. Restart Agent Grid once after updating it.
 

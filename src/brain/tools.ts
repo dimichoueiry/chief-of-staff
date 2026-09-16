@@ -18,7 +18,7 @@ import { Ledger, PROJECT_STATUSES, findProject, type Project, type ProjectPatch 
 import { Notes } from "../core/notes.js";
 import { Reminders } from "../core/reminders.js";
 import { readAccess, type Access, type AccessMode } from "../actions/access.js";
-import { AgentGrid, findSession, formatSessions, formatTranscript } from "../actions/agentgrid.js";
+import { AGENT_ENGINES, AgentGrid, findSession, formatModels, formatSessions, formatTranscript, resolveModel, type AgentEngine, type AgentStart } from "../actions/agentgrid.js";
 import { areaTree, filterTickets, findArea, findTicket, formatAreaTree, formatBoardSummary, formatTicket, formatTickets, parseStatus, type AreaNode } from "../actions/gridboard.js";
 import { performTicketChange, planTicketChange } from "../actions/tickets.js";
 import { openOrQueue, safeWebUrl, checkPath, macOpen, type Runner } from "../actions/open.js";
@@ -236,7 +236,11 @@ export const TOOLS: Record<string, ToolSpec> = {
       properties: {
         task: s("Complete, self-contained instructions: what to do, where, what done looks like. The agent sees nothing of this conversation."),
         folder: s("The project folder, e.g. ~/Documents/GitHub/mlguerilla (created and added to Agent Grid if new). Leave out for a task with no project."),
-        engine: { type: "string", enum: ["claude", "codex"], description: "claude (default) or codex" },
+        engine: { type: "string", enum: [...AGENT_ENGINES], description: "claude (default) or codex. With a model, it follows from the model." },
+        model: s(
+          "Only when the user names a model: as they said it, e.g. \"Opus 5\", \"claude-opus-5\", \"the latest sonnet\", \"gpt-5.5\". " +
+            "Leave out for the CLI's own default. get_agent_models lists them.",
+        ),
         name: s("A short label shown in Agent Grid, e.g. \"module 6 quiz\""),
         visible: { type: "boolean", description: "Open it in a Terminal tab they can watch and type into, instead of in the background" },
         area: s("Start it in this Agent Grid work area, e.g. Engineering (see get_work_areas)"),
@@ -244,6 +248,11 @@ export const TOOLS: Record<string, ToolSpec> = {
       },
       required: ["task"],
     },
+  },
+  get_agent_models: {
+    name: "get_agent_models",
+    description: "The models a new Claude Code or Codex agent can run on, as Agent Grid lists them. Use it when the user asks which models there are, or names one you can't place.",
+    parameters: { type: "object", properties: { engine: { type: "string", enum: [...AGENT_ENGINES], description: "Only this engine's models" } } },
   },
   get_work_areas: {
     name: "get_work_areas",
@@ -410,7 +419,7 @@ export function toolsFor(intent: Intent): ToolSpec[] {
     "silence-check": [],
     ask: ALL,
     capture: [...WRITES, "get_project", "get_calendar", "find_folder"],
-    focus: ["get_project", "upsert_project", "get_git_log", "get_calendar", "open", "get_conversations", "find_folder", "run_command", "get_agents", "start_agent", "get_agent_output", "confirm_pending", "look_at_screen", "get_work_areas", "get_tickets", "change_ticket"],
+    focus: ["get_project", "upsert_project", "get_git_log", "get_calendar", "open", "get_conversations", "find_folder", "run_command", "get_agents", "start_agent", "get_agent_models", "get_agent_output", "confirm_pending", "look_at_screen", "get_work_areas", "get_tickets", "change_ticket"],
     wrap: ["get_project", "append_journal", "touch_project", "upsert_project", "get_git_log", "get_conversations"],
   };
   return names[intent].map((n) => TOOLS[n]);
@@ -696,8 +705,24 @@ export class ToolRuntime {
         const folderRaw = this.str(input, "folder");
         const folder = folderRaw ? resolve(expandHome(folderRaw)) : undefined;
         if (folder && folder !== homedir() && !folder.startsWith(`${homedir()}/`)) throw new Error("agents can only work in folders inside the home folder");
-        const engine = this.str(input, "engine") === "codex" ? "codex" : "claude";
+        const asked = AGENT_ENGINES.find((e) => e === this.str(input, "engine"));
+        let engine: AgentEngine = asked ?? "claude";
         const grid = this.grid();
+        let model: string | undefined;
+        let modelLabel = "";
+        let note = "";
+        // Once a start succeeds, a new Agent Grid has checked the model already: only an old one leaves the note true.
+        let unchecked = false;
+        const modelRef = this.str(input, "model");
+        if (modelRef) {
+          const catalog = await grid.models();
+          const choice = resolveModel(catalog, modelRef, asked);
+          if ("error" in choice) throw new Error(choice.error);
+          ({ engine, model } = choice);
+          modelLabel = choice.label ?? choice.model ?? "";
+          note = choice.note ? ` ${choice.note}` : "";
+          unchecked = catalog === null;
+        }
         let areaId: string | undefined;
         let areaName = "";
         const areaRef = this.str(input, "area");
@@ -714,21 +739,26 @@ export class ToolRuntime {
           if ("error" in t) throw new Error(t.error);
           ticketId = t.id;
         }
-        const job = { task, folder, engine, name: this.str(input, "name") || undefined, visible: input.visible === true, areaId, ticketId } as const;
+        const job: AgentStart = { task, folder, engine, model, name: this.str(input, "name") || undefined, visible: input.visible === true, areaId, ticketId };
         const where = `${areaName ? ` in ${areaName}` : ""}${ticketId ? `, on ${ticketId}` : ""}`;
+        const detail = `${engine}${model ? ` on ${model}` : ""} in ${folder ? tildePath(folder) : "~/Desktop (no project)"}${where}${job.visible ? ", in a Terminal tab" : ""}\nTask: ${task}`;
         if (mode === "ask") {
-          const detail = `${engine} in ${folder ? tildePath(folder) : "~/Desktop (no project)"}${where}${job.visible ? ", in a Terminal tab" : ""}\nTask: ${task}`;
           const twice = this.repeated("agent-start", detail);
           if (twice) return twice;
           this.pending.push(queue("agent-start", job, { label: `${engine} agent${job.name ? `: ${job.name}` : ""}`, detail, verb: "Start agent" }));
-          return "Not started yet. Ask them in one short sentence whether to start it, saying what the agent will do. They can just say yes.";
+          return `Not started yet. Ask them in one short sentence whether to start it, saying what the agent will do${modelLabel ? ` and that it runs on ${modelLabel}` : ""}. They can just say yes.${note}`;
         }
-        const detail = `${engine} in ${folder ? tildePath(folder) : "~/Desktop (no project)"}${where}${job.visible ? ", in a Terminal tab" : ""}\nTask: ${task}`;
         const again = this.repeated("agent-start", detail);
         if (again) return again;
         const started = await grid.start(job);
         this.done.push({ kind: "agent-start", detail });
-        return started;
+        return unchecked ? `${started}${note}` : started;
+      }
+      case "get_agent_models": {
+        this.agentsAllowed();
+        const catalog = await this.grid().models();
+        if (!catalog) return "This Agent Grid can't list its models: update it from ~/AgentGrid and restart it. An exact model ID still works.";
+        return formatModels(catalog, AGENT_ENGINES.find((e) => e === this.str(input, "engine")));
       }
       case "get_work_areas": {
         this.agentsAllowed();

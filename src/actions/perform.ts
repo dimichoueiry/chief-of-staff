@@ -1,5 +1,5 @@
 /** Carry out a pending action once the user has said OK (see pending.ts). */
-import { AgentGrid } from "./agentgrid.js";
+import { AgentGrid, type AgentStart } from "./agentgrid.js";
 import { sharedBrowser, type AssistantBrowser, type Element } from "./browser.js";
 import { macOpen, performOpen, type OpenAction, type Runner } from "./open.js";
 import type { Pending } from "./pending.js";
@@ -26,8 +26,7 @@ export async function performPending(p: Pending, deps: PerformDeps = {}): Promis
       return formatResult(await runCommand(req, { shell: deps.shell, confirmed: true }));
     }
     case "agent-start": {
-      const job = p.payload as { task: string; folder?: string; engine?: "claude" | "codex"; name?: string; visible?: boolean; areaId?: string; ticketId?: string };
-      return (deps.agentGrid ?? new AgentGrid()).start(job);
+      return (deps.agentGrid ?? new AgentGrid()).start(p.payload as AgentStart);
     }
     case "agent-message": {
       const m = p.payload as { sessionId: string; title: string; message: string };

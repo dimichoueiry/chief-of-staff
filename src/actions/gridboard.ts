@@ -10,7 +10,7 @@
  * so it can be tested without a server.
  */
 import {
-  TICKET_PRIORITIES, TICKET_STATUSES, TICKET_TYPES,
+  TICKET_PRIORITIES, TICKET_STATUSES, TICKET_TYPES, runsOn,
   type AgentSession, type AreasFile, type Ticket, type TicketPriority, type TicketStatus, type TicketType, type WorkArea,
 } from "./agentgrid.js";
 
@@ -187,7 +187,7 @@ const isLive = (a: AgentSession) => a.status !== "done" && a.status !== "stopped
 function agentLine(a: AgentSession, held: Ticket[]): string {
   const name = a.customName || a.title || a.sessionId.slice(0, 8);
   const tickets = held.length ? ` · holds ${held.map((t) => t.id).join(", ")}` : "";
-  return `  - ${name} (${a.sessionId.slice(0, 8)}, ${a.engine ?? "claude"}) — ${statusMark(a.status)}${a.project ? `, in ${a.project}` : ""}${tickets}`;
+  return `  - ${name} (${a.sessionId.slice(0, 8)}, ${runsOn(a)}) — ${statusMark(a.status)}${a.project ? `, in ${a.project}` : ""}${tickets}`;
 }
 
 /**
