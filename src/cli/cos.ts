@@ -16,7 +16,7 @@ import {
 import type { Brief } from "../brain/schema.js";
 import { loadConfig, loadDotenv, type Config } from "../config.js";
 import { buildContext, renderContext, type Intent } from "../core/context.js";
-import { commitPaths, ensureRepo } from "../core/git.js";
+import { ensureStores, memoryState, storeFiles } from "../core/memory.js";
 import { Journal } from "../core/journal.js";
 import { Ledger, PROJECT_STATUSES, normalizeStatus } from "../core/ledger.js";
 import { Notes } from "../core/notes.js";
@@ -123,44 +123,20 @@ async function syncTouches(cfg: Config, quiet = true): Promise<void> {
 
 // ---------- init ----------
 
-const LEDGER_TEMPLATE = `# Projects
-
-One block per project. Fields: why · status (active | parked | done | killed) · cadence · next · last touched · deadline · notes · path
-Rules: one next action per project. A why helps rank it. last touched is maintained for you from git activity.
-Add a project with: cos capture "starting a project: <name>, it's for <why>"
-`;
-
 program
   .command("init")
   .description("scaffold the memory stores in your selfhub (ledger, reminders, notes)")
   .option("-y, --yes", "do not ask for confirmation")
   .action(async (o: { yes?: boolean }) => {
     const cfg = config();
-    const ledger = new Ledger(cfg.selfhubDir);
-    const files: [string, string][] = [
-      [ledger.paths.ledger, LEDGER_TEMPLATE],
-      [ledger.paths.reminders, "# Reminders\n\n"],
-      [ledger.paths.notesInbox, "# Inbox\n\n"],
-    ];
-    const missing: [string, string][] = [];
-    for (const f of files) {
-      try {
-        await readFile(f[0]);
-      } catch {
-        missing.push(f);
-      }
-    }
-    if (!missing.length) return console.log(`Already initialised: ${cfg.selfhubDir}`);
-    console.log(`Will create in ${cfg.selfhubDir}:\n${missing.map((m) => `  ${relative(cfg.selfhubDir, m[0])}`).join("\n")}`);
-    if (!(await confirm("Create these files and commit?", o.yes))) return console.log("Nothing written.");
-    await ensureRepo(cfg.selfhubDir);
-    for (const [file, text] of missing) {
-      await mkdir(dirname(file), { recursive: true });
-      await writeFile(file, text, "utf8");
-    }
-    await mkdir(ledger.paths.journalDir, { recursive: true });
-    const hash = await commitPaths(cfg.selfhubDir, missing.map((m) => relative(cfg.selfhubDir, m[0])), "cos: initialise memory stores");
-    console.log(`Initialised${hash ? ` (commit ${hash})` : ""}. Next: cos capture "starting a project: <name>, it's for <why>"`);
+    const state = await memoryState(cfg.selfhubDir);
+    if (state.ready) return console.log(`Already initialised: ${cfg.selfhubDir}`);
+    const files = storeFiles(cfg.selfhubDir).filter((f) => state.missing.includes(f.name));
+    console.log(`Will create in ${cfg.selfhubDir}:\n${files.map((f) => `  ${relative(cfg.selfhubDir, f.path)}`).join("\n")}`);
+    if (!state.history.on) console.log(dim(`History is off: ${state.history.reason}`));
+    if (!(await confirm(state.history.on ? "Create these files and commit?" : "Create these files?", o.yes))) return console.log("Nothing written.");
+    const r = await ensureStores(cfg.selfhubDir);
+    console.log(`Initialised${r.commit ? ` (commit ${r.commit})` : ""}. Next: cos capture "starting a project: <name>, it's for <why>"`);
   });
 
 // ---------- brief ----------
