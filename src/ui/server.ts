@@ -20,6 +20,8 @@ import type { Brief } from "../brain/schema.js";
 import type { Config } from "../config.js";
 import { buildContext } from "../core/context.js";
 import { Journal } from "../core/journal.js";
+import { catchUpHistory, ensureStores, ensureStoresOnFirstRun, memoryState } from "../core/memory.js";
+import { installDeveloperTools, resetGit } from "../core/git.js";
 import { Ledger, normalizeStatus } from "../core/ledger.js";
 import { buildBrief } from "../logic/brief.js";
 import { daysIdle } from "../logic/cadence.js";
@@ -249,6 +251,23 @@ export function createUiServer(o: UiOptions): Server {
       ],
       providers: PROVIDER_ORDER.map((id) => ({ id, label: PROVIDERS[id].label, ready: providerConfigured(id), key: PROVIDERS[id].keyEnv[0] })),
     };
+  }
+
+  /** The memory folder, and the menu items that fix whatever is wrong with it. */
+  async function memoryView() {
+    const state = await memoryState(config.selfhubDir);
+    const actions: Record<string, unknown>[] = [];
+    if (!state.ready) {
+      actions.push({ kind: "post", title: state.exists ? "Finish setting up my memory" : "Set up my memory here", path: "api/memory/init", body: {} });
+    }
+    if (!state.history.on) {
+      if (state.history.fix === "install-tools") {
+        actions.push({ kind: "post", title: "Turn history on (install developer tools)…", path: "api/memory/tools", body: {} });
+      }
+      actions.push({ kind: "post", title: "Look for git again", path: "api/memory/recheck", body: {} });
+    }
+    actions.push({ kind: "open", title: "Open the folder", url: `file://${encodeURI(config.selfhubDir)}` });
+    return { ...state, actions };
   }
 
   /** After a key arrives, point the app at that provider unless something already answers. */
@@ -580,6 +599,35 @@ export function createUiServer(o: UiOptions): Server {
           return json(res, 422, { error: `${name} didn't work, so nothing changed: ${why}` });
         }
       }
+      case "GET /api/memory":
+        return json(res, 200, await memoryView());
+      case "POST /api/memory/init": {
+        const r = await ensureStores(config.selfhubDir);
+        Log(`memory stores: ${r.created.length ? `created ${r.created.join(", ")}` : "already there"}`);
+        return json(res, 200, {
+          ok: true,
+          message: r.created.length ? `Set up ${config.selfhubDir}` : "Everything was already there",
+          detail: r.created.length ? `Made ${r.created.join(", ")}${r.commit ? `, committed as ${r.commit}` : ""}.` : "",
+          ...(await memoryView()),
+        });
+      }
+      case "POST /api/memory/tools": {
+        const r = await installDeveloperTools();
+        Log(`developer tools: ${r.message}`);
+        return json(res, 200, { ok: true, message: r.started ? "Installing the developer tools" : "Nothing to install", detail: r.message, ...(await memoryView()) });
+      }
+      case "POST /api/memory/recheck": {
+        resetGit();
+        const caught = await catchUpHistory(config.selfhubDir);
+        if (caught) Log(`memory: committed what was written while git was missing (${caught})`);
+        const state = await memoryView();
+        return json(res, 200, {
+          ok: true,
+          message: state.history.on ? "History is on" : "Still no git",
+          detail: state.history.on ? "Every write to your memory is a commit again." : state.history.reason,
+          ...state,
+        });
+      }
       case "GET /api/keys":
         return json(res, 200, keysState());
       case "POST /api/keys": {
@@ -765,6 +813,19 @@ export function createUiServer(o: UiOptions): Server {
     } catch (err) {
       await json(res, 500, { error: (err as Error).message });
     }
+  });
+
+  // A first launch has no memory folder and nobody to run `cos init`: make the stores once, here.
+  // Only when there is nothing at all, so a store deleted on purpose stays deleted.
+  server.on("listening", () => {
+    void ensureStoresOnFirstRun(config.selfhubDir)
+      .then(async (r) => {
+        if (r?.created.length) Log(`memory: made ${r.created.join(", ")} in ${config.selfhubDir}${r.commit ? ` (commit ${r.commit})` : ""}`);
+        // git may have arrived since the last run: take whatever was written without it into the history.
+        const caught = await catchUpHistory(config.selfhubDir);
+        if (caught) Log(`memory: committed what was written while git was missing (${caught})`);
+      })
+      .catch((err) => Log(`memory: couldn't set up ${config.selfhubDir}: ${(err as Error).message}`));
   });
 
   if (o.agentWatch) {
