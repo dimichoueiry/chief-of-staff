@@ -83,10 +83,17 @@ export function watchAgents(o: WatchOptions): Watcher {
   let connection: AbortController | null = null;
 
   const allowed = () => !o.allowed || o.allowed();
+  // Waits ms, or until stopped. The abort listener comes off again when the timer fires: the watcher
+  // waits thousands of times a day while Agent Grid is down, and a listener left on `stopped` each time piled up.
   const sleep = (ms: number) =>
     new Promise<void>((resolve) => {
-      const t = setTimeout(resolve, ms);
-      stopped.signal.addEventListener("abort", () => (clearTimeout(t), resolve()), { once: true });
+      const wake = () => {
+        clearTimeout(t);
+        stopped.signal.removeEventListener("abort", wake);
+        resolve();
+      };
+      const t = setTimeout(wake, ms);
+      stopped.signal.addEventListener("abort", wake, { once: true });
     });
   // Access switched off while connected: hang up rather than sit on the stream.
   const hangups = setInterval(() => {
