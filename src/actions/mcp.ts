@@ -156,9 +156,23 @@ export async function probe(connection: Connection, timeoutMs = CONNECT_TIMEOUT_
   }
 }
 
+/** Everything an error knows, including what fetch hides in its cause. */
+export function errorText(err: unknown): string {
+  const parts: string[] = [];
+  let at: unknown = err;
+  for (let depth = 0; at && depth < 5; depth++) {
+    const e = at as { message?: string; code?: string; cause?: unknown };
+    if (e.message) parts.push(String(e.message).split("\n")[0]);
+    if (e.code) parts.push(String(e.code));
+    at = e.cause;
+  }
+  return parts.join(" ");
+}
+
 /** Turn whatever went wrong into the next thing to try. */
 export function explain(err: unknown, connection: Connection): string {
-  const raw = String((err as Error)?.message ?? err).split("\n")[0];
+  // "fetch failed" on its own tells nobody anything; the reason is one level down, in the cause.
+  const raw = errorText(err) || String(err);
   if (/ENOENT|command not found|no such file/i.test(raw) && connection.transport === "stdio") {
     return `Couldn't run "${connection.command}". It isn't installed on this Mac, or it isn't on the PATH.`;
   }
@@ -172,5 +186,9 @@ export function explain(err: unknown, connection: Connection): string {
   if (/404/.test(raw)) return "That address answered, but not with an MCP server. Many of them end in /mcp.";
   // It spoke, but not this protocol: usually the wrong program or the wrong address entirely.
   if (/-32601|Method not found/i.test(raw)) return "That answered, but it isn't an MCP server.";
-  return raw;
+  if (/certificate|self.signed|SSL|TLS/i.test(raw)) return "That address has a certificate this Mac doesn't trust.";
+  if (/fetch failed|ECONNRESET|socket hang up/i.test(raw)) {
+    return `Couldn't reach ${connection.url ?? "that address"}. Check it for typos, and that it is reachable from this Mac.`;
+  }
+  return raw.split(" ")[0] === raw ? raw : raw.split(/\s{2,}/)[0];
 }

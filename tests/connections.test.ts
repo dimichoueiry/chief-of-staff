@@ -142,6 +142,10 @@ describe("what to tell someone when it doesn't work", () => {
     expect(explain(new Error("connect ECONNREFUSED 127.0.0.1:1"), http)).toContain("Nothing answered");
     expect(explain(new Error("HTTP 404 Not Found"), http)).toContain("/mcp");
     expect(explain(new Error("connecting took longer than 20 s"), http)).toContain("starting slowly");
+    // undici says only "fetch failed" and puts the reason in the cause, so look there.
+    expect(explain(Object.assign(new Error("fetch failed"), { cause: { code: "ECONNREFUSED" } }), http)).toContain("Nothing answered");
+    expect(explain(new Error("fetch failed"), http)).toContain("Couldn't reach https://example.com/mcp");
+    expect(explain(Object.assign(new Error("fetch failed"), { cause: { message: "self-signed certificate" } }), http)).toContain("certificate");
   });
 
   it("keeps a tool description short enough to live in a prompt", () => {
