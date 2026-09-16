@@ -251,10 +251,12 @@ export async function summarizeEnded(
   const now = o.now ?? new Date();
   const limit = o.limit ?? 3;
   const since = addDays(todayISO(now), -(o.days ?? 30));
-  const active = store.current().id;
+  // The one in progress hasn't ended; nor has the one an aside was stepped out of.
+  const current = store.current();
+  const active = [current.id, current.asideOf];
   const retryAfter = now.getTime() - 6 * 3_600_000;
   const pending = store.list().conversations.filter(
-    (c) => c.id !== active && spoke(c) && !c.summary && span(c).to >= since && !(c.summaryFailedAt && new Date(c.summaryFailedAt).getTime() > retryAfter),
+    (c) => !active.includes(c.id) && spoke(c) && !c.summary && span(c).to >= since && !(c.summaryFailedAt && new Date(c.summaryFailedAt).getTime() > retryAfter),
   );
 
   let summarized = 0;

@@ -161,6 +161,12 @@ describe("recall across conversations", () => {
     expect(byId.get(pricingTalk.id)?.summaryFailedAt).toBe(clock.toISOString());
     expect(byId.get(active.id)?.summary).toBeUndefined();
     expect(requests).toHaveLength(2);
+    // Stepping out for an aside doesn't end the chat in progress either, and the aside itself is never summarised.
+    const aside = store.startAside();
+    store.append(aside, ...long("an aside"));
+    expect(await summarizeEnded(store, llm, { now: clock })).toEqual({ summarized: 0, failed: 0, waiting: 0 });
+    expect(store.get(active.id)?.summary).toBeUndefined();
+    expect(store.endAside()?.id).toBe(active.id);
     expect(requests[0]).toMatchObject({ tools: [], effort: "low" });
     expect(requests[0].instructions).toContain("Refer to the user as \"they\"");
     expect(requests[0].messages[0].role === "user" && requests[0].messages[0].content).toMatch(/Them: tauri details/);
