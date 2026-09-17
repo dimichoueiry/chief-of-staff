@@ -4,7 +4,8 @@
  * message, so follow-ups ("and tomorrow?", "open the second one", "yes, save
  * that") make sense. A conversation ends when you start a new one, switch to
  * another, or after a quiet spell; any saved one can be picked up again.
- * Long-term memory stays in selfhub.
+ * An aside ("by the way…") is a short side conversation kept apart from the one
+ * in progress and thrown away on the way back to it. Long-term memory stays in selfhub.
  */
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
@@ -52,6 +53,8 @@ export interface Conversation {
   /** How many of their messages the model had seen when it named it. */
   autoTitleMessages?: number;
   titleFailedAt?: string;
+  /** An aside: the id of the conversation it was started from, which "back on topic" returns to. */
+  asideOf?: string;
 }
 
 /** What the list of chats calls it: their name, the model's, or the start of what they first said. */
@@ -83,6 +86,9 @@ export function conversationsDir(): string {
 
 /** Deleted chats are kept aside this long, so a mistake can be undone, then removed for good. */
 export const KEEP_DELETED_DAYS = 30;
+
+/** Asides are saved under this prefix, so listing leaves them out without reading any file. */
+const ASIDE_PREFIX = "aside-";
 
 export class Conversations {
   constructor(
@@ -160,10 +166,10 @@ export class Conversations {
     return this.read(`${id}.json`);
   }
 
-  /** File names newest first: ids start with the start time. */
+  /** File names newest first: ids start with the start time. Asides are not chats, so they're left out. */
   private names(): string[] {
     try {
-      return readdirSync(this.dir).filter((n) => n.endsWith(".json")).sort().reverse();
+      return readdirSync(this.dir).filter((n) => n.endsWith(".json") && !n.startsWith(ASIDE_PREFIX)).sort().reverse();
     } catch {
       return [];
     }
@@ -228,9 +234,9 @@ export class Conversations {
     });
   }
 
-  private create(): Conversation {
+  private create(prefix = ""): Conversation {
     const at = this.now().toISOString();
-    const id = `${at.replace(/[:.]/g, "-")}-${randomBytes(3).toString("hex")}`;
+    const id = `${prefix}${at.replace(/[:.]/g, "-")}-${randomBytes(3).toString("hex")}`;
     return { id, startedAt: at, updatedAt: at, turns: [] };
   }
 
@@ -260,8 +266,9 @@ export class Conversations {
     return quietFor < this.idleMinutes * 60_000 ? last : this.create();
   }
 
-  /** End the conversation in progress and begin a new one. */
+  /** End the conversation in progress and begin a new one. An aside in progress is thrown away. */
   startNew(): Conversation {
+    this.clearAsides();
     const last = this.latest();
     if (last && !last.turns.length) {
       this.choose(last.id);
@@ -276,8 +283,54 @@ export class Conversations {
   /** Pick up a saved conversation where it left off. Null if there's no such conversation. */
   open(id: string): Conversation | null {
     const c = this.get(id);
-    if (c) this.choose(c.id);
+    if (!c) return null;
+    if (!c.asideOf) this.clearAsides();
+    this.choose(c.id);
     return c;
+  }
+
+  /**
+   * Step out of the conversation in progress for a quick unrelated exchange. The aside is its own
+   * conversation, so the main one keeps its thread and gets nothing from it; endAside returns to
+   * the main one and throws the aside away. Already in an aside: that aside carries on.
+   */
+  startAside(): Conversation {
+    const main = this.current();
+    if (main.asideOf) return main;
+    // A fresh chat isn't saved until something is said; save it so there's something to come back to.
+    if (!this.get(main.id)) this.save(main);
+    this.clearAsides();
+    const aside = { ...this.create(ASIDE_PREFIX), asideOf: main.id };
+    this.save(aside);
+    this.choose(aside.id);
+    return aside;
+  }
+
+  /**
+   * Back on topic: throw the aside away and pick up the conversation it was started from (a new one
+   * if that was deleted meanwhile). Null when there's no aside to leave. Works after any quiet spell,
+   * since the aside is whatever was picked last, not whatever is still active.
+   */
+  endAside(): Conversation | null {
+    const pick = this.chosen();
+    const aside = pick ? this.get(pick.id) : null;
+    if (!aside?.asideOf) return null;
+    this.clearAsides();
+    const main = this.get(aside.asideOf);
+    if (!main) return this.startNew();
+    this.choose(main.id);
+    return main;
+  }
+
+  /** Remove every saved aside: they're never kept. */
+  private clearAsides(): void {
+    try {
+      for (const name of readdirSync(this.dir)) {
+        if (name.startsWith(ASIDE_PREFIX) && name.endsWith(".json")) rmSync(join(this.dir, name), { force: true });
+      }
+    } catch {
+      /* nothing saved yet */
+    }
   }
 
   /** Add turns to a conversation and save it, on top of whatever is saved for it now. */

@@ -55,7 +55,7 @@ import type { Shell } from "../actions/terminal.js";
 import { findFolders, formatFolderSearch } from "../actions/folders.js";
 import { Shortcuts } from "../actions/shortcuts.js";
 import { slateBoards, type SlateBoard } from "../actions/slate.js";
-import { speak, stopSpeaking, type SpeakOptions, type SpeakResult } from "../voice/tts.js";
+import { readVoiceSettings, speak, stopSpeaking, type SpeakOptions, type SpeakResult } from "../voice/tts.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const WEB_DIR = join(here, "web");
@@ -473,10 +473,14 @@ export function createUiServer(o: UiOptions): Server {
       });
   }
 
-  /** A conversation as the page shows it: its turns, its name once something was said, and whether there are others to go back to. */
+  /**
+   * A conversation as the page shows it: its turns, its name once something was said, whether there are
+   * others to go back to, and whether it's an aside (a side exchange that "back on topic" throws away).
+   */
   function shownConversation(c: Conversation) {
-    const others = conversations.count() - (conversations.get(c.id) ? 1 : 0);
-    return { id: c.id, title: messageCount(c) ? displayTitle(c) : null, turns: visibleTurns(c), others };
+    const others = conversations.count() - (!c.asideOf && conversations.get(c.id) ? 1 : 0);
+    const title = c.asideOf ? "Aside" : messageCount(c) ? displayTitle(c) : null;
+    return { id: c.id, title, turns: visibleTurns(c), others, aside: Boolean(c.asideOf) };
   }
 
   /** One message in the pill: remembered with its reply, and answered with the conversation so far. */
@@ -519,7 +523,7 @@ export function createUiServer(o: UiOptions): Server {
     );
     summarizeSoon();
     const { steps: _steps, done: _done, ...shown } = reply;
-    return { status: 200, body: { ...shown, conversation: convo.id, title: displayTitle(convo), user: said } };
+    return { status: 200, body: { ...shown, conversation: convo.id, title: convo.asideOf ? "Aside" : displayTitle(convo), user: said } };
   }
 
   /** What the last reply left waiting that can still be done. */
@@ -917,6 +921,21 @@ export function createUiServer(o: UiOptions): Server {
         const c = conversations.startNew();
         summarizeSoon();
         return json(res, 200, shownConversation(c));
+      }
+      case "POST /api/conversation/aside": {
+        // "By the way…": a side exchange apart from the chat in progress, which waits untouched.
+        return json(res, 200, shownConversation(conversations.startAside()));
+      }
+      case "POST /api/conversation/resume": {
+        // "Back on topic": the aside is thrown away and the chat it was started from carries on.
+        const c = conversations.endAside();
+        if (!c) return json(res, 409, { error: "You're already on topic." });
+        return json(res, 200, shownConversation(c));
+      }
+      case "GET /api/voice": {
+        // What the pill answers to, so "Darius, new chat" is a command and not a question.
+        const v = readVoiceSettings();
+        return json(res, 200, { wakeName: v.wakeName, wake: v.wake });
       }
       case "GET /api/conversations": {
         // Every saved chat they said something in, most recently active first: no cap, so none goes missing.

@@ -74,6 +74,73 @@ describe("conversation store", () => {
     expect(store().open("2026-no-such-chat")).toBeNull();
   });
 
+  it("steps out for an aside and back: the main chat is untouched, the aside is never listed and is thrown away", async () => {
+    const s = store();
+    const main = s.current();
+    s.append(main, { role: "user", text: "plan the launch" }, { role: "assistant", text: "Three steps." });
+    clock = new Date("2026-09-14T10:05:00Z");
+
+    const aside = s.startAside();
+    expect(aside.id).toMatch(/^aside-/);
+    expect(aside).toMatchObject({ asideOf: main.id, turns: [] });
+    expect(store().current().id).toBe(aside.id);
+    expect(store().startAside().id).toBe(aside.id); // already in one: it carries on
+    s.append(s.current(), { role: "user", text: "how tall is the eiffel tower?" }, { role: "assistant", text: "330 m." });
+    expect(store().current().turns).toHaveLength(2);
+    // Not a chat: never listed, counted or remembered.
+    expect(s.list().conversations.map((c) => c.id)).toEqual([main.id]);
+    expect(s.count()).toBe(1);
+    expect(store().get(main.id)?.turns.map((t) => t.text)).toEqual(["plan the launch", "Three steps."]);
+
+    clock = new Date("2026-09-14T12:00:00Z"); // even after a quiet spell, "back on topic" lands on the main chat
+    const back = s.endAside();
+    expect(back?.id).toBe(main.id);
+    expect(store().current().id).toBe(main.id);
+    expect(store().get(aside.id)).toBeNull();
+    expect((await readdir(dir)).filter((n) => n.startsWith("aside-"))).toEqual([]);
+    expect(s.endAside()).toBeNull(); // nothing to leave
+    s.append(s.current(), { role: "user", text: "and step two?" });
+    expect(store().get(main.id)?.turns.map((t) => t.text)).toEqual(["plan the launch", "Three steps.", "and step two?"]);
+  });
+
+  it("throws an aside away when a new chat starts or another is opened, and comes back to a new chat if the main one was deleted", async () => {
+    const s = store();
+    const main = s.current();
+    s.append(main, { role: "user", text: "hi" }, { role: "assistant", text: "Hello." });
+    clock = new Date("2026-09-14T10:01:00Z");
+    const aside = s.startAside();
+    s.append(aside, { role: "user", text: "quick one" }, { role: "assistant", text: "Sure." });
+    const fresh = s.startNew();
+    expect(fresh.id).not.toBe(aside.id);
+    expect(fresh.asideOf).toBeUndefined();
+    expect(store().get(aside.id)).toBeNull();
+    expect(s.endAside()).toBeNull();
+
+    clock = new Date("2026-09-14T10:02:00Z");
+    const second = s.startAside();
+    expect(s.open(main.id)?.id).toBe(main.id);
+    expect(store().get(second.id)).toBeNull();
+
+    // After a quiet spell the chat in progress is a fresh one that isn't saved yet: it's saved, so there's somewhere to come back to.
+    clock = new Date("2026-09-14T13:00:00Z");
+    const third = s.startAside();
+    expect(third.asideOf).not.toBe(main.id);
+    const unsaved = store().get(third.asideOf!)!;
+    expect(unsaved).toMatchObject({ turns: [] });
+    expect(unsaved.asideOf).toBeUndefined();
+    expect(s.endAside()?.id).toBe(unsaved.id);
+    expect(store().current().id).toBe(unsaved.id);
+
+    const fourth = s.startAside();
+    expect(s.delete(unsaved.id)).toBe(true);
+    const landed = s.endAside();
+    expect(landed).not.toBeNull();
+    expect(landed!.id).not.toBe(unsaved.id);
+    expect(landed!.asideOf).toBeUndefined();
+    expect(store().get(fourth.id)).toBeNull();
+    expect(store().current().id).toBe(landed!.id);
+  });
+
   it("names chats, and keeps a name given while a reply was still being written", () => {
     const s = store();
     const c = s.current();

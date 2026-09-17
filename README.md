@@ -143,6 +143,17 @@ filed, and what it opened (even the instant "open …" requests that never touch
 - By voice: "new chat", "show my chats", "go back to the module 6 chat", "switch to the chat about
   Campuswire", "go back to the last chat". The name or anything said in the chat counts. If no chat
   matches, it's asked like any other message.
+- **Say its name to give an order.** "Darius, start a new chat" (or "Darius, new chat") starts one without
+  touching the ＋ new button; it says "New chat" and listens. The name in front is what makes it a command:
+  the same words without it still work as before, and anything else said to Darius by name is asked as usual.
+  Mishearings of the name ("Darias", "Marius", "dare us") count, as with the wake phrase.
+- **"Darius, by the way…"** steps out for a quick unrelated exchange without losing your place. Ask in the
+  same breath ("Darius, by the way, how tall is the Eiffel Tower?") or on its own (it says "Go ahead" and
+  listens). "Darius, quick question", "side note" and "off topic" do the same. The header reads **Aside** while
+  it lasts; what's said there is answered on its own, and the chat you were in doesn't see any of it.
+  "Darius, back on topic" (or "back to what we were saying", "where were we?") picks the chat up where it was
+  and throws the aside away: it isn't listed, remembered or searched. Inside an aside the name is optional for
+  the way back. A new chat or switching chats also ends it. If it's asleep, "Darius wake up" first, as always.
 - Picking up an old chat counts as activity, so it doesn't start over right away. Its old summary is
   dropped and rewritten when it ends again.
 - Conversations are saved in `~/.cos/conversations`, so restarting the app doesn't lose the thread.
