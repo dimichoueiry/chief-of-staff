@@ -17,7 +17,7 @@ import { EFFORTS, type ChatMessage, type Effort, type ImageInput, type LLMProvid
 import { PERSONA } from "./persona.js";
 import { DEFAULT_MESSAGES, loadPrompt } from "./prompts.js";
 import { BRIEF_SCHEMA, type Brief } from "./schema.js";
-import { ToolRuntime, toolsFor, type ToolCall } from "./tools.js";
+import { ToolRuntime, serverToolsFor, toolsFor, type ToolCall } from "./tools.js";
 import type { Pending } from "../actions/pending.js";
 
 export interface RunOptions {
@@ -58,6 +58,8 @@ export interface RunResult {
   model: string;
   /** Things the model wants to do that wait for the user's OK. */
   pending: Pending[];
+  /** How many web searches the provider ran for this answer, across every turn. */
+  webSearches: number;
   /** Actions carried out in this run, so a later message doesn't repeat them. */
   done: { kind: string; detail: string }[];
   /** The tool calls and results of this run, without provider-specific data, for the conversation record. */
@@ -93,6 +95,7 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
     (await buildContext({ config, intent, project: opts.project, today: opts.today, calendarProvider: opts.calendarProvider }));
   const runtime = new ToolRuntime(config, context.today, opts.calendarProvider, opts.actions);
   const tools = toolsFor(intent);
+  const serverTools = serverToolsFor(intent);
   const maxTurns = opts.maxTurns ?? 12;
 
   const instructions = `${PERSONA}\n\n# Task\n${await loadPrompt(intent)}`;
@@ -105,6 +108,7 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
   const firstNew = messages.length;
 
   let turns = 0;
+  let webSearches = 0;
   let last: Awaited<ReturnType<LLMProvider["chat"]>> | undefined;
   while (turns < maxTurns) {
     turns++;
@@ -115,6 +119,7 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
         context: memory,
         messages,
         tools,
+        serverTools,
         json: intent === "brief" ? { name: "brief", schema: BRIEF_SCHEMA as unknown as Record<string, unknown> } : undefined,
         effort: opts.effort ?? effortFromEnv(),
         maxTokens: 16000,
@@ -122,6 +127,7 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
       opts.onText,
     );
     last = res;
+    webSearches += res.usage?.webSearches ?? 0;
 
     if (res.stop === "refusal") throw new RefusedError();
     if (res.stop === "pause") {
@@ -169,6 +175,7 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
     stopReason: last.stop,
     model: formatSpec(spec),
     pending: runtime.pending,
+    webSearches,
     done: runtime.done,
     steps: messages
       .slice(firstNew)

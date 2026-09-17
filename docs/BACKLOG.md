@@ -370,6 +370,32 @@ Deliberately not done:
 
 ---
 
+## EPIC 11 — It can look things up   [S]   (done 2026-09-17, COS-3)
+
+Goal: "what's the news", "how's NVDA doing", "did they announce it yet" get a straight answer from
+the web, without a Chrome window opening to go and read one.
+
+Done, here: the provider does the searching. `ServerTools` in the model contract
+(`brain/llm/types.ts`) names tools the provider runs on its own servers; `serverToolsFor(intent)`
+offers web search to the two intents that answer a question (`ask`, `focus`) and to no others, so
+the brief, the wrap and capture cost nothing extra. OpenRouter takes it as the
+`openrouter:web_search` server tool alongside our function tools; Claude takes it as
+`web_search_20260209` (`web_search_20250305` on models before Opus 4.6). Both report how many
+searches ran, added up per run as `webSearches`. The persona draws the line: look it up to find out
+what is true, use the browser only when something has to happen on a page or the answer is behind a
+sign-in. `markdownToSpeech` already turns a citation into its source name, so a spoken answer says
+"apnews.com", never an address.
+
+Deliberately not done:
+- OpenAI's own endpoint and local servers get nothing: that would need the Responses API, or our own
+  search-API key. If the default model ever moves off OpenRouter, that is the work.
+- A stock quote tool. A search returns a snippet price a few minutes old, which is right for "how's
+  NVDA doing" and wrong for anything that needs the real number.
+- A search MCP connection. Blocked on T8.3-T8.5 either way, and slower than the provider doing it.
+
+Untested: the Claude path. No `ANTHROPIC_API_KEY` is set on this machine, so it is covered by
+adapter tests on the request it builds, not by a live call.
+
 ## What keeps this from turning into back-and-forth
 
 1. Contracts and schema are locked above and in BUILD.md — the agent implements to them.

@@ -2,7 +2,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type OpenAI from "openai";
 import { describe, expect, it } from "vitest";
 import {
-  AnthropicProvider, buildAnthropicParams, parseAnthropicMessage, supportsAdaptiveThinking, supportsRefusalFallback,
+  AnthropicProvider, buildAnthropicParams, parseAnthropicMessage, supportsAdaptiveThinking, supportsFilteredWebSearch, supportsRefusalFallback,
 } from "../src/brain/llm/anthropic.js";
 import { extractJson, normalizeBrief } from "../src/brain/llm/json.js";
 import { CompatProvider, buildCompatParams, parseCompletion, strictSchema, type CompatOptions } from "../src/brain/llm/openai.js";
@@ -91,10 +91,48 @@ describe("Anthropic adapter", () => {
     expect((await provider.chat(baseRequest())).text).toBe("Filing now.");
     expect(sent).toMatchObject({ model: "claude-opus-5" });
   });
+
+  it("asks Claude to search the web only when the run wants it, with the newest tool the model takes", () => {
+    const search = { webSearch: { maxSearches: 4, maxResults: 3 } };
+    expect(buildAnthropicParams(baseRequest()).tools).toHaveLength(1);
+
+    const opus5 = buildAnthropicParams(baseRequest({ serverTools: search }));
+    expect(opus5.tools).toHaveLength(2);
+    expect(opus5.tools?.[1]).toEqual({ type: "web_search_20260209", name: "web_search", max_uses: 4 });
+
+    // maxResults is OpenRouter's knob; Claude counts searches, not results, so it must not leak through.
+    expect(opus5.tools?.[1]).not.toHaveProperty("max_results");
+
+    const old = buildAnthropicParams(baseRequest({ model: "claude-3-5-sonnet-20241022", serverTools: search }));
+    expect(old.tools?.[1]).toMatchObject({ type: "web_search_20250305" });
+    expect(supportsFilteredWebSearch("claude-opus-5")).toBe(true);
+    expect(supportsFilteredWebSearch("claude-3-5-sonnet-20241022")).toBe(false);
+  });
+
+  it("offers the search tool even when the intent has no tools of its own", () => {
+    const p = buildAnthropicParams(baseRequest({ tools: [], serverTools: { webSearch: {} } }));
+    expect(p.tools).toEqual([{ type: "web_search_20260209", name: "web_search" }]);
+  });
+
+  it("counts Claude's own searches and keeps its result blocks out of the tool calls", () => {
+    const res = parseAnthropicMessage({
+      content: [
+        { type: "server_tool_use", id: "s1", name: "web_search", input: { query: "nvda" } },
+        { type: "web_search_tool_result", tool_use_id: "s1", content: [] },
+        { type: "text", text: "NVDA is around $219." },
+      ],
+      stop_reason: "end_turn",
+      model: "claude-opus-5",
+      usage: { input_tokens: 10, output_tokens: 5 },
+    } as unknown as Anthropic.Beta.BetaMessage);
+    expect(res.usage?.webSearches).toBe(1);
+    expect(res.toolCalls).toEqual([]);
+    expect(res.text).toBe("NVDA is around $219.");
+  });
 });
 
-const OPENAI: CompatOptions = { id: "openai", reasoning: "openai", maxTokensParam: "max_completion_tokens", structuredOutputs: true, replayReasoningDetails: false };
-const OPENROUTER: CompatOptions = { id: "openrouter", reasoning: "openrouter", maxTokensParam: "max_tokens", structuredOutputs: true, replayReasoningDetails: true };
+const OPENAI: CompatOptions = { id: "openai", reasoning: "openai", maxTokensParam: "max_completion_tokens", structuredOutputs: true, replayReasoningDetails: false, webSearch: false };
+const OPENROUTER: CompatOptions = { id: "openrouter", reasoning: "openrouter", maxTokensParam: "max_tokens", structuredOutputs: true, replayReasoningDetails: true, webSearch: true };
 
 describe("OpenAI-compatible adapter", () => {
   it("builds one system message, function tools, assistant tool_calls and tool messages", () => {
@@ -215,7 +253,7 @@ describe("images", () => {
   });
 
   it("sends a screenshot to OpenAI and OpenRouter as a data URL part", () => {
-    const opts: CompatOptions = { id: "openrouter", reasoning: "openrouter", maxTokensParam: "max_tokens", structuredOutputs: true, replayReasoningDetails: true };
+    const opts: CompatOptions = { id: "openrouter", reasoning: "openrouter", maxTokensParam: "max_tokens", structuredOutputs: true, replayReasoningDetails: true, webSearch: true };
     const p = buildCompatParams({ ...withImage, model: "openai/gpt-5.4-mini" }, opts);
     expect(p.messages[1]).toEqual({
       role: "user",
@@ -225,5 +263,38 @@ describe("images", () => {
       ],
     });
     expect(buildCompatParams(baseRequest({ model: "gpt-5.4" }), opts).messages[1]).toEqual({ role: "user", content: "file this" });
+  });
+});
+
+describe("web search through OpenRouter", () => {
+  const search = { webSearch: { maxResults: 3, maxSearches: 4 } };
+
+  it("adds the server tool alongside the function tools, for OpenRouter only", () => {
+    const router = buildCompatParams(baseRequest({ model: "openai/gpt-5.4", serverTools: search }), OPENROUTER);
+    expect(router.tools).toHaveLength(2);
+    expect(router.tools?.[0]).toMatchObject({ type: "function", function: { name: "add_note" } });
+    expect(router.tools?.[1]).toEqual({ type: "openrouter:web_search", parameters: { max_results: 3 } });
+
+    // OpenAI's own endpoint and local servers have no such tool: asking for it would be a 400.
+    const openai = buildCompatParams(baseRequest({ model: "gpt-5.4", serverTools: search }), OPENAI);
+    expect(openai.tools).toHaveLength(1);
+    expect(buildCompatParams(baseRequest({ model: "openai/gpt-5.4" }), OPENROUTER).tools).toHaveLength(1);
+  });
+
+  it("leaves tools unset when there are none to send", () => {
+    expect(buildCompatParams(baseRequest({ tools: [] }), OPENROUTER).tools).toBeUndefined();
+    expect(buildCompatParams(baseRequest({ tools: [], serverTools: search }), OPENROUTER).tools).toEqual([
+      { type: "openrouter:web_search", parameters: { max_results: 3 } },
+    ]);
+  });
+
+  it("reads back how many searches OpenRouter ran", () => {
+    const res = parseCompletion({
+      choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "NVDA is around $219." } }],
+      model: "openai/gpt-5.6-luna",
+      usage: { prompt_tokens: 4669, completion_tokens: 78, server_tool_use_details: { web_search_requests: 2 } },
+    } as unknown as OpenAI.Chat.Completions.ChatCompletion);
+    expect(res.usage).toEqual({ inputTokens: 4669, outputTokens: 78, webSearches: 2 });
+    expect(res.toolCalls).toEqual([]);
   });
 });

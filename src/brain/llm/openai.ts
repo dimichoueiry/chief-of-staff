@@ -20,6 +20,8 @@ export interface CompatOptions {
   structuredOutputs: boolean;
   /** OpenRouter returns reasoning_details that must be passed back across tool turns. */
   replayReasoningDetails: boolean;
+  /** OpenRouter searches the web itself when asked. OpenAI's own endpoint and local servers don't. */
+  webSearch: boolean;
 }
 
 /** OpenAI's strict schema mode rejects some keywords; the prompt and normalisation cover them. */
@@ -84,12 +86,16 @@ export function buildCompatParams(req: ChatRequest, opts: CompatOptions): Params
   const params: Params = { model: req.model, messages: toMessages(req, opts) };
   if (opts.maxTokensParam === "max_completion_tokens") params.max_completion_tokens = req.maxTokens;
   else params.max_tokens = req.maxTokens;
-  if (req.tools.length) {
-    params.tools = req.tools.map((t) => ({
-      type: "function" as const,
-      function: { name: t.name, description: t.description, parameters: t.parameters },
-    }));
+  const tools: Record<string, unknown>[] = req.tools.map((t) => ({
+    type: "function",
+    function: { name: t.name, description: t.description, parameters: t.parameters },
+  }));
+  // OpenRouter runs this one and writes the results into the answer: no tool call comes back to us.
+  if (opts.webSearch && req.serverTools?.webSearch) {
+    const { maxResults } = req.serverTools.webSearch;
+    tools.push({ type: "openrouter:web_search", ...(maxResults ? { parameters: { max_results: maxResults } } : {}) });
   }
+  if (tools.length) params.tools = tools as unknown as Params["tools"];
   if (req.json && opts.structuredOutputs) {
     params.response_format = {
       type: "json_schema",
@@ -134,13 +140,17 @@ export function parseCompletion(c: Completion): ChatResponse {
   if (toolCalls.length) stop = "tool_use";
   if (msg.refusal) stop = "refusal";
   const details = (msg as unknown as { reasoning_details?: unknown }).reasoning_details;
+  const searches = (c.usage as unknown as { server_tool_use_details?: { web_search_requests?: number } } | undefined)
+    ?.server_tool_use_details?.web_search_requests;
   return {
     text: (msg.content ?? "").trim(),
     toolCalls,
     stop,
     providerData: details !== undefined ? { reasoning_details: details } : undefined,
     model: c.model,
-    usage: c.usage ? { inputTokens: c.usage.prompt_tokens, outputTokens: c.usage.completion_tokens } : undefined,
+    usage: c.usage
+      ? { inputTokens: c.usage.prompt_tokens, outputTokens: c.usage.completion_tokens, ...(searches ? { webSearches: searches } : {}) }
+      : undefined,
   };
 }
 

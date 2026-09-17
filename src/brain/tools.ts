@@ -8,7 +8,7 @@ import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { Config } from "../config.js";
-import type { ImageInput, ToolSpec } from "./llm/types.js";
+import type { ImageInput, ServerTools, ToolSpec } from "./llm/types.js";
 import { describeShot, helperCapturer, type ScreenCapturer } from "../sensors/screen.js";
 import { Conversations } from "./conversation.js";
 import { searchConversations } from "./recall.js";
@@ -423,6 +423,17 @@ export function toolsFor(intent: Intent): ToolSpec[] {
     wrap: ["get_project", "append_journal", "touch_project", "upsert_project", "get_git_log", "get_conversations"],
   };
   return names[intent].map((n) => TOOLS[n]);
+}
+
+/**
+ * What the provider may run on its own servers for an intent: today, looking things up on the
+ * web. Only the two intents that answer a question get it. The brief and the wrap work from
+ * memory alone, and capture is a quick write. A provider without it is simply asked without it.
+ */
+export function serverToolsFor(intent: Intent): ServerTools | undefined {
+  if (intent !== "ask" && intent !== "focus") return undefined;
+  // Small on purpose: a few results answer a spoken question, and every one of them is context.
+  return { webSearch: { maxResults: 3, maxSearches: 4 } };
 }
 
 function expandHome(p: string): string {

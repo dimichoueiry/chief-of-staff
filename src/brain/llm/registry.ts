@@ -223,12 +223,12 @@ export function createProvider(spec: ModelSpec, env: NodeJS.ProcessEnv = process
       return new AnthropicProvider();
     case "openai":
       return new CompatProvider(
-        { id: "openai", reasoning: "openai", maxTokensParam: "max_completion_tokens", structuredOutputs: true, replayReasoningDetails: false },
+        { id: "openai", reasoning: "openai", maxTokensParam: "max_completion_tokens", structuredOutputs: true, replayReasoningDetails: false, webSearch: false },
         defaultCompatSend(new OpenAI({ apiKey: env.OPENAI_API_KEY })),
       );
     case "openrouter":
       return new CompatProvider(
-        { id: "openrouter", reasoning: "openrouter", maxTokensParam: "max_tokens", structuredOutputs: true, replayReasoningDetails: true },
+        { id: "openrouter", reasoning: "openrouter", maxTokensParam: "max_tokens", structuredOutputs: true, replayReasoningDetails: true, webSearch: true },
         defaultCompatSend(
           new OpenAI({
             apiKey: env.OPENROUTER_API_KEY,
@@ -245,6 +245,7 @@ export function createProvider(spec: ModelSpec, env: NodeJS.ProcessEnv = process
           maxTokensParam: "max_tokens",
           structuredOutputs: env.COS_COMPATIBLE_JSON_SCHEMA === "1",
           replayReasoningDetails: false,
+          webSearch: false,
         },
         defaultCompatSend(new OpenAI({ apiKey: env.COS_COMPATIBLE_API_KEY || "not-needed", baseURL: env.COS_COMPATIBLE_BASE_URL })),
       );

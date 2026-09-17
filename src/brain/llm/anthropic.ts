@@ -10,6 +10,15 @@ export function supportsAdaptiveThinking(model: string): boolean {
   return /^claude-(fable|mythos|opus-5|sonnet-5|opus-4-[678]|sonnet-4-6)/.test(model);
 }
 
+/**
+ * Models that take the newer web search tool, which filters results as it goes. Older ones
+ * only have the first version. Kept apart from the thinking check on purpose: the two lists
+ * happen to match today, and each will move on its own.
+ */
+export function supportsFilteredWebSearch(model: string): boolean {
+  return /^claude-(fable|mythos|opus-5|sonnet-5|opus-4-[678]|sonnet-4-6)/.test(model);
+}
+
 /** Models where a safety decline can be re-run on another model inside the same call. */
 export function supportsRefusalFallback(model: string): boolean {
   return /^claude-(opus-5|fable-5-1)$/.test(model);
@@ -60,13 +69,21 @@ export function buildAnthropicParams(req: ChatRequest): Params {
     ],
     messages: toMessages(req.messages),
   };
-  if (req.tools.length) {
-    params.tools = req.tools.map((t) => ({
-      name: t.name,
-      description: t.description,
-      input_schema: t.parameters as Anthropic.Beta.BetaTool["input_schema"],
-    }));
+  const tools: Anthropic.Beta.BetaToolUnion[] = req.tools.map((t) => ({
+    name: t.name,
+    description: t.description,
+    input_schema: t.parameters as Anthropic.Beta.BetaTool["input_schema"],
+  }));
+  // Claude searches on its own servers and puts the results in its own reply: nothing for us to run.
+  if (req.serverTools?.webSearch) {
+    const { maxSearches } = req.serverTools.webSearch;
+    tools.push({
+      type: supportsFilteredWebSearch(req.model) ? "web_search_20260209" : "web_search_20250305",
+      name: "web_search",
+      ...(maxSearches ? { max_uses: maxSearches } : {}),
+    });
   }
+  if (tools.length) params.tools = tools;
   if (adaptive) params.thinking = { type: "adaptive" };
   const outputConfig: NonNullable<Params["output_config"]> = {};
   if (adaptive && req.effort) outputConfig.effort = req.effort;
@@ -90,9 +107,11 @@ const STOP: Record<string, StopReason> = {
 
 export function parseAnthropicMessage(msg: Message): ChatResponse {
   let text = "";
+  let searches = 0;
   const toolCalls: ToolCall[] = [];
   for (const block of msg.content) {
     if (block.type === "text") text += block.text;
+    else if (block.type === "web_search_tool_result") searches++;
     else if (block.type === "tool_use") {
       toolCalls.push({ id: block.id, name: block.name, input: (block.input ?? {}) as Record<string, unknown> });
     }
@@ -103,7 +122,7 @@ export function parseAnthropicMessage(msg: Message): ChatResponse {
     stop: STOP[msg.stop_reason ?? ""] ?? "end",
     providerData: msg.content,
     model: msg.model,
-    usage: { inputTokens: msg.usage.input_tokens, outputTokens: msg.usage.output_tokens },
+    usage: { inputTokens: msg.usage.input_tokens, outputTokens: msg.usage.output_tokens, ...(searches ? { webSearches: searches } : {}) },
   };
 }
 
