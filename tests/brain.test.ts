@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChatRequest, ChatResponse, LLMProvider } from "../src/brain/llm/types.js";
 import { RefusedError, runIntent } from "../src/brain/loop.js";
-import { ToolRuntime, toolsFor } from "../src/brain/tools.js";
+import { ToolRuntime, serverToolsFor, toolsFor } from "../src/brain/tools.js";
 import { loadConfig } from "../src/config.js";
 import { ensureRepo, git } from "../src/core/git.js";
 import { Ledger } from "../src/core/ledger.js";
@@ -96,6 +96,15 @@ describe("ToolRuntime", () => {
     expect((await rt.execute("get_calendar", { from: "2026-10-31", to: "2026-10-01" })).isError).toBe(true);
     expect((await rt.execute("get_calendar", { from: "2026-01-01", to: "2026-12-31" })).result).toMatch(/at most 92 days/);
     expect((await rt.execute("get_calendar", { from: "next friday" })).isError).toBe(true);
+  });
+
+  it("lets the provider search the web only for the intents that answer questions", () => {
+    expect(serverToolsFor("ask")?.webSearch).toBeTruthy();
+    expect(serverToolsFor("focus")?.webSearch).toBeTruthy();
+    // The brief and the wrap answer from memory, and capture is a quick write: no web, no cost.
+    expect(serverToolsFor("brief")).toBeUndefined();
+    expect(serverToolsFor("wrap")).toBeUndefined();
+    expect(serverToolsFor("capture")).toBeUndefined();
   });
 
   it("gives the brief no tools and each intent only its own", () => {

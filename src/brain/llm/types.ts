@@ -13,6 +13,21 @@ export interface ToolSpec {
   parameters: JsonSchema;
 }
 
+/**
+ * Tools the provider runs on its own servers. We never see the call: the model asks for it
+ * mid-answer, the provider carries it out and folds the result in. No round trip through
+ * ToolRuntime, and nothing opens on the user's screen.
+ */
+export interface ServerTools {
+  /** Let the model look things up on the web itself: news, prices, facts it can't know. */
+  webSearch?: {
+    /** Results per search, where the provider takes that (OpenRouter). Keeps the context small. */
+    maxResults?: number;
+    /** How many searches one answer may run, where the provider takes that (Anthropic). */
+    maxSearches?: number;
+  };
+}
+
 export interface ToolCall {
   id: string;
   name: string;
@@ -49,6 +64,8 @@ export interface ChatRequest {
   context: string;
   messages: ChatMessage[];
   tools: ToolSpec[];
+  /** Offered alongside `tools`. A provider without them is simply asked without them. */
+  serverTools?: ServerTools;
   /** Ask for one JSON object matching this schema instead of prose. */
   json?: { name: string; schema: JsonSchema };
   effort?: Effort;
@@ -64,7 +81,8 @@ export interface ChatResponse {
   providerData?: unknown;
   /** The model that actually answered, as the provider reports it. */
   model: string;
-  usage?: { inputTokens: number; outputTokens: number };
+  /** webSearches is how many searches the provider ran for this answer, when it says. */
+  usage?: { inputTokens: number; outputTokens: number; webSearches?: number };
 }
 
 export interface LLMProvider {

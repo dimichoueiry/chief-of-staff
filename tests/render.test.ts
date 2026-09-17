@@ -98,3 +98,17 @@ describe("markdownToSpeech", () => {
     );
   });
 });
+
+describe("what a looked-up answer sounds like", () => {
+  it("reads a search citation as its source, never as an address", () => {
+    const said = markdownToSpeech(
+      "NVIDIA is at **$219.34**. Huawei unveiled new AI-chip technology. ([apnews.com](https://apnews.com/article/26ab?utm_source=openai))",
+    );
+    expect(said).toContain("apnews.com");
+    expect(said).not.toContain("https");
+    expect(said).not.toContain("utm_source");
+    expect(said).toContain("$219.34");
+    // A bare address with no link text has nothing worth reading out.
+    expect(markdownToSpeech("See https://www.reuters.com/markets/x?y=1 for more")).toBe("See the link for more");
+  });
+});
