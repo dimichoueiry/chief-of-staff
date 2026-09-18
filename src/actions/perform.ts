@@ -1,5 +1,5 @@
 /** Carry out a pending action once the user has said OK (see pending.ts). */
-import { AgentGrid, type AgentStart } from "./agentgrid.js";
+import { AgentGrid, formatOrchestrator, type AgentStart } from "./agentgrid.js";
 import { sharedBrowser, type AssistantBrowser, type Element } from "./browser.js";
 import { macOpen, performOpen, type OpenAction, type Runner } from "./open.js";
 import type { Pending } from "./pending.js";
@@ -32,6 +32,23 @@ export async function performPending(p: Pending, deps: PerformDeps = {}): Promis
       const m = p.payload as { sessionId: string; title: string; message: string };
       await (deps.agentGrid ?? new AgentGrid()).message(m.sessionId, m.message);
       return `Sent to ${m.title}.`;
+    }
+    case "orchestrator-start": {
+      const { id, goal } = p.payload as { id: string; goal: string };
+      return formatOrchestrator(await (deps.agentGrid ?? new AgentGrid()).startOrchestrator(id, goal));
+    }
+    case "orchestrator-stop": {
+      const { id, reason } = p.payload as { id: string; reason?: string };
+      return formatOrchestrator(await (deps.agentGrid ?? new AgentGrid()).stopOrchestrator(id, reason));
+    }
+    case "orchestrator-send": {
+      const { id, name, text } = p.payload as { id: string; name: string; text: string };
+      await (deps.agentGrid ?? new AgentGrid()).sendOrchestrator(id, text);
+      return `Sent to ${name}.`;
+    }
+    case "orchestrator-approval": {
+      const { id, approvalId, approved, reason } = p.payload as { id: string; approvalId: string; approved: boolean; reason?: string };
+      return formatOrchestrator(await (deps.agentGrid ?? new AgentGrid()).answerOrchestrator(id, approvalId, approved, reason));
     }
     case "ticket":
       return performTicketChange(p.payload as TicketChange, deps.agentGrid ?? new AgentGrid());

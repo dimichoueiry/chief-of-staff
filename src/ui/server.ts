@@ -125,6 +125,11 @@ const DOING: Record<string, string> = {
   get_agent_output: "Reading what the agent did…",
   look_at_screen: "Looking at your screen…",
   message_agent: "Messaging the agent…",
+  get_orchestrators: "Checking your orchestrators…",
+  start_orchestrator: "Starting the orchestrator…",
+  stop_orchestrator: "Stopping the orchestrator…",
+  message_orchestrator: "Messaging the orchestrator…",
+  respond_orchestrator_approval: "Sending your answer…",
   browser_open: "Opening it in my browser…",
   browser_read: "Reading the page…",
   browser_click: "Clicking…",
@@ -552,7 +557,18 @@ export function createUiServer(o: UiOptions): Server {
         turns.push({ role: "event", text: `They said no, so this was not done: ${p.label}.` });
         continue;
       }
-      emit({ type: "status", text: p.kind === "command" ? "Running it…" : p.kind === "agent-start" ? "Starting the agent…" : p.kind === "agent-message" ? "Sending it…" : "On it…" });
+      emit({
+        type: "status",
+        text:
+          p.kind === "command" ? "Running it…" :
+          p.kind === "agent-start" ? "Starting the agent…" :
+          p.kind === "agent-message" ? "Sending it…" :
+          p.kind === "orchestrator-start" ? "Starting the orchestrator…" :
+          p.kind === "orchestrator-stop" ? "Stopping the orchestrator…" :
+          p.kind === "orchestrator-send" ? "Sending it…" :
+          p.kind === "orchestrator-approval" ? "Sending your answer…" :
+          "On it…",
+      });
       try {
         const out = await performPending(p, deps);
         turns.push({ role: "event", text: `They said yes and it is already done (do not do it again): ${p.label}. Result: ${outcome(out)}`, done: { kind: p.kind, detail: p.detail } });

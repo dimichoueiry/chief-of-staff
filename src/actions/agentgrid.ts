@@ -160,6 +160,71 @@ export interface AgentEvent {
   at?: string;
 }
 
+// ---------- orchestrators (Agent Grid's orchestrator.py and orchestrator_run.py) ----------
+
+/**
+ * A standing agent, not a session: an OpenRouter model with a tool menu that can start real Claude
+ * Code / Codex agents on its own, working toward a goal until it's done, stopped, or needs the user's
+ * approval. Its definition (name, model, instructions, limits) is created in Agent Grid's own UI,
+ * since that needs an OpenRouter connection; the assistant only starts, stops, messages and approves
+ * ones that already exist.
+ */
+export const ORCHESTRATOR_STATUSES = ["idle", "running", "waiting", "done", "failed", "stopped"] as const;
+export type OrchestratorStatus = (typeof ORCHESTRATOR_STATUSES)[number];
+
+export interface OrchestratorChild {
+  name: string;
+  cwd?: string;
+  engine?: string;
+  task?: string;
+  jobId?: string;
+  sessionId?: string;
+  at?: number;
+}
+
+/** A tool call the orchestrator wants to make that its `ask` mode holds for the user's OK. */
+export interface OrchestratorPending {
+  id: string;
+  tool: string;
+  args?: Record<string, unknown>;
+  reason?: string;
+  at?: number;
+}
+
+export interface OrchestratorLimits {
+  maxConcurrent: number;
+  maxSpawns: number;
+  maxSpendUsd: number;
+  maxSteps: number;
+}
+
+/** GET /api/orchestrators / the "orchestrator" field of every orchestrator POST: its definition plus its run state. */
+export interface Orchestrator {
+  id: string;
+  name: string;
+  model: string;
+  /** A work area id, or "" for the global orchestrator that sees every area. */
+  scope: string;
+  instructions: string;
+  mode: "ask" | "auto";
+  cwd: string;
+  limits: OrchestratorLimits;
+  status: OrchestratorStatus;
+  goal: string;
+  steps: number;
+  spawns: number;
+  costUsd: number;
+  children: OrchestratorChild[];
+  plan: Array<Record<string, unknown>>;
+  reason: string;
+  lastText: string;
+  startedAt: number;
+  updatedAt: number;
+  /** Messages sent while it was mid-step, not yet read. */
+  queued: number;
+  pending: OrchestratorPending | null;
+}
+
 /** Why a request never got an answer, as a sentence. */
 function unreachable(err: unknown): AgentGridError {
   const why = (err as { cause?: { code?: string } }).cause?.code ?? (err as Error).name;
@@ -434,6 +499,48 @@ export class AgentGrid {
       control.abort();
     }
   }
+
+  // ---------- orchestrators ----------
+
+  /** Every orchestrator readable on this machine, with its current run state. */
+  async orchestrators(): Promise<Orchestrator[]> {
+    try {
+      const r = await this.call<{ orchestrators?: Orchestrator[] }>("/api/orchestrators");
+      return r.orchestrators ?? [];
+    } catch (err) {
+      if (err instanceof AgentGridError && err.status === 404) {
+        throw new AgentGridError("This Agent Grid can't do orchestrators yet: update it from ~/AgentGrid and restart it.");
+      }
+      throw err;
+    }
+  }
+
+  /** Start an existing orchestrator on a goal. Refused if it's already running or waiting. */
+  async startOrchestrator(id: string, goal: string): Promise<Orchestrator> {
+    const r = await this.call<{ orchestrator: Orchestrator }>("/api/orchestrators/start", { id, goal });
+    return r.orchestrator;
+  }
+
+  async stopOrchestrator(id: string, reason?: string): Promise<Orchestrator> {
+    const r = await this.call<{ orchestrator: Orchestrator }>("/api/orchestrators/stop", { id, reason: reason ?? "" });
+    return r.orchestrator;
+  }
+
+  /** Add a message to a running (or idle-with-a-goal) orchestrator; it reads it on its next step. */
+  async sendOrchestrator(id: string, text: string): Promise<Orchestrator> {
+    const r = await this.call<{ orchestrator: Orchestrator }>("/api/orchestrators/send", { id, text });
+    return r.orchestrator;
+  }
+
+  /** Approve or decline the one tool call an `ask`-mode orchestrator is holding for the user. */
+  async answerOrchestrator(id: string, approvalId: string, approved: boolean, reason?: string): Promise<Orchestrator> {
+    const r = await this.call<{ orchestrator: Orchestrator }>(`/api/orchestrators/${approved ? "approve" : "decline"}`, {
+      id,
+      approvalId,
+      ...(approved ? {} : { reason: reason ?? "" }),
+    });
+    return r.orchestrator;
+  }
 }
 
 // ---------- finding and describing sessions ----------
@@ -509,6 +616,59 @@ export function formatTranscript(session: AgentSession, blocks: Awaited<ReturnTy
   const head = `${session.title || "Session"} [${STATUS_WORDS[session.status] ?? session.status}] in ${tilde(session.cwd)}`;
   const note = kept.length < lines.length ? `Showing the last ${kept.length} of ${lines.length} entries.` : `${lines.length} entries.`;
   return [head, note, ...kept].join("\n");
+}
+
+// ---------- finding and describing orchestrators ----------
+
+const ORCHESTRATOR_STATUS_WORDS: Record<OrchestratorStatus, string> = {
+  waiting: "needs you", running: "working", idle: "idle", done: "done", failed: "failed", stopped: "stopped",
+};
+
+/** An orchestrator from its id (in full, or its first characters) or a few words of its name. */
+export function findOrchestrator(orchestrators: Orchestrator[], ref: string): Orchestrator | { error: string } {
+  const raw = ref.trim();
+  if (!raw) return { error: "Say which orchestrator." };
+  const want = raw.toLowerCase();
+  const exact = orchestrators.find((o) => o.id === raw || (raw.length >= 6 && o.id.startsWith(raw)));
+  if (exact) return exact;
+  const named = orchestrators.filter((o) => o.name.toLowerCase().includes(want));
+  if (named.length === 1) return named[0];
+  if (named.length > 1) return { error: `"${ref}" matches ${named.length} orchestrators: ${named.map((o) => o.name).join(", ")}. Say more of the name.` };
+  return { error: `No orchestrator called "${ref}". ${orchestrators.length ? `There's ${orchestrators.map((o) => o.name).join(", ")}.` : "None are set up yet: add one in Agent Grid first."}` };
+}
+
+/** Orchestrators for the model: the ones that need you first, then working, then the rest. */
+export function formatOrchestrators(orchestrators: Orchestrator[]): string {
+  if (!orchestrators.length) return "No orchestrators are set up. Add one in Agent Grid (a standing agent that can start real agents toward a goal) first.";
+  const rank = (o: Orchestrator) => (o.status === "waiting" ? 0 : o.status === "running" ? 1 : 2);
+  const sorted = [...orchestrators].sort((a, b) => rank(a) - rank(b) || b.updatedAt - a.updatedAt);
+  const count = (st: OrchestratorStatus) => orchestrators.filter((o) => o.status === st).length;
+  return [
+    `${orchestrators.length} orchestrator${orchestrators.length === 1 ? "" : "s"}: ${count("waiting")} need you, ${count("running")} working.`,
+    ...sorted.map((o) => {
+      const goal = o.goal ? ` — ${o.goal.replace(/\s+/g, " ").slice(0, 100)}` : "";
+      return `- ${o.name} [${ORCHESTRATOR_STATUS_WORDS[o.status]}] on ${o.model}, ${o.spawns} agent${o.spawns === 1 ? "" : "s"} started${goal} (id ${o.id.slice(0, 8)})`;
+    }),
+  ].join("\n");
+}
+
+/** One orchestrator in full: what it's doing, what it's started, and what it's waiting on. */
+export function formatOrchestrator(o: Orchestrator): string {
+  const lines = [
+    `${o.name} [${ORCHESTRATOR_STATUS_WORDS[o.status]}] on ${o.model}, mode ${o.mode}${o.scope ? `, scoped to one work area` : ""}`,
+    o.goal ? `Goal: ${o.goal}` : "No goal yet: it hasn't been started.",
+    `${o.steps} step${o.steps === 1 ? "" : "s"}, ${o.spawns} agent${o.spawns === 1 ? "" : "s"} started, $${o.costUsd.toFixed(2)} spent.`,
+  ];
+  if (o.reason) lines.push(`Reason: ${o.reason}`);
+  if (o.pending) {
+    const args = o.pending.args && Object.keys(o.pending.args).length ? ` ${JSON.stringify(o.pending.args)}` : "";
+    lines.push(`Waiting for your OK on: ${o.pending.tool}${args}${o.pending.reason ? ` — ${o.pending.reason}` : ""}`);
+  }
+  if (o.lastText) lines.push(`Last words: ${o.lastText.replace(/\s+/g, " ").slice(0, 400)}`);
+  if (o.children.length) {
+    lines.push(`Agents it started: ${o.children.map((c) => `${c.name || c.engine || "agent"}${c.cwd ? ` in ${tilde(c.cwd)}` : ""}`).join(", ")}`);
+  }
+  return lines.join("\n");
 }
 
 // ---------- choosing a model ----------

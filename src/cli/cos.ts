@@ -43,7 +43,7 @@ import { deployRuntime } from "./deploy.js";
 import { openOrQueue, performOpen } from "../actions/open.js";
 import { ACCESS_MODES, accessFile, isAccessMode, readAccess, saveAccess, type AccessMode } from "../actions/access.js";
 import { allowSite, baseDomain, browserHome, forgetSite, readSites } from "../actions/browser.js";
-import { AgentGrid, formatSessions, tilde } from "../actions/agentgrid.js";
+import { AgentGrid, formatOrchestrators, formatSessions, tilde } from "../actions/agentgrid.js";
 import { findFolders, formatFolderSearch } from "../actions/folders.js";
 import { Shortcuts } from "../actions/shortcuts.js";
 import { findBoards, slateBaseUrl, slateBoardUrl, slateBoards } from "../actions/slate.js";
@@ -292,6 +292,17 @@ program
         console.log(`${e.at ?? ""}  ${e.title || e.sessionId.slice(0, 8)} (${e.engine ?? "claude"} in ${tilde(e.cwd) || e.project || "?"}): ${e.from} → ${e.to}${e.finished ? "  finished" : ""}`);
       }
       console.log("Agent Grid closed the stream.");
+    } catch (err) {
+      fail((err as Error).message);
+    }
+  });
+
+program
+  .command("orchestrators")
+  .description("Agent Grid's orchestrators (standing agents that start real agents toward a goal) and their status")
+  .action(async () => {
+    try {
+      console.log(formatOrchestrators(await new AgentGrid().orchestrators()));
     } catch (err) {
       fail((err as Error).message);
     }

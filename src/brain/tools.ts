@@ -18,7 +18,10 @@ import { Ledger, PROJECT_STATUSES, findProject, type Project, type ProjectPatch 
 import { Notes } from "../core/notes.js";
 import { Reminders } from "../core/reminders.js";
 import { readAccess, type Access, type AccessMode } from "../actions/access.js";
-import { AGENT_ENGINES, AgentGrid, findSession, formatModels, formatSessions, formatTranscript, resolveModel, type AgentEngine, type AgentStart } from "../actions/agentgrid.js";
+import {
+  AGENT_ENGINES, AgentGrid, findOrchestrator, findSession, formatModels, formatOrchestrator, formatOrchestrators, formatSessions, formatTranscript, resolveModel,
+  type AgentEngine, type AgentStart,
+} from "../actions/agentgrid.js";
 import { areaTree, filterTickets, findArea, findTicket, formatAreaTree, formatBoardSummary, formatTicket, formatTickets, parseStatus, type AreaNode } from "../actions/gridboard.js";
 import { performTicketChange, planTicketChange } from "../actions/tickets.js";
 import { openOrQueue, safeWebUrl, checkPath, macOpen, type Runner } from "../actions/open.js";
@@ -322,6 +325,58 @@ export const TOOLS: Record<string, ToolSpec> = {
       required: ["session", "message"],
     },
   },
+  get_orchestrators: {
+    name: "get_orchestrators",
+    description:
+      "Agent Grid's orchestrators: standing agents (an OpenRouter model with a tool menu) that start real Claude Code/Codex agents toward a goal on their own. " +
+      "Without `orchestrator`, every one and its status (needs you, working, idle, done, failed, stopped). With it, one in full: its goal, what it's started, its last " +
+      "words. \"Needs you\" is one of two things: either it's holding a tool call for your OK (a `Waiting for your OK on:` line appears — respond with " +
+      "respond_orchestrator_approval), or it just said something in plain text and is waiting for a reply (no such line: read its last words and reply with " +
+      "message_orchestrator instead). Orchestrators are set up (name, model, instructions) in Agent Grid itself, not from here.",
+    parameters: { type: "object", properties: { orchestrator: s("One orchestrator: its id or part of its name") } },
+  },
+  start_orchestrator: {
+    name: "start_orchestrator",
+    description: "Start an orchestrator on a goal. Refused if it's already running or waiting on an approval — stop it first, or use message_orchestrator instead. May wait for the user's OK.",
+    parameters: {
+      type: "object",
+      properties: { orchestrator: s("Its id or part of its name (see get_orchestrators)"), goal: s("What it should work toward, in full") },
+      required: ["orchestrator", "goal"],
+    },
+  },
+  stop_orchestrator: {
+    name: "stop_orchestrator",
+    description: "Stop a running or waiting orchestrator. May wait for the user's OK.",
+    parameters: {
+      type: "object",
+      properties: { orchestrator: s("Its id or part of its name"), reason: s("Why, shown in its journal (optional)") },
+      required: ["orchestrator"],
+    },
+  },
+  message_orchestrator: {
+    name: "message_orchestrator",
+    description: "Send a message to a running orchestrator: a follow-up, a correction, or an answer if it asked something in plain text. It reads it on its next step. May wait for the user's OK.",
+    parameters: {
+      type: "object",
+      properties: { orchestrator: s("Its id or part of its name"), message: s("What to tell it") },
+      required: ["orchestrator", "message"],
+    },
+  },
+  respond_orchestrator_approval: {
+    name: "respond_orchestrator_approval",
+    description:
+      "Approve or decline the one tool call an orchestrator is holding for the user (its status is \"needs you\"; get_orchestrators with `orchestrator` shows what it wants to do). " +
+      "Always waits for the user's OK, regardless of agent access mode: this is exactly the check the orchestrator's own `ask` mode exists for.",
+    parameters: {
+      type: "object",
+      properties: {
+        orchestrator: s("Its id or part of its name"),
+        decision: { type: "string", enum: ["approve", "decline"], description: "approve or decline" },
+        reason: s("decline: why, shown to the orchestrator so it can adjust (optional)"),
+      },
+      required: ["orchestrator", "decision"],
+    },
+  },
   browser_open: {
     name: "browser_open",
     description:
@@ -407,7 +462,10 @@ export const TOOLS: Record<string, ToolSpec> = {
 
 const ALL = Object.keys(TOOLS);
 /** Tools that do something outside memory: the conversation record lists what they did. */
-export const ACTIONS = ["open", "run_command", "start_agent", "message_agent", "browser_click", "browser_type"];
+export const ACTIONS = [
+  "open", "run_command", "start_agent", "message_agent", "browser_click", "browser_type",
+  "start_orchestrator", "stop_orchestrator", "message_orchestrator", "respond_orchestrator_approval",
+];
 
 /** Tools that change memory. Everything else only reads or opens. */
 export const WRITES = ["upsert_project", "skip_cadence", "touch_project", "add_reminder", "complete_reminder", "add_note", "append_journal", "add_shortcut"];
@@ -419,7 +477,11 @@ export function toolsFor(intent: Intent): ToolSpec[] {
     "silence-check": [],
     ask: ALL,
     capture: [...WRITES, "get_project", "get_calendar", "find_folder"],
-    focus: ["get_project", "upsert_project", "get_git_log", "get_calendar", "open", "get_conversations", "find_folder", "run_command", "get_agents", "start_agent", "get_agent_models", "get_agent_output", "confirm_pending", "look_at_screen", "get_work_areas", "get_tickets", "change_ticket"],
+    focus: [
+      "get_project", "upsert_project", "get_git_log", "get_calendar", "open", "get_conversations", "find_folder", "run_command", "get_agents", "start_agent",
+      "get_agent_models", "get_agent_output", "confirm_pending", "look_at_screen", "get_work_areas", "get_tickets", "change_ticket",
+      "get_orchestrators", "start_orchestrator", "stop_orchestrator", "message_orchestrator", "respond_orchestrator_approval",
+    ],
     wrap: ["get_project", "append_journal", "touch_project", "upsert_project", "get_git_log", "get_conversations"],
   };
   return names[intent].map((n) => TOOLS[n]);
@@ -862,6 +924,97 @@ export class ToolRuntime {
         await grid.message(found.sessionId, message);
         this.done.push({ kind: "agent-message", detail });
         return `Sent to ${found.title}.`;
+      }
+      case "get_orchestrators": {
+        this.agentsAllowed();
+        const grid = this.grid();
+        const ref = this.str(input, "orchestrator");
+        if (!ref) return formatOrchestrators(await grid.orchestrators());
+        const found = findOrchestrator(await grid.orchestrators(), ref);
+        if ("error" in found) throw new Error(found.error);
+        return formatOrchestrator(found);
+      }
+      case "start_orchestrator": {
+        const mode = this.agentsAllowed();
+        const grid = this.grid();
+        const found = findOrchestrator(await grid.orchestrators(), this.str(input, "orchestrator", true));
+        if ("error" in found) throw new Error(found.error);
+        const goal = this.str(input, "goal", true);
+        const detail = `${found.name} (on ${found.model})\nGoal: ${goal}`;
+        if (mode === "ask") {
+          const twice = this.repeated("orchestrator-start", detail);
+          if (twice) return twice;
+          this.pending.push(queue("orchestrator-start", { id: found.id, goal }, { label: `start ${found.name}`, detail, verb: "Start" }));
+          return `Not started yet. Ask them in one short sentence whether to start ${found.name} on this goal. They can just say yes.`;
+        }
+        const again = this.repeated("orchestrator-start", detail);
+        if (again) return again;
+        const started = await grid.startOrchestrator(found.id, goal);
+        this.done.push({ kind: "orchestrator-start", detail });
+        return formatOrchestrator(started);
+      }
+      case "stop_orchestrator": {
+        const mode = this.agentsAllowed();
+        const grid = this.grid();
+        const found = findOrchestrator(await grid.orchestrators(), this.str(input, "orchestrator", true));
+        if ("error" in found) throw new Error(found.error);
+        const reason = this.str(input, "reason") || undefined;
+        const detail = `Stop ${found.name}${reason ? `: ${reason}` : ""}`;
+        if (mode === "ask") {
+          const twice = this.repeated("orchestrator-stop", detail);
+          if (twice) return twice;
+          this.pending.push(queue("orchestrator-stop", { id: found.id, reason }, { label: `stop ${found.name}`, detail, verb: "Stop" }));
+          return `Not stopped yet. Ask them in one short sentence whether to stop ${found.name}. They can just say yes.`;
+        }
+        const again = this.repeated("orchestrator-stop", detail);
+        if (again) return again;
+        const stopped = await grid.stopOrchestrator(found.id, reason);
+        this.done.push({ kind: "orchestrator-stop", detail });
+        return formatOrchestrator(stopped);
+      }
+      case "message_orchestrator": {
+        const mode = this.agentsAllowed();
+        const grid = this.grid();
+        const found = findOrchestrator(await grid.orchestrators(), this.str(input, "orchestrator", true));
+        if ("error" in found) throw new Error(found.error);
+        const message = this.str(input, "message", true);
+        const detail = `To ${found.name}:\n${message}`;
+        if (mode === "ask") {
+          const twice = this.repeated("orchestrator-send", detail);
+          if (twice) return twice;
+          this.pending.push(queue("orchestrator-send", { id: found.id, name: found.name, text: message }, { label: `message to ${found.name}`, detail, verb: "Send" }));
+          return `Not sent yet. Ask them "Should I send this to ${found.name}?" and read the message to them. They can just say yes.`;
+        }
+        const again = this.repeated("orchestrator-send", detail);
+        if (again) return again;
+        await grid.sendOrchestrator(found.id, message);
+        this.done.push({ kind: "orchestrator-send", detail });
+        return `Sent to ${found.name}.`;
+      }
+      case "respond_orchestrator_approval": {
+        this.agentsAllowed();
+        const grid = this.grid();
+        const found = findOrchestrator(await grid.orchestrators(), this.str(input, "orchestrator", true));
+        if ("error" in found) throw new Error(found.error);
+        if (!found.pending) throw new Error(`${found.name} isn't waiting for an approval.`);
+        const decision = this.str(input, "decision", true);
+        if (decision !== "approve" && decision !== "decline") throw new Error('"decision" must be "approve" or "decline"');
+        const approved = decision === "approve";
+        const reason = this.str(input, "reason") || undefined;
+        const what = `${found.pending.tool}${found.pending.reason ? ` — ${found.pending.reason}` : ""}`;
+        const detail = `${approved ? "Approve" : "Decline"} ${found.name}'s next step: ${what}${reason ? `\nWhy: ${reason}` : ""}`;
+        // Always waits for the user, whatever the agent access mode: this is the check the orchestrator's
+        // own ask mode exists for, and it may unlock several further agents and real spend on its own.
+        const twice = this.repeated("orchestrator-approval", detail);
+        if (twice) return twice;
+        this.pending.push(
+          queue("orchestrator-approval", { id: found.id, approvalId: found.pending.id, approved, reason }, {
+            label: `${approved ? "approve" : "decline"} ${found.name}'s ${found.pending.tool}`,
+            detail,
+            verb: approved ? "Approve" : "Decline",
+          }),
+        );
+        return `Not sent yet. Ask them in one short sentence whether to ${decision} it, saying what ${found.name} wants to do${found.pending.reason ? ` (${found.pending.reason})` : ""}. They can just say yes.`;
       }
       case "browser_open": {
         this.browserAllowed();
