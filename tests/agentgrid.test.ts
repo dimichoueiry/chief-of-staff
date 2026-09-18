@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Access } from "../src/actions/access.js";
 import {
-  AgentGrid, findConnection, findSession, formatModels, formatSessions, formatTranscript, resolveModel, runsOn, type AgentSession, type ModelCatalog,
+  AgentGrid, findConnection, findOrchestrator, findSession, formatModels, formatOrchestrator, formatOrchestrators, formatSessions, formatTranscript,
+  resolveModel, runsOn, type AgentSession, type ModelCatalog, type Orchestrator,
 } from "../src/actions/agentgrid.js";
 import { confirmView, take } from "../src/actions/pending.js";
 import { performPending } from "../src/actions/perform.js";
@@ -31,10 +32,34 @@ const MODELS: ModelCatalog = {
   codex: [["", "Default"], ["gpt-6-astra", "GPT-6-Astra"], ["gpt-5.6-sol", "GPT-5.6-Sol"], ["gpt-5.6-terra", "GPT-5.6-Terra"], ["gpt-5.5", "GPT-5.5"]],
 };
 
+const LIMITS = { maxConcurrent: 3, maxSpawns: 20, maxSpendUsd: 5, maxSteps: 200 };
+
+/** GET /api/orchestrators as Agent Grid answers it: definitions joined with their run state. */
+const ORCHESTRATORS: Orchestrator[] = [
+  {
+    id: "aaaa1111idleorchestrator", name: "Marketing sweep", model: "anthropic/claude-opus-5", scope: "", instructions: "", mode: "ask", cwd: "",
+    limits: LIMITS, status: "idle", goal: "", steps: 0, spawns: 0, costUsd: 0, children: [], plan: [], reason: "", lastText: "", startedAt: 0, updatedAt: 100, queued: 0, pending: null,
+  },
+  {
+    id: "bbbb2222waitingorchestrator", name: "Release captain", model: "anthropic/claude-opus-5", scope: "", instructions: "", mode: "ask", cwd: "",
+    limits: LIMITS, status: "waiting", goal: "Ship the v2 release", steps: 4, spawns: 1, costUsd: 0.42,
+    children: [{ name: "exporter", cwd: `${homedir()}/Desktop/drawcal`, engine: "claude", task: "fix the export bug", jobId: "job-1" }],
+    plan: [], reason: "", lastText: "Ready to start on the export fix.", startedAt: 200, updatedAt: 300, queued: 0,
+    pending: { id: "appr-1", tool: "start_agent", args: { task: "fix the export bug" }, reason: "first agent this run", at: 300 },
+  },
+  {
+    id: "cccc3333runningorchestrator", name: "Nightly QA", model: "anthropic/claude-opus-5", scope: "", instructions: "", mode: "auto", cwd: "",
+    limits: LIMITS, status: "running", goal: "Keep the test suite green", steps: 2, spawns: 0, costUsd: 0.05, children: [], plan: [], reason: "",
+    lastText: "", startedAt: 400, updatedAt: 400, queued: 0, pending: null,
+  },
+];
+
 /** A stand-in for Agent Grid's HTTP API: token-gated, recording what it was asked. */
 function fakeAgentGrid(token = "tok", o: { models?: boolean } = {}) {
   const calls: string[] = [];
   const projects = [`${homedir()}/Desktop/drawcal`];
+  // A fresh, mutable copy per server: starting/stopping/answering one test's orchestrator must not leak into another's.
+  const orchestrators: Orchestrator[] = JSON.parse(JSON.stringify(ORCHESTRATORS));
   const server: Server = createServer(async (req, res) => {
     const chunks: Buffer[] = [];
     for await (const c of req) chunks.push(c as Buffer);
@@ -69,6 +94,35 @@ function fakeAgentGrid(token = "tok", o: { models?: boolean } = {}) {
       });
     }
     if (url.pathname === "/api/chat") return send(200, { ok: true });
+    if (url.pathname === "/api/orchestrators") return send(200, { orchestrators });
+    if (url.pathname.startsWith("/api/orchestrators/")) {
+      const found = orchestrators.find((o) => o.id === body?.id);
+      if (!found) return send(400, { error: "That orchestrator no longer exists." });
+      const action = url.pathname.slice("/api/orchestrators/".length);
+      if (action === "start") {
+        if (found.status === "running" || found.status === "waiting") return send(400, { error: "This orchestrator is already running. Stop it first." });
+        found.status = "running";
+        found.goal = String(body.goal ?? "");
+        return send(200, { ok: true, orchestrator: found });
+      }
+      if (action === "stop") {
+        found.status = "stopped";
+        found.reason = String(body.reason || "Stopped by you.");
+        return send(200, { ok: true, orchestrator: found });
+      }
+      if (action === "send") {
+        found.queued += 1;
+        return send(200, { ok: true, orchestrator: found });
+      }
+      if (action === "approve" || action === "decline") {
+        if (!found.pending || (body.approvalId && body.approvalId !== found.pending.id)) return send(400, { error: "Nothing is waiting for your approval." });
+        found.status = "running";
+        found.pending = null;
+        if (action === "decline") found.reason = String(body.reason || "");
+        return send(200, { ok: true, orchestrator: found });
+      }
+      return send(404, { error: "No such route." });
+    }
     return send(404, { error: "No such route." });
   });
   return { server, calls };
@@ -244,6 +298,71 @@ describe("Agent Grid client", () => {
     });
   });
 
+  describe("orchestrators", () => {
+    it("lists them, needs-you first, and finds one by id prefix or name", () => {
+      const text = formatOrchestrators(ORCHESTRATORS);
+      expect(text.split("\n")[0]).toBe("3 orchestrators: 1 need you, 1 working.");
+      expect(text.split("\n")[1]).toContain("Release captain [needs you] on anthropic/claude-opus-5, 1 agent started — Ship the v2 release");
+      expect(text.indexOf("Release captain")).toBeLessThan(text.indexOf("Nightly QA"));
+      expect(text.indexOf("Nightly QA")).toBeLessThan(text.indexOf("Marketing sweep"));
+      expect(formatOrchestrators([])).toMatch(/^No orchestrators are set up/);
+
+      expect(findOrchestrator(ORCHESTRATORS, "release")).toMatchObject({ id: "bbbb2222waitingorchestrator" });
+      expect(findOrchestrator(ORCHESTRATORS, "bbbb2222")).toMatchObject({ name: "Release captain" });
+      expect(findOrchestrator(ORCHESTRATORS, "a")).toMatchObject({ error: expect.stringMatching(/matches 3 orchestrators/) });
+      expect(findOrchestrator(ORCHESTRATORS, "kubernetes")).toEqual({ error: 'No orchestrator called "kubernetes". There\'s Marketing sweep, Release captain, Nightly QA.' });
+      expect(findOrchestrator([], "anything")).toMatchObject({ error: expect.stringMatching(/add one in Agent Grid first/) });
+    });
+
+    it("describes one in full, including what it's waiting on", () => {
+      const waiting = formatOrchestrator(ORCHESTRATORS[1]);
+      expect(waiting).toContain("Release captain [needs you] on anthropic/claude-opus-5, mode ask");
+      expect(waiting).toContain("Goal: Ship the v2 release");
+      expect(waiting).toContain("4 steps, 1 agent started, $0.42 spent.");
+      expect(waiting).toContain('Waiting for your OK on: start_agent {"task":"fix the export bug"} — first agent this run');
+      expect(waiting).toContain("Last words: Ready to start on the export fix.");
+      expect(waiting).toContain("Agents it started: exporter in ~/Desktop/drawcal");
+
+      expect(formatOrchestrator(ORCHESTRATORS[0])).toContain("No goal yet: it hasn't been started.");
+    });
+
+    it("starts, stops, sends to, and answers an approval on, a named orchestrator", async () => {
+      const grid = new AgentGrid(() => ({ base, token: "tok" }));
+      const started = await grid.startOrchestrator("aaaa1111idleorchestrator", "Sweep Q4 campaigns");
+      expect(started.status).toBe("running");
+      expect(started.goal).toBe("Sweep Q4 campaigns");
+      await expect(grid.startOrchestrator("bbbb2222waitingorchestrator", "again")).rejects.toThrow(/already running/);
+
+      const stopped = await grid.stopOrchestrator("bbbb2222waitingorchestrator", "changed my mind");
+      expect(stopped.status).toBe("stopped");
+      expect(fake.calls.at(-1)).toBe('POST /api/orchestrators/stop {"id":"bbbb2222waitingorchestrator","reason":"changed my mind"}');
+
+      await grid.sendOrchestrator("cccc3333runningorchestrator", "also check the staging env");
+      expect(fake.calls.at(-1)).toBe('POST /api/orchestrators/send {"id":"cccc3333runningorchestrator","text":"also check the staging env"}');
+
+      const approved = await grid.answerOrchestrator("bbbb2222waitingorchestrator", "appr-1", true);
+      expect(approved.status).toBe("running");
+      expect(approved.pending).toBeNull();
+      expect(fake.calls.at(-1)).toBe('POST /api/orchestrators/approve {"id":"bbbb2222waitingorchestrator","approvalId":"appr-1"}');
+      await expect(grid.answerOrchestrator("bbbb2222waitingorchestrator", "appr-1", false, "no")).rejects.toThrow(/Nothing is waiting/);
+    });
+
+    it("says plainly when Agent Grid predates orchestrators, instead of \"No such route\"", async () => {
+      const old = fakeAgentGrid("tok", { models: false });
+      await new Promise<void>((r) => old.server.listen(0, "127.0.0.1", r));
+      try {
+        const oldBase = `http://127.0.0.1:${(old.server.address() as AddressInfo).port}`;
+        // The stand-in server always answers /api/orchestrators; simulate an old one by pointing at a route it 404s.
+        const grid = new AgentGrid(() => ({ base: oldBase, token: "tok" }), (url, init) =>
+          fetch(String(url).replace("/api/orchestrators", "/api/no-such-route"), init),
+        );
+        await expect(grid.orchestrators()).rejects.toThrow(/can't do orchestrators yet/);
+      } finally {
+        await new Promise((r) => old.server.close(r));
+      }
+    });
+  });
+
   describe("as tools, with access modes", () => {
     let selfhub: string;
     let cleanup: () => Promise<void>;
@@ -386,6 +505,55 @@ describe("Agent Grid client", () => {
       const p = take(ask.pending[0].id)!;
       expect(await performPending(p, { shell })).toMatch(/^\$ mkdir -p ~\/cos-tools\n\(in ~; exit 0;/);
       expect(take(p.id)).toBeNull();
+    });
+
+    it("reads orchestrators freely; starting, stopping and messaging wait for an OK in ask mode and run in auto", async () => {
+      const ask = runtime({ terminal: "ask", agents: "ask", links: "auto", screen: "auto", browser: "ask" });
+      expect((await ask.execute("get_orchestrators", {})).result).toMatch(/^3 orchestrators: 1 need you, 1 working\./);
+      expect((await ask.execute("get_orchestrators", { orchestrator: "release" })).result).toContain("Goal: Ship the v2 release");
+      expect((await ask.execute("get_orchestrators", { orchestrator: "kubernetes" })).isError).toBe(true);
+
+      const queued = await ask.execute("start_orchestrator", { orchestrator: "marketing", goal: "Sweep Q4 campaigns" });
+      expect(queued.result).toMatch(/^Not started yet/);
+      expect(ask.pending.map((p) => [p.kind, p.verb, p.label])).toEqual([["orchestrator-start", "Start", "start Marketing sweep"]]);
+      expect(fake.calls.some((c) => c.includes("/api/orchestrators/start"))).toBe(false);
+      expect(await performPending(take(ask.pending[0].id)!, { agentGrid: new AgentGrid(() => ({ base, token: "tok" })) })).toContain("Sweep Q4 campaigns");
+
+      const stopQueued = await ask.execute("stop_orchestrator", { orchestrator: "nightly qa", reason: "done for the day" });
+      expect(stopQueued.result).toMatch(/^Not stopped yet/);
+      expect(ask.pending.at(-1)).toMatchObject({ kind: "orchestrator-stop", verb: "Stop", detail: "Stop Nightly QA: done for the day" });
+
+      const sendQueued = await ask.execute("message_orchestrator", { orchestrator: "nightly qa", message: "also check staging" });
+      expect(sendQueued.result).toMatch(/^Not sent yet/);
+      const sent = take(ask.pending.at(-1)!.id)!;
+      expect(await performPending(sent, { agentGrid: new AgentGrid(() => ({ base, token: "tok" })) })).toBe("Sent to Nightly QA.");
+      expect(fake.calls.at(-1)).toBe('POST /api/orchestrators/send {"id":"cccc3333runningorchestrator","text":"also check staging"}');
+
+      const auto = runtime({ terminal: "ask", agents: "auto", links: "auto", screen: "auto", browser: "ask" });
+      expect((await auto.execute("stop_orchestrator", { orchestrator: "nightly qa" })).result).toContain("[stopped]");
+      expect((await auto.execute("start_orchestrator", { orchestrator: "release", goal: "already running" })).isError).toBe(true);
+
+      const off = runtime({ terminal: "off", agents: "off", links: "auto", screen: "auto", browser: "ask" });
+      expect((await off.execute("get_orchestrators", {})).result).toMatch(/Agent Grid access is off/);
+      expect((await off.execute("start_orchestrator", { orchestrator: "x", goal: "y" })).result).toMatch(/Agent Grid access is off/);
+    });
+
+    it("always waits for an OK before approving or declining, even in auto mode", async () => {
+      const auto = runtime({ terminal: "ask", agents: "auto", links: "auto", screen: "auto", browser: "ask" });
+      const asked = await auto.execute("respond_orchestrator_approval", { orchestrator: "release", decision: "approve" });
+      expect(asked.result).toMatch(/^Not sent yet/);
+      expect(auto.pending).toEqual([
+        expect.objectContaining({ kind: "orchestrator-approval", verb: "Approve", label: "approve Release captain's start_agent" }),
+      ]);
+      expect(fake.calls.some((c) => c.includes("/api/orchestrators/approve"))).toBe(false);
+
+      const approved = await performPending(take(auto.pending[0].id)!, { agentGrid: new AgentGrid(() => ({ base, token: "tok" })) });
+      expect(approved).toContain("[working]");
+      expect(fake.calls.at(-1)).toBe('POST /api/orchestrators/approve {"id":"bbbb2222waitingorchestrator","approvalId":"appr-1"}');
+
+      const nothingPending = await auto.execute("respond_orchestrator_approval", { orchestrator: "marketing", decision: "decline" });
+      expect(nothingPending.isError).toBe(true);
+      expect(nothingPending.result).toMatch(/isn't waiting for an approval/);
     });
   });
 });

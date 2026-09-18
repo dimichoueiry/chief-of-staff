@@ -388,6 +388,39 @@ The **✦ › Agent Grid** menu shows the same thing at a glance: each work area
 the title says when any need you, the board is summarised in a line with what's in review, and
 **New ticket…** files one in a sentence.
 
+### Orchestrators
+
+Agent Grid also has **orchestrators**: standing agents (an OpenRouter model with its own tool menu)
+that start real Claude Code / Codex agents toward a goal on their own, rather than you starting each
+one — "the Product Manager orchestrator", say, working through a backlog. An orchestrator is set up
+(its name, OpenRouter model, instructions, and how many agents/dollars/steps it may spend) in Agent
+Grid's own UI, since that needs an OpenRouter connection; from here, the assistant only starts, stops,
+messages and approves ones that already exist.
+
+- "How are my orchestrators doing?", "is the Product Manager waiting on me?" — `get_orchestrators`,
+  read-only: status, what it's started, its last words.
+- "Start the Product Manager on clearing the backlog" — `start_orchestrator`, with the goal in full.
+- "Stop it", "tell the release captain to also check staging" — `stop_orchestrator`,
+  `message_orchestrator`.
+- "Needs you" means one of two things, and `get_orchestrators` with its name says which: an orchestrator
+  in its default **ask** mode pauses before each tool call (starting an agent, filing a ticket) and
+  waits for your OK, or it's simply said something in plain text and is waiting for a reply, the same
+  as a chat. The first shows a line saying exactly what it wants to do; answer it with
+  `respond_orchestrator_approval`. Without that line, it just asked something — read its last words
+  and reply with `message_orchestrator`. **Approving or declining always asks you first**, in a
+  plain-language question, whatever `cos access agents` is set to: it's the one point where an
+  orchestrator's own next move, not a step you asked for, is about to run and may itself start several
+  more agents and spend real money.
+
+Starting, stopping and messaging follow `cos access agents` like everything else in Agent Grid: a
+one-line confirmation in **ask** mode, straight through in **auto**. `cos orchestrators` lists them
+from the terminal (read-only, no confirmation needed) — handy for a quick check without going through
+the assistant at all.
+
+```bash
+cos orchestrators              # every orchestrator and its status
+```
+
 ## Connections
 
 The other tools you use, added from **✦ › Connections** rather than written into the app. A
@@ -492,5 +525,6 @@ examples/     a sample selfhub for demos and tests
 | Conversation memory in the pill: follow-ups, saved threads, live progress, formatted replies | done, tested (scripted model and headless browser) |
 | Memory across conversations: summaries of the last 7 days in every request, search over all past conversations, `cos conversations` | done, tested; verified live on OpenRouter |
 | Terminal (rules-based permissions, confirm by button or "yes") and Agent Grid agents (list, read, start, message) | done, tested; verified live with a second Agent Grid instance |
+| Agent Grid orchestrators (list/status, start, stop, message, approve/decline) | done, tested; read path verified live against a running Agent Grid; write path unit-tested (mocked server) only — see COS2-10 |
 | Its own browser (Playwright MCP, separate profile, site list, spoken OK before sending) | done, tested; checked end to end with headless Chrome on a local page, not yet on a real site |
 | Wake word, phone notifications, autonomy epic | not yet |
