@@ -37,4 +37,24 @@ describe("voice status messages", () => {
     expect(v.forSpeechError("no-speech")).toEqual({ tone: "", text: expect.stringContaining("try again") });
     expect(v.forSpeechError("aborted")).toBeNull();
   });
+
+  it("explains a blocked microphone and how to retry, without ever naming System Settings (there's no such thing in a browser)", () => {
+    const v = load();
+    for (const denied of ["not-allowed", "service-not-allowed"]) {
+      const text = v.forSpeechError(denied)!.text;
+      expect(text).toContain("typing still works");
+      expect(text).toMatch(/allow it/i);
+      expect(text).not.toMatch(/system settings/i);
+    }
+  });
+
+  it("says there's no microphone, not that access was denied", () => {
+    expect(load().forSpeechError("audio-capture")).toEqual({ tone: "error", text: "No microphone found — typing still works." });
+  });
+
+  it("never stays quiet for a surprise error — silence is the bug this fixes", () => {
+    const v = load();
+    expect(v.forSpeechError("language-not-supported")).toEqual({ tone: "error", text: "Couldn't use the microphone — typing still works." });
+    expect(v.forSpeechError(undefined as unknown as string)).toMatchObject({ tone: "error" });
+  });
 });

@@ -17,22 +17,25 @@
 
   /**
    * A SpeechRecognition error code, as the browser fallback hears it (the native shell listens
-   * itself and never sees these). Null for ones worth staying quiet about.
+   * itself and never sees these). Null only for a deliberate stop: a surprise error still says
+   * something, since going quiet is the failure. No System Settings talk: a browser has none.
+   * Codes: https://developer.mozilla.org/docs/Web/API/SpeechRecognitionErrorEvent/error
    */
   function forSpeechError(code) {
     switch (code) {
       case "not-allowed":
       case "service-not-allowed":
-        return { tone: "error", text: "Microphone access is blocked — check this site's permissions." };
+        return { tone: "error", text: "This browser blocked the microphone — typing still works. Allow it from the address bar, then try again." };
       case "audio-capture":
-        return { tone: "error", text: "No microphone found." };
+        return { tone: "error", text: "No microphone found — typing still works." };
       case "network":
-        return { tone: "error", text: "Speech recognition needs a connection." };
+        return { tone: "error", text: "Speech recognition needs a connection — typing still works." };
       case "no-speech":
         return { tone: "", text: "Didn't catch that — try again." };
-      // "aborted": the app or the person stopped it on purpose; nothing to say.
-      default:
+      case "aborted": // the app or the person stopped it on purpose
         return null;
+      default:
+        return { tone: "error", text: "Couldn't use the microphone — typing still works." };
     }
   }
 
