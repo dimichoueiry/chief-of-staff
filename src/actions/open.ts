@@ -99,6 +99,70 @@ export function findApp(name: string, dirs: string[] = APP_DIRS): string | null 
   return null;
 }
 
+/** Every app bundle in the usual Applications folders, first one found for each name. */
+export function installedApps(dirs: string[] = APP_DIRS): { name: string; path: string }[] {
+  const seen = new Set<string>();
+  const out: { name: string; path: string }[] = [];
+  for (const dir of dirs) {
+    let entries: string[];
+    try {
+      entries = readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const e of entries.filter((e) => e.endsWith(".app")).sort()) {
+      const name = e.slice(0, -".app".length);
+      if (seen.has(name.toLowerCase())) continue;
+      seen.add(name.toLowerCase());
+      out.push({ name, path: join(dir, e) });
+    }
+  }
+  return out;
+}
+
+const LAUNCH_SERVICES = join(homedir(), "Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist");
+
+/** Browsers by bundle id, as LaunchServices writes them. Anything else is looked up with Spotlight. */
+const BROWSER_APPS: Record<string, string> = {
+  "com.apple.safari": "Safari",
+  "com.google.chrome": "Google Chrome",
+  "com.microsoft.edgemac": "Microsoft Edge",
+  "com.brave.browser": "Brave Browser",
+  "company.thebrowser.browser": "Arc",
+  "org.mozilla.firefox": "Firefox",
+  "com.operasoftware.opera": "Opera",
+  "com.vivaldi.vivaldi": "Vivaldi",
+};
+
+/**
+ * The browser web links open in, as an installed app: the one picked in System Settings, or Safari
+ * when none ever was. Null when that browser can't be found.
+ */
+export async function defaultBrowser(o: { plist?: string; dirs?: string[] } = {}): Promise<{ name: string; path: string } | null> {
+  let id = "com.apple.safari";
+  try {
+    const { stdout } = await exec("plutil", ["-extract", "LSHandlers", "json", "-o", "-", o.plist ?? LAUNCH_SERVICES]);
+    const handlers = JSON.parse(stdout) as { LSHandlerURLScheme?: string; LSHandlerRoleAll?: string }[];
+    const chosen = handlers.find((h) => h.LSHandlerURLScheme === "https") ?? handlers.find((h) => h.LSHandlerURLScheme === "http");
+    if (chosen?.LSHandlerRoleAll) id = chosen.LSHandlerRoleAll.toLowerCase();
+  } catch {
+    /* never changed: Safari */
+  }
+  const known = BROWSER_APPS[id];
+  if (known) {
+    const path = findApp(known, o.dirs);
+    return path ? { name: known, path } : null;
+  }
+  if (!/^[a-z0-9.-]+$/.test(id)) return null;
+  try {
+    const { stdout } = await exec("mdfind", [`kMDItemCFBundleIdentifier == '${id}'`]);
+    const path = stdout.split("\n").find((p) => p.endsWith(".app") && existsSync(p));
+    return path ? { name: path.split("/").pop()!.slice(0, -".app".length), path } : null;
+  } catch {
+    return null;
+  }
+}
+
 // ---------- resolution ----------
 
 export interface ResolveInput {

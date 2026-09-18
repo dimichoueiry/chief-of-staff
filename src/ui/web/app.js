@@ -865,7 +865,8 @@ async function submit(text, fromVoice = false) {
     return;
   }
   input.value = "";
-  await send({ text: t, mode: inputMode }, fromVoice ? `“${t}”` : "Thinking…", fromVoice);
+  // Said by name, the words after it are the command the server's rules and Jev read; the model still gets it all.
+  await send({ text: t, mode: inputMode, ...(named ? { command: c } : {}) }, fromVoice ? `“${t}”` : "Thinking…", fromVoice);
 }
 
 function runFocus(project) {

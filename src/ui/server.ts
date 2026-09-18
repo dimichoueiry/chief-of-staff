@@ -14,6 +14,8 @@ import { Conversations, conversationsDir, displayTitle, eventsSinceReply, histor
 import type { LLMProvider, ChatMessage } from "../brain/llm/types.js";
 import type { ModelSpec } from "../brain/llm/registry.js";
 import { providerFor, runIntent } from "../brain/loop.js";
+import { decideOpen, openTargets } from "../brain/fastlane.js";
+import { jevFromEnv, type Jev } from "../brain/jev.js";
 import { WRITES } from "../brain/tools.js";
 import { chatPreview, findConversation, nameConversations, renderRecall, summarizeEnded } from "../brain/recall.js";
 import type { Brief } from "../brain/schema.js";
@@ -48,7 +50,7 @@ import { AgentGrid } from "../actions/agentgrid.js";
 import { STATUS_LABELS, areaTree } from "../actions/gridboard.js";
 import { watchAgents, type Watcher } from "../actions/agentwatch.js";
 import type { AssistantBrowser } from "../actions/browser.js";
-import { macOpen, openOrQueue, type Runner } from "../actions/open.js";
+import { macOpen, openOrQueue, performOpen, type Runner } from "../actions/open.js";
 import { confirmView, isPending, take, type ConfirmView } from "../actions/pending.js";
 import { performPending } from "../actions/perform.js";
 import type { Shell } from "../actions/terminal.js";
@@ -84,6 +86,8 @@ export interface UiOptions {
   slateLoader?: () => Promise<{ boards: SlateBoard[]; live: boolean; reason?: string }>;
   /** Use this provider for every model request instead of the configured one (tests). */
   llm?: { provider: LLMProvider; spec: ModelSpec };
+  /** Jev for the fast lane, or null for none (tests). Otherwise TYPESAFE_API_KEY turns it on. */
+  jev?: Jev | null;
   /** Where conversations are kept (tests). */
   conversations?: Conversations;
   /** Summarise ended conversations in the background after each message (default true). */
@@ -493,6 +497,8 @@ export function createUiServer(o: UiOptions): Server {
     const text = String(b.text ?? "").trim();
     if (!text) return { status: 400, body: { error: "empty" } };
     const mode = String(b.mode ?? "auto");
+    // "Darius, open the browser": the page sends what follows the name, for the rules and Jev. The model gets it as said.
+    const command = mode === "focus" ? "" : String(b.command ?? "").trim();
 
     let said = text;
     let focusOn: string | undefined;
@@ -512,7 +518,7 @@ export function createUiServer(o: UiOptions): Server {
       const settled = mode === "focus" ? [] : await settlePending(convo, said, emit);
       if (settled.length && !ready("ask")) reply = { kind: "action", text: settled.join("\n"), model: "rules" };
       // Anything that happened since the last reply (this yes, a tapped button) travels with the message.
-      else reply = await respond(said, mode, focusOn, convo, emit, withEvents(eventsSinceReply(convo), said));
+      else reply = await respond(command || said, mode, focusOn, convo, emit, withEvents(eventsSinceReply(convo), said));
     } catch (err) {
       reply = { kind: "error", text: `That didn't work: ${String((err as Error).message).split("\n")[0]}` };
     }
@@ -529,6 +535,31 @@ export function createUiServer(o: UiOptions): Server {
     summarizeSoon();
     const { steps: _steps, done: _done, ...shown } = reply;
     return { status: 200, body: { ...shown, conversation: convo.id, title: convo.asideOf ? "Aside" : displayTitle(convo), user: said } };
+  }
+
+  /**
+   * Jev's lane (fastlane.ts): opens what they asked for when that's all they asked, or returns null for the model.
+   * A failure of any kind is logged and left to the model, so a slow or unreachable Jev only costs its timeout.
+   */
+  async function fastOpen(said: string): Promise<PillReply | null> {
+    const jev = o.jev !== undefined ? o.jev : o.offline ? null : jevFromEnv();
+    if (!jev) return null;
+    const started = Date.now();
+    const ms = () => `${Date.now() - started} ms`;
+    try {
+      const targets = openTargets({ shortcuts: await new Shortcuts(config.selfhubDir).list(), projects: await new Ledger(config.selfhubDir).read() });
+      const d = await decideOpen(jev, said, targets);
+      if ("skip" in d) {
+        Log(`jev: left to the model (${d.skip}, ${ms()})`);
+        return null;
+      }
+      const text = await performOpen(d.open, openRunner);
+      Log(`jev: opened ${d.open.label} (${Math.round(d.sure * 100)}%, ${ms()})`);
+      return { kind: "action", text, model: d.model };
+    } catch (err) {
+      Log(`jev: left to the model (${(err as Error).message}, ${ms()})`);
+      return null;
+    }
   }
 
   /** What the last reply left waiting that can still be done. */
@@ -634,6 +665,7 @@ export function createUiServer(o: UiOptions): Server {
     }
 
     const forModel = Boolean(shot) || (ready("ask") && ((PLAIN_SEARCH.test(text) && !WEB_SEARCH.test(text)) || REFERS_BACK.test(text)));
+    let couldNotOpen: string | null = null;
     if (mode !== "capture" && OPEN_SHAPE.test(text) && !forModel) {
       const opened = await openOrQueue(
         {
@@ -648,12 +680,18 @@ export function createUiServer(o: UiOptions): Server {
       );
       if (opened.status === "opened") return { kind: "action", text: opened.message, model: "rules" };
       if (opened.status === "confirm") return { kind: "confirm", text: opened.message, confirm: [confirmView(opened.pending)], model: "rules" };
-      // Not something the rules know ("open the second one"): the model has the conversation and the same open tool.
+      // Not something the rules know ("open the browser for me"): Jev, then the model, which has the conversation and the same open tool.
       if (!ready("ask")) {
         const known = opened.candidates?.length ? `\nI know: ${opened.candidates.slice(0, 10).join(", ")}` : "";
-        return { kind: "answer", text: `Couldn't open that: ${opened.message}.${known}`, model: "rules" };
+        couldNotOpen = `Couldn't open that: ${opened.message}.${known}`;
       }
     }
+    // Something waiting on a yes stays with the model, which knows what "do it" refers to.
+    if (mode !== "capture" && !forModel && !awaiting(convo).length) {
+      const quick = await fastOpen(text);
+      if (quick) return quick;
+    }
+    if (couldNotOpen) return { kind: "answer", text: couldNotOpen, model: "rules" };
 
     // With a model, everything in auto mode is one conversation that can both answer and file.
     const intent: ModelIntent = mode === "capture" ? "capture" : "ask";
