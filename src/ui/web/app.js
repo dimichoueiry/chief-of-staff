@@ -878,10 +878,10 @@ function browserListen() {
     endFollowUp();
     submit(finalText, true);
   };
-  rec.onerror = () => {
+  rec.onerror = (e) => {
     rec = null;
     endFollowUp();
-    setState("idle");
+    setState("idle", (window.cosMicErrors && window.cosMicErrors.messageFor(e.error)) || "");
   };
   if (pill.dataset.state === "speaking") post("/api/speak/stop", {});
   setState("listening", followUp ? "Your turn…" : "Listening…");

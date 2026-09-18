@@ -236,8 +236,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   @objc private func toggleWake() {
     WakeSettings.setEnabled(!wakeSettings.enabled)
     reloadWakeSettings()
-    if wakeSettings.enabled, let problem = wake.problem {
-      alert("Not listening for “\(wakeSettings.name)” yet", "Because \(problem). Turn on Microphone and Speech Recognition under ✦ › Permissions.")
+    if wakeSettings.enabled, wake.problem != nil {
+      alert(
+        "Not listening for “\(wakeSettings.name)” yet",
+        MicSpeechCopy.recoveryMessage(microphoneGranted: Permission.microphone.granted, speechGranted: Permission.speech.granted)
+      )
     }
   }
 
@@ -825,7 +828,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     speech.authorize { [weak self] ok in
       guard let self else { return }
       guard ok else {
-        self.panel.eval("cosShell.status(\(Self.js("Microphone or speech recognition is off: System Settings › Privacy & Security.")))")
+        let message = MicSpeechCopy.recoveryMessage(microphoneGranted: Permission.microphone.granted, speechGranted: Permission.speech.granted)
+        self.panel.eval("cosShell.status(\(Self.js(message.isEmpty ? "Microphone or Speech Recognition is off — typing still works. Switch it on under ✦ › Permissions, then try again." : message)))")
         return
       }
       self.wake.stop() // one listener on the microphone at a time

@@ -1,4 +1,4 @@
-// Checks for Endpointing, WakePhrase and Placement, compiled with swiftc alongside the source files (tests/menubar-endpointing.test.ts).
+// Checks for Endpointing, WakePhrase, Placement and MicSpeechCopy, compiled with swiftc alongside the source files (tests/menubar-endpointing.test.ts).
 import Foundation
 
 var failures = 0
@@ -140,6 +140,23 @@ do {
   check("left on another display: it comes back there", there.midX == 2500 && there.minY == 300)
   let unplugged = Placement.frame(saved: CGPoint(x: 2500, y: 300), size: size, screens: [screen], fallback: screen)
   check("that display unplugged: home on this one", unplugged.midX == 756 && unplugged.minY == 14)
+}
+
+// Naming which of Microphone/Speech Recognition is actually off, not just "one of these two".
+do {
+  check("both on: nothing to say", MicSpeechCopy.problem(microphoneGranted: true, speechGranted: true) == nil)
+  check("just the microphone", MicSpeechCopy.problem(microphoneGranted: false, speechGranted: true) == "Microphone is off")
+  check("just speech recognition", MicSpeechCopy.problem(microphoneGranted: true, speechGranted: false) == "Speech Recognition is off")
+  check("both off: plural verb", MicSpeechCopy.problem(microphoneGranted: false, speechGranted: false) == "Microphone and Speech Recognition are off")
+
+  check("both on: no recovery needed", MicSpeechCopy.recoveryMessage(microphoneGranted: true, speechGranted: true) == "")
+  let mic = MicSpeechCopy.recoveryMessage(microphoneGranted: false, speechGranted: true)
+  check("names the microphone", mic.hasPrefix("Microphone is off"))
+  check("says what still works", mic.contains("typing still works"))
+  check("says where to fix it", mic.contains("✦ › Permissions"))
+  check("singular: switch it on", mic.contains("Switch it on"))
+  let both = MicSpeechCopy.recoveryMessage(microphoneGranted: false, speechGranted: false)
+  check("plural: switch them on", both.contains("Switch them on"))
 }
 
 print(failures == 0 ? "all checks passed" : "\(failures) failed")
