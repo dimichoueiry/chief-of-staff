@@ -38,7 +38,10 @@ final class WakeListener {
     }
     guard !running else { return }
     guard Self.permitted else {
-      problem = "Microphone or Speech Recognition is off"
+      problem = MicSpeechCopy.problem(
+        microphoneGranted: AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
+        speechGranted: SFSpeechRecognizer.authorizationStatus() == .authorized
+      ) ?? "Microphone or Speech Recognition is off"
       return
     }
     let recognizer = SFSpeechRecognizer(locale: Locale.current) ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
