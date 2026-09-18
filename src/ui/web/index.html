@@ -77,7 +77,7 @@
       <div class="wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
       <div class="dots" aria-hidden="true"><i></i><i></i><i></i></div>
       <input id="pill-input" type="text" placeholder="Ask anything…" />
-      <span class="status" id="pill-status"></span>
+      <span class="status" id="pill-status" role="status" aria-live="polite"></span>
       <button type="button" class="stop" id="stop" title="Stop" aria-label="Stop speaking">■</button>
       <button type="button" class="show-chat" id="show-chat" title="Show the chat" aria-label="Show the chat" hidden>▴ chat</button>
       <button type="button" class="mode" id="mode" title="Auto decides: capture or ask">auto</button>
@@ -93,6 +93,7 @@
       <kbd>⌃ ⌃</kbd>
     </form>
   </main>
+  <script src="/voice-status.js"></script>
   <script src="/commands.js"></script>
   <script src="/app.js"></script>
 </body>
