@@ -12,6 +12,7 @@ root.dataset.view = params.get("mode") || (SHELL ? "pill" : "full"); // pill | b
 const pill = $("pill");
 const input = $("pill-input");
 const status = $("pill-status");
+const mic = $("mic");
 let brief = null;
 let briefStale = false;
 let offline = false;
@@ -22,11 +23,27 @@ function toShell(msg) {
 }
 
 // ---------- the pill's state machine: idle | listening | thinking | speaking ----------
-function setState(state, text = "") {
+/** `tone` marks the status text as a failure ("error") worth noticing, or "" for routine text. */
+function setState(state, text = "", tone = "") {
   pill.dataset.state = state;
+  pill.dataset.notice = tone;
   status.textContent = text;
   toShell({ type: "state", value: state });
   if (state === "idle") input.focus();
+  const talking = state === "listening";
+  mic.title = talking ? "Stop and send (or tap Control twice)" : "Talk (or tap Control twice)";
+  mic.setAttribute("aria-label", talking ? "Stop and send" : "Talk");
+}
+
+/** A status message that clears itself after `ms`, without stepping on a state change made meanwhile. */
+function noticeThenClear(text, tone, ms) {
+  setState("idle", text, tone);
+  setTimeout(() => {
+    if (pill.dataset.state === "idle" && status.textContent === text) {
+      status.textContent = "";
+      pill.dataset.notice = "";
+    }
+  }, ms);
 }
 
 // ---------- render ----------
@@ -153,13 +170,18 @@ async function speakText(text, cues = {}) {
   if (!text) return null;
   setState("speaking", "Reading it to you…");
   let spoken = null;
+  let result = null;
   try {
-    const r = await post("/api/speak", { text, cues });
-    if (!r.stopped && !r.error && pill.dataset.state === "speaking") spoken = { cued: r.cued || [] };
+    result = await post("/api/speak", { text, cues });
+    if (!result.stopped && !result.error && !result.muted && pill.dataset.state === "speaking") spoken = { cued: result.cued || [] };
   } catch {
-    /* no voice this time */
+    result = null; // couldn't even reach the app
   } finally {
-    if (pill.dataset.state === "speaking") setState("idle");
+    if (pill.dataset.state === "speaking") {
+      const notice = cosVoiceStatus.forSpeakResult(result);
+      if (notice) noticeThenClear(notice.text, notice.tone, 5000);
+      else setState("idle");
+    }
   }
   return spoken;
 }
@@ -686,11 +708,8 @@ async function switchTo(which) {
 }
 
 /** A short note in the pill that clears itself. */
-function flash(text) {
-  setState("idle", text);
-  setTimeout(() => {
-    if (pill.dataset.state === "idle" && status.textContent === text) status.textContent = "";
-  }, 4000);
+function flash(text, tone = "") {
+  noticeThenClear(text, tone, 4000);
 }
 
 /** After a reply, the chat may get its name in the background: show it when it lands. */
@@ -778,7 +797,9 @@ async function send(body, thinking, fromVoice = false) {
 async function submit(text, fromVoice = false) {
   const t = text.trim();
   if (!t) {
-    setState("idle");
+    // A speech-recognition error may have just shown a notice (see rec.onerror): recognition
+    // then ends on its own and lands here with nothing said, which shouldn't blank it right away.
+    if (pill.dataset.state !== "idle" || !status.textContent) setState("idle");
     return;
   }
   // "Darius, …" in front: what follows is a command ("Darius, new chat") if it reads as one, and an
@@ -878,10 +899,12 @@ function browserListen() {
     endFollowUp();
     submit(finalText, true);
   };
-  rec.onerror = () => {
+  rec.onerror = (e) => {
     rec = null;
     endFollowUp();
-    setState("idle");
+    const notice = cosVoiceStatus.forSpeechError(e.error);
+    if (notice) noticeThenClear(notice.text, notice.tone, 5000);
+    else setState("idle");
   };
   if (pill.dataset.state === "speaking") post("/api/speak/stop", {});
   setState("listening", followUp ? "Your turn…" : "Listening…");
@@ -934,12 +957,9 @@ window.cosShell = {
     endFollowUp();
     submit(text, true);
   },
-  status(text) {
+  status(text, isError = false) {
     endFollowUp();
-    setState("idle", text);
-    setTimeout(() => {
-      if (pill.dataset.state === "idle" && status.textContent === text) status.textContent = "";
-    }, 5000);
+    noticeThenClear(text, isError ? "error" : "", 5000);
   },
   reload() {
     loadBrief(false);

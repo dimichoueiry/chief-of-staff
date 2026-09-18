@@ -128,9 +128,17 @@ describe("ui server (offline)", () => {
     expect(js).toContain("window.cosShell");
     expect(html).toContain('src="/commands.js"');
     expect(await (await fetch(`${base}/commands.js`)).text()).toContain("window.cosCommands");
+    expect(html).toContain('src="/voice-status.js"');
+    expect(await (await fetch(`${base}/voice-status.js`)).text()).toContain("window.cosVoiceStatus");
     expect(js).toContain("messageHandlers.shell");
     expect((await fetch(`${base}/app.js`)).headers.get("content-type")).toContain("javascript");
     expect((await fetch(`${base}/../package.json`)).status).not.toBe(200);
+  });
+
+  it("gives the pill's live status region and mic button accessible labels", async () => {
+    const html = await (await fetch(`${base}/`)).text();
+    expect(html).toMatch(/id="pill-status"[^>]*role="status"[^>]*aria-live="polite"/);
+    expect(html).toMatch(/id="mic"[^>]*aria-label="Talk"/);
   });
 
   it("returns a fresh rule-based brief with speech text, then answers decisions", async () => {

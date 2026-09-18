@@ -67,7 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       if self.saidSleep(text) { return }
       self.panel.eval("cosShell.transcript(\(Self.js(text)), true)")
     }
-    speech.onError = { [weak self] err in self?.panel.eval("cosShell.status(\(Self.js(err)))") }
+    speech.onError = { [weak self] err in self?.panel.eval("cosShell.status(\(Self.js(err)), true)") }
     // The microphone is free again: go back to waiting for the name.
     speech.onIdle = { [weak self] in self?.resumeWake() }
     wake.onCommand = { [weak self] command in self?.heard(command) }
@@ -825,7 +825,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     speech.authorize { [weak self] ok in
       guard let self else { return }
       guard ok else {
-        self.panel.eval("cosShell.status(\(Self.js("Microphone or speech recognition is off: System Settings › Privacy & Security.")))")
+        self.panel.eval("cosShell.status(\(Self.js("Microphone or speech recognition is off: System Settings › Privacy & Security.")), true)")
         return
       }
       self.wake.stop() // one listener on the microphone at a time

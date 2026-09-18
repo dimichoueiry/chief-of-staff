@@ -201,6 +201,7 @@ html[data-chat="hidden"] .answer { display: none; }
 .pill[data-state="speaking"] .wave i { background: var(--success); }
 .pill[data-state="speaking"] input { display: none; }
 .pill[data-state="idle"] .status:empty { display: none; }
+.pill[data-notice="error"] .status { color: var(--rose); }
 .pill .stop { display: none; width: 30px; height: 30px; border-radius: 50%; border: 1px solid #3a3f4b; background: #2a2e38; color: #9aa0ac; font-size: 11px; cursor: pointer; }
 .pill[data-state="speaking"] .stop { display: grid; place-items: center; }
 
