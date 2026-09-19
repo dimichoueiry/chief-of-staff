@@ -138,16 +138,17 @@ const BROWSER_APPS: Record<string, string> = {
  * The browser web links open in, as an installed app: the one picked in System Settings, or Safari
  * when none ever was. Null when that browser can't be found.
  */
-export async function defaultBrowser(o: { plist?: string; dirs?: string[] } = {}): Promise<{ name: string; path: string } | null> {
+export async function defaultBrowser(o: { plist?: string; dirs?: string[]; signal?: AbortSignal } = {}): Promise<{ name: string; path: string } | null> {
   let id = "com.apple.safari";
   try {
-    const { stdout } = await exec("plutil", ["-extract", "LSHandlers", "json", "-o", "-", o.plist ?? LAUNCH_SERVICES]);
+    const { stdout } = await exec("plutil", ["-extract", "LSHandlers", "json", "-o", "-", o.plist ?? LAUNCH_SERVICES], { signal: o.signal });
     const handlers = JSON.parse(stdout) as { LSHandlerURLScheme?: string; LSHandlerRoleAll?: string }[];
     const chosen = handlers.find((h) => h.LSHandlerURLScheme === "https") ?? handlers.find((h) => h.LSHandlerURLScheme === "http");
     if (chosen?.LSHandlerRoleAll) id = chosen.LSHandlerRoleAll.toLowerCase();
   } catch {
     /* never changed: Safari */
   }
+  o.signal?.throwIfAborted();
   const known = BROWSER_APPS[id];
   if (known) {
     const path = findApp(known, o.dirs);
@@ -155,7 +156,7 @@ export async function defaultBrowser(o: { plist?: string; dirs?: string[] } = {}
   }
   if (!/^[a-z0-9.-]+$/.test(id)) return null;
   try {
-    const { stdout } = await exec("mdfind", [`kMDItemCFBundleIdentifier == '${id}'`]);
+    const { stdout } = await exec("mdfind", [`kMDItemCFBundleIdentifier == '${id}'`], { signal: o.signal });
     const path = stdout.split("\n").find((p) => p.endsWith(".app") && existsSync(p));
     return path ? { name: path.split("/").pop()!.slice(0, -".app".length), path } : null;
   } catch {

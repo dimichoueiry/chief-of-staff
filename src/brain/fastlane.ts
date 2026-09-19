@@ -16,7 +16,7 @@ import { defaultBrowser, installedApps, safeWebUrl, type OpenAction } from "../a
 import { PRIVACY_PANES } from "../actions/permissions.js";
 import type { Shortcut } from "../actions/shortcuts.js";
 import { slateHomeUrl } from "../actions/slate.js";
-import type { ChoiceAnswer, Jev, NoulAnswer } from "./jev.js";
+import { JEV_TIMEOUT_MS, type ChoiceAnswer, type Jev, type NoulAnswer } from "./jev.js";
 
 export interface OpenTarget {
   /** What Jev reads about it. */
@@ -73,7 +73,31 @@ export async function decideOpen(
   jev: Jev,
   said: string,
   targets: OpenTarget[],
-  browser: () => Promise<{ name: string; path: string } | null> = () => defaultBrowser(),
+  browser?: () => Promise<{ name: string; path: string } | null>,
+): Promise<FastDecision> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error("Jev fast lane timed out"));
+          controller.abort();
+        }, JEV_TIMEOUT_MS);
+      }),
+      decideBeforeDeadline(jev, said, targets, browser ?? (() => defaultBrowser({ signal: controller.signal }))),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+}
+
+async function decideBeforeDeadline(
+  jev: Jev,
+  said: string,
+  targets: OpenTarget[],
+  browser: () => Promise<{ name: string; path: string } | null>,
 ): Promise<FastDecision> {
   const labels = targets.map((_, i) => `t${i + 1}`);
   // The default browser is looked up while Jev decides, so it costs nothing when it's the answer.
@@ -108,7 +132,7 @@ export async function decideOpen(
   const wants = result.answers.wants as ChoiceAnswer;
   const target = result.answers.target as ChoiceAnswer;
   const more = result.answers.more as NoulAnswer;
-  const pOpen = wants.probabilities?.open ?? (wants.choice === "open" ? wants.confidence : 1 - wants.confidence);
+  const pOpen = wants.probabilities.open;
   if (pOpen < SURE_WANTS_OPEN) return { skip: `wants open ${pct(pOpen)}` };
   if (more.noul > MAX_ASKS_MORE) return { skip: `asks for more ${pct(more.noul)}` };
 
@@ -118,7 +142,7 @@ export async function decideOpen(
   );
   const picked = labels.indexOf(target.choice);
   if (picked >= 0 && !actions[picked]) return { skip: "no default browser found" };
-  const chance = (i: number) => target.probabilities?.[labels[i]] ?? (target.choice === labels[i] ? target.confidence : 0);
+  const chance = (i: number) => target.probabilities[labels[i]] ?? 0;
   const byAction = new Map<string, { action: OpenAction; p: number }>();
   actions.forEach((a, i) => {
     if (!a) return;

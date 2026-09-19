@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { decideOpen, openTargets, type OpenTarget } from "../src/brain/fastlane.js";
 import { jevFromEnv, type Jev, type JevRequest, type JevResult } from "../src/brain/jev.js";
 import { defaultBrowser } from "../src/actions/open.js";
@@ -61,6 +61,23 @@ describe("openTargets", () => {
 });
 
 describe("decideOpen", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("falls back at 1.5 seconds even when the browser lookup never resolves", async () => {
+    vi.useFakeTimers();
+    const decision = decideOpen(fakeJev({ match: /web browser/ }), "open the browser", TARGETS, () => new Promise(() => {}));
+    const rejected = expect(decision).rejects.toThrow("Jev fast lane timed out");
+    await vi.advanceTimersByTimeAsync(1_500);
+    await rejected;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("clears the deadline after a normal decision", async () => {
+    vi.useFakeTimers();
+    await decideOpen(fakeJev({ match: /^gmail/ }), "open gmail", TARGETS, async () => EDGE);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("opens the default browser for 'open the browser for me', asking Jev once", async () => {
     const jev = fakeJev({ match: /web browser/ });
     const d = await decideOpen(jev, "open the browser for me", TARGETS, async () => EDGE);
@@ -99,6 +116,42 @@ describe("decideOpen", () => {
 });
 
 describe("jevFromEnv", () => {
+  const choice = { type: "choice", choice: "open", confidence: 0.9, probabilities: { open: 0.95, other: 0.05 } };
+  const request: JevRequest = { state: "open it", questions: {
+    wants: { type: "choice", instructions: "Open?", criteria: { open: "Open", other: "Other" } },
+    more: { type: "noul", instructions: "Anything else?" },
+  } };
+  const clientWith = (answers: unknown) => jevFromEnv({ TYPESAFE_API_KEY: "test-key" },
+    (async () => new Response(JSON.stringify({ model: "jev-test", answers }))) as typeof fetch)!;
+
+  it("accepts complete distributions without treating confidence as probability", async () => {
+    const answers = { wants: choice, more: { type: "noul", noul: 0.01 } };
+    expect((await clientWith(answers)(request)).answers).toEqual(answers);
+  });
+
+  it.each([
+    ["choice instead of noul", { wants: choice, more: choice }],
+    ["noul instead of choice", { wants: { type: "noul", noul: 0.99 }, more: { type: "noul", noul: 0.01 } }],
+    ["missing answer", { wants: choice }],
+    ["out-of-range noul", { wants: choice, more: { type: "noul", noul: -1 } }],
+  ])("rejects %s", async (_, answers) => {
+    await expect(clientWith(answers)(request)).rejects.toThrow("isn't readable");
+  });
+
+  it.each([
+    ["missing distribution", { ...choice, probabilities: undefined }],
+    ["missing label", { ...choice, probabilities: { open: 1 } }],
+    ["unknown label", { ...choice, choice: "unknown" }],
+    ["extra label", { ...choice, probabilities: { open: 0.9, other: 0.05, unknown: 0.05 } }],
+    ["invalid probability", { ...choice, probabilities: { open: 2, other: -1 } }],
+    ["string probability", { ...choice, probabilities: { open: "0.95", other: 0.05 } }],
+    ["non-finite confidence", { ...choice, confidence: Infinity }],
+    ["excess probability mass", { ...choice, probabilities: { open: 0.9, other: 0.9 } }],
+    ["choice is not the most likely label", { ...choice, choice: "other" }],
+  ])("rejects a choice with %s", async (_, answer) => {
+    await expect(clientWith({ wants: answer, more: { type: "noul", noul: 0.01 } })(request)).rejects.toThrow("isn't readable");
+  });
+
   it("is off without a key", () => {
     expect(jevFromEnv({})).toBeNull();
     expect(jevFromEnv({ TYPESAFE_API_KEY: "  " })).toBeNull();
