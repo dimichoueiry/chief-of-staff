@@ -167,6 +167,7 @@ function markStale() {
  * the last word. The server plays them in line with the voice, so this resolves after the chime has ended.
  */
 async function speakText(text, cues = {}) {
+  if (liveMode.active) liveMode.stop();
   if (!text) return null;
   setState("speaking", "Reading it to you…");
   let spoken = null;
@@ -476,6 +477,7 @@ async function syncConversation() {
 }
 
 async function newConversation() {
+  if (liveMode.active) liveMode.stop();
   if (busy) return;
   closeChats();
   renderThread(await post("/api/conversation/new", {}));
@@ -744,6 +746,7 @@ async function postStream(url, body, onEvent) {
 }
 
 async function send(body, thinking, fromVoice = false) {
+  if (liveMode.active) liveMode.stop();
   busy = true;
   setState("thinking", thinking);
   let pending = null;
@@ -873,6 +876,70 @@ function runFocus(project) {
   return send({ text: project, mode: "focus" }, `Looking at ${project}…`);
 }
 
+// Live mode is intentionally session-only: never reopen a room microphone on launch.
+let liveStartupTimer = null;
+let liveLifetimeTimer = null;
+const liveMode = cosLive.create({
+  post,
+  async onStart(session) {
+    endFollowUp();
+    await post("/api/speak/stop", {}).catch(() => {});
+    if (liveMode.session !== session) return;
+    liveLifetimeTimer = setTimeout(() => {
+      if (liveMode.session !== session) return;
+      liveMode.stop();
+      flash("Live session ended after 30 minutes. Turn it on to keep going.");
+    }, 30 * 60_000);
+    setState("listening", "Starting Live microphone…");
+    $("live-toggle").setAttribute("aria-pressed", "true");
+    pill.dataset.live = "on";
+    toShell({ type: "liveListen", session });
+    liveStartupTimer = setTimeout(() => {
+      if (liveMode.session !== session) return;
+      liveMode.stop();
+      noticeThenClear("Live mic didn’t start. Check microphone permissions and use the updated desktop app.", "error", 6000);
+    }, 15000);
+  },
+  onStop() {
+    clearTimeout(liveStartupTimer);
+    clearTimeout(liveLifetimeTimer);
+    $("live-toggle").setAttribute("aria-pressed", "false");
+    pill.dataset.live = "off";
+    toShell({ type: "stopLive" });
+    setState("idle");
+  },
+  onResult(said, r) {
+    if (r.kind === "action") {
+      addTurn({ role: "user", text: said });
+      addTurn({ role: "assistant", text: r.text, kind: r.kind, model: r.model });
+      lastReply = r.text;
+      scrollThread();
+      if (chatHidden) $("show-chat").classList.add("unread");
+    }
+    if (r.text?.startsWith("Live session ended")) { liveMode.stop(); flash(r.text); return; }
+    setState("listening", r.text || r.error || "Live · listening…", r.kind === "error" ? "error" : "");
+    mic.title = "Stop Live mode";
+    mic.setAttribute("aria-label", "Stop Live mode");
+  },
+  onError(text) {
+    if (liveMode.active) setState("listening", text, "error");
+    else noticeThenClear(text, "error", 6000);
+  },
+});
+$("live-toggle").disabled = !SHELL;
+$("live-toggle").title = SHELL ? "Keep listening for apps, sites and folders · Escape to stop" : "Live mode is available in the desktop app";
+$("live-toggle").addEventListener("click", async () => {
+  if (liveMode.active) return liveMode.stop();
+  if (busy) return flash("Wait for the current reply, then turn Live on.");
+  endFollowUp();
+  toShell({ type: "stopLive" });
+  liveMode.start();
+});
+window.addEventListener("pagehide", () => {
+  if (liveMode.session) navigator.sendBeacon("/api/live/stop", JSON.stringify({ session: liveMode.session }));
+  toShell({ type: "stopLive" });
+});
+
 // ---------- voice in a plain browser (Web Speech API). The native shell listens itself. ----------
 const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null;
@@ -913,17 +980,34 @@ function browserListen() {
 }
 
 function micPressed() {
+  if (liveMode.active) return liveMode.stop();
   if (SHELL) toShell({ type: pill.dataset.state === "listening" ? "stopListen" : "listen" });
   else browserListen();
 }
 
 function setView(view) {
+  if (view === "brief" && liveMode.active) liveMode.stop();
   root.dataset.view = view;
   if (view === "brief" && (!brief || briefStale)) loadBrief(briefStale);
 }
 
 // ---------- the bridge the native shell calls ----------
 window.cosShell = {
+  stopLive() { liveMode.stop(); },
+  liveListening(session) {
+    if (liveMode.session !== session) return;
+    clearTimeout(liveStartupTimer);
+    setState("listening", "Live · say an open command…");
+    mic.title = "Stop Live mode";
+    mic.setAttribute("aria-label", "Stop Live mode");
+  },
+  liveStopped(session) { if (liveMode.session === session) liveMode.stop(); },
+  livePhrase(text, session, sequence) {
+    if (liveMode.session !== session) return;
+    const { rest } = cosCommands.addressed(text);
+    if (/^(?:stop(?: listening)?|(?:turn )?(?:live(?: mode)? )?off|stop live(?: mode)?)[.!]*$/i.test(rest.trim())) return liveMode.stop();
+    liveMode.phrase(rest, session, sequence);
+  },
   focus() {
     input.focus();
     syncConversation();
@@ -949,6 +1033,10 @@ window.cosShell = {
     }
   },
   transcript(text, final) {
+    if (liveMode.active) {
+      if (!final) status.textContent = text.trim() ? `Live · “${text}”` : "Live · listening…";
+      return;
+    }
     // Once they start talking, the shell's pause detection decides when they're done.
     if (text.trim()) clearTimeout(followUpTimer);
     if (!final) {
@@ -959,6 +1047,7 @@ window.cosShell = {
     submit(text, true);
   },
   status(text, isError = false) {
+    if (isError && liveMode.active) liveMode.stop();
     endFollowUp();
     noticeThenClear(text, isError ? "error" : "", 5000);
   },
@@ -970,6 +1059,7 @@ window.cosShell = {
   },
   /** Hide for now; the conversation stays and is there next time. */
   dismiss() {
+    if (liveMode.active) liveMode.stop();
     endFollowUp();
     if (typingOpen) {
       typingOpen = false;

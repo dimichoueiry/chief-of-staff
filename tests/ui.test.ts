@@ -524,6 +524,30 @@ describe("ui server (scripted model)", () => {
     delete process.env.COS_HOME;
   });
 
+  it("Live opens once per phrase, stays out of the main model, and stops immediately", async () => {
+    jevAnswer = jevOpens(/^Slate/);
+    const { session } = await (await post({}, "/api/live/start")).json();
+    const command = { session, sequence: 1, text: "get my canvas up" };
+    const first = await (await post(command, "/api/live/command")).json();
+    const again = await (await post(command, "/api/live/command")).json();
+    expect(first).toMatchObject({ kind: "action", text: "Opened Slate.", model: "jev-test" });
+    expect(again).toEqual(first);
+    expect(opened).toHaveLength(1);
+    expect(requests).toHaveLength(0);
+    await post({ session }, "/api/live/stop");
+    expect(await (await post({ ...command, sequence: 2 }, "/api/live/command")).json()).toMatchObject({ kind: "skip" });
+    expect(opened).toHaveLength(1);
+    const conversation = await (await fetch(`${base}/api/conversation`)).json();
+    expect(conversation.turns.map((t: { text: string }) => t.text)).toEqual(["get my canvas up", "Opened Slate."]);
+  });
+
+  it("Live does not send ambiguous speech or questions to the main model", async () => {
+    const { session } = await (await post({}, "/api/live/start")).json();
+    expect(await (await post({ session, sequence: 1, text: "what should I do?" }, "/api/live/command")).json()).toMatchObject({ kind: "skip" });
+    expect(opened).toHaveLength(0);
+    expect(requests).toHaveLength(0);
+  });
+
   it("opens what Jev picks without asking the model, and says Jev did it", async () => {
     jevAnswer = jevOpens(/^Slate/);
     const r = await (await post({ text: "Darius, can you get my canvas up", command: "can you get my canvas up" })).json();

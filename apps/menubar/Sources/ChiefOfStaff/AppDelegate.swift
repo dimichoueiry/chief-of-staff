@@ -29,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private var pageState = "idle"
   private var ready = false
   private var hasKey = true
+  private var listenGeneration = 0
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     guard let config = ShellConfig.load() else {
@@ -54,6 +55,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     hotkeys.onDoubleTap = { [weak self] in self?.summon(listen: true) }
+    hotkeys.onControlTap = { [weak self] in self?.toggleListeningFromControl() ?? false }
+    hotkeys.onHoldStart = { [weak self] in self?.beginPushToTalk() }
+    hotkeys.onHoldEnd = { [weak self] in self?.endPushToTalk() }
+    hotkeys.onHoldCancelled = { [weak self] in self?.cancelPushToTalk() }
     hotkeys.onShortcut = { [weak self] in self?.summon(listen: false) }
     hotkeys.start()
 
@@ -67,9 +72,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       if self.saidSleep(text) { return }
       self.panel.eval("cosShell.transcript(\(Self.js(text)), true)")
     }
+    speech.onLivePhrase = { [weak self] text, session, sequence in
+      guard let self else { return }
+      if self.saidSleep(text) { return }
+      self.panel.eval("cosShell.livePhrase(\(Self.js(text)), \(Self.js(session)), \(sequence))")
+    }
     speech.onError = { [weak self] err in self?.panel.eval("cosShell.status(\(Self.js(err)), true)") }
     // The microphone is free again: go back to waiting for the name.
-    speech.onIdle = { [weak self] in self?.resumeWake() }
+    speech.onIdle = { [weak self] in
+      guard let self else { return }
+      if let session = self.speech.liveSession { self.panel.eval("cosShell.liveStopped(\(Self.js(session)))") }
+      self.resumeWake()
+    }
     wake.onCommand = { [weak self] command in self?.heard(command) }
     // `cos voice wake off` or a new name applies within a few seconds, with no restart.
     Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.reloadWakeSettings() }
@@ -743,7 +757,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     guard ready else { return }
     if panel.isVisible && view == "pill" {
       if speech.listening {
-        speech.stop() // second double-tap: done talking
+        if speech.liveSession != nil { panel.eval("cosShell.stopLive()"); speech.cancel() }
+        else { speech.stop() } // second double-tap: done talking
         return
       }
       if !listen || pageState == "idle" {
@@ -755,6 +770,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     setView("pill")
     panel.show()
     if listen { startListening() }
+  }
+
+  /** A short Control press works as a toggle only when the pill is already present. */
+  private func toggleListeningFromControl() -> Bool {
+    guard ready, panel.isVisible, view == "pill" else { return false }
+    if speech.listening {
+      if speech.liveSession != nil { panel.eval("cosShell.stopLive()"); speech.cancel() }
+      else { speech.stop() }
+      return true
+    }
+    if pageState == "thinking" {
+      panel.eval("cosShell.status(\"Wait for the current reply to finish.\")")
+      return true
+    }
+    if pageState == "speaking" { server.postJSON("api/speak/stop", [:]) }
+    startListening()
+    return true
+  }
+
+  /** Holding Control starts ordinary dictation; releasing it sends exactly that phrase. */
+  private func beginPushToTalk() {
+    guard ready else { return }
+    if speech.liveSession != nil { panel.eval("cosShell.stopLive()"); speech.cancel() }
+    if pageState == "speaking" { server.postJSON("api/speak/stop", [:]) }
+    setView("pill")
+    panel.show()
+    startListening()
+  }
+
+  private func endPushToTalk() {
+    if speech.liveSession != nil { panel.eval("cosShell.stopLive()"); speech.cancel() }
+    else if speech.listening { speech.stop() }
+  }
+
+  private func cancelPushToTalk() {
+    if speech.listening { speech.cancel() }
   }
 
   @objc private func showBrief() {
@@ -808,12 +859,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       pageState = message["value"] as? String ?? "idle"
     case "listen":
       startListening()
+    case "liveListen":
+      if let session = message["session"] as? String { startListening(liveSession: session) }
+    case "stopLive":
+      listenGeneration += 1
+      speech.cancel()
     case "stopListen":
-      speech.stop()
+      if speech.liveSession != nil { panel.eval("cosShell.stopLive()"); speech.cancel() }
+      else { speech.stop() }
     case "menu":
       // Same menu as the ✦ icon, opened where you clicked, so a hidden menubar icon never locks you out.
       statusItem.menu?.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
     case "hide":
+      listenGeneration += 1
       speech.cancel()
       panel.hide()
       resumeWake()
@@ -824,17 +882,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
   }
 
-  private func startListening() {
+  private func startListening(liveSession: String? = nil) {
+    listenGeneration += 1
+    let generation = listenGeneration
+    speech.cancel()
     speech.authorize { [weak self] ok in
-      guard let self else { return }
+      guard let self, self.listenGeneration == generation else { return }
       guard ok else {
         let message = MicSpeechCopy.recoveryMessage(microphoneGranted: Permission.microphone.granted, speechGranted: Permission.speech.granted)
         self.panel.eval("cosShell.status(\(Self.js(message.isEmpty ? "Microphone or Speech Recognition is off — typing still works. Switch it on under ✦ › Permissions, then try again." : message)), true)")
         return
       }
       self.wake.stop() // one listener on the microphone at a time
-      self.panel.eval("cosShell.listening(true)")
-      self.speech.start()
+      if let session = liveSession { self.panel.eval("cosShell.liveListening(\(Self.js(session)))") }
+      else { self.panel.eval("cosShell.listening(true)") }
+      self.speech.start(liveSession: liveSession)
     }
   }
 

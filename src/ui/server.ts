@@ -14,6 +14,7 @@ import { Conversations, conversationsDir, displayTitle, eventsSinceReply, histor
 import type { LLMProvider, ChatMessage } from "../brain/llm/types.js";
 import type { ModelSpec } from "../brain/llm/registry.js";
 import { providerFor, runIntent } from "../brain/loop.js";
+import { LiveCommands } from "../brain/live.js";
 import { decideOpen, openTargets } from "../brain/fastlane.js";
 import { jevFromEnv, type Jev } from "../brain/jev.js";
 import { WRITES } from "../brain/tools.js";
@@ -562,6 +563,18 @@ export function createUiServer(o: UiOptions): Server {
     }
   }
 
+  const liveCommands = new LiveCommands(async (said) => {
+    const jev = o.jev !== undefined ? o.jev : o.offline ? null : jevFromEnv();
+    if (!jev || awaiting(conversations.current()).length) return { skip: "not ready" };
+    const targets = openTargets({ shortcuts: await new Shortcuts(config.selfhubDir).list(), projects: await new Ledger(config.selfhubDir).read() });
+    return decideOpen(jev, said, targets);
+  }, async (action, said, model) => {
+    const text = await performOpen(action, openRunner);
+    conversations.append(conversations.current(), { role: "user", text: said }, { role: "assistant", text, kind: "action", model });
+    Log(`jev live: opened ${action.label}`);
+    return text;
+  });
+
   /** What the last reply left waiting that can still be done. */
   function awaiting(convo: Conversation): ConfirmView[] {
     const last = [...convo.turns].reverse().find((t) => t.role === "assistant");
@@ -944,6 +957,20 @@ export function createUiServer(o: UiOptions): Server {
         if (!isChoice(choice)) return json(res, 400, { error: "choice must be keep, park or kill" });
         const r = await decide(new Ledger(config.selfhubDir), String(b.project ?? ""), choice, today());
         return json(res, 200, r);
+      }
+      case "POST /api/live/start": {
+        const jev = o.jev !== undefined ? o.jev : o.offline ? null : jevFromEnv();
+        if (!jev) return json(res, 503, { error: "Add a TypeSafe API key to use Live mode." });
+        return json(res, 200, { session: liveCommands.start() });
+      }
+      case "POST /api/live/stop": {
+        const b = await body(req);
+        liveCommands.stop(String(b.session ?? ""));
+        return json(res, 200, { ok: true });
+      }
+      case "POST /api/live/command": {
+        const b = await body(req);
+        return json(res, 200, await liveCommands.submit(String(b.session ?? ""), Number(b.sequence), String(b.text ?? "")));
       }
       case "POST /api/pill": {
         const b = await body(req);

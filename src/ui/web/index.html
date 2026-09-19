@@ -80,6 +80,7 @@
       <span class="status" id="pill-status" role="status" aria-live="polite"></span>
       <button type="button" class="stop" id="stop" title="Stop" aria-label="Stop speaking">■</button>
       <button type="button" class="show-chat" id="show-chat" title="Show the chat" aria-label="Show the chat" hidden>▴ chat</button>
+      <button type="button" class="live-toggle" id="live-toggle" aria-pressed="false" title="Keep listening for quick open commands">Live</button>
       <button type="button" class="mode" id="mode" title="Auto decides: capture or ask">auto</button>
       <button type="button" class="size" id="pill-size" title="Compact: just the mic" aria-label="Compact: just the mic">
         <svg class="collapse" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
@@ -95,6 +96,7 @@
   </main>
   <script src="/voice-status.js"></script>
   <script src="/commands.js"></script>
+  <script src="/live.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

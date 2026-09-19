@@ -63,6 +63,13 @@ struct Endpointing {
     return quiet >= wait || now.timeIntervalSince(lastText) >= wait + stallExtra
   }
 
+  /// Live mode commits a stable phrase after a brief acoustic pause without closing the microphone.
+  /// Never use the normal maximum-duration/no-speech escape hatches to commit an unfinished phrase.
+  func livePhraseReady(at now: Date) -> Bool {
+    !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+      !Self.trailsOff(text) && now.timeIntervalSince(max(lastVoice, lastText)) >= 0.7
+  }
+
   // MARK: words
 
   /// Words a finished sentence rarely ends on. Not prepositions or question words: "what should I work on" is done.

@@ -270,3 +270,12 @@ html[data-pill="compact"] .pill[data-state="speaking"] { background: rgba(30, 33
 @media (prefers-reduced-motion: reduce) {
   .pill, .pill .size { transition: none; }
 }
+
+/* Live remains visible even on the compact mic, including an explicit off control. */
+.pill .live-toggle { flex-shrink: 0; font: 12px var(--mono); border: 1px solid #3a3f4b; border-radius: 999px; padding: 5px 9px; color: var(--muted); background: transparent; cursor: pointer; }
+.pill .live-toggle[aria-pressed="true"] { color: var(--success); border-color: var(--success); background: rgba(110, 210, 150, .12); }
+.pill .live-toggle[aria-pressed="true"]::before { content: "● "; }
+.pill .live-toggle:disabled { opacity: .45; cursor: default; }
+.pill .live-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pill[data-live="on"] .status { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pill[data-live="on"] .wave { flex-shrink: 0; }

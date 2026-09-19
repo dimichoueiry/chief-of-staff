@@ -9,6 +9,9 @@ import Speech
 final class SpeechListener {
   var onPartial: (String) -> Void = { _ in }
   var onFinal: (String) -> Void = { _ in }
+  var onLivePhrase: (String, String, Int) -> Void = { _, _, _ in }
+  private(set) var liveSession: String?
+  private var liveSequence = 0
   var onError: (String) -> Void = { _ in }
   /// Done listening, however it ended: the microphone is free again.
   var onIdle: () -> Void = {}
@@ -44,13 +47,15 @@ final class SpeechListener {
     }
   }
 
-  func start() {
+  func start(liveSession: String? = nil) {
     guard state == .idle else { return }
     guard let recognizer, recognizer.isAvailable else {
       onError("Speech recognition is not available right now.")
       onIdle()
       return
     }
+    self.liveSession = liveSession
+    liveSequence = 0
     endpoint = Endpointing(pause: Self.savedPause() ?? Self.defaultPause)
     errors = 0
     lastError = nil
@@ -80,7 +85,15 @@ final class SpeechListener {
   func stop() { finish(deliver: true, settle: true) }
 
   /// Stop and throw away what was heard (Esc).
-  func cancel() { finish(deliver: false) }
+  func cancel() {
+    if state == .settling {
+      state = .idle
+      settleTimer?.invalidate()
+      settleTimer = nil
+      teardown()
+      onIdle()
+    } else { finish(deliver: false) }
+  }
 
   // MARK: recognition
 
@@ -132,6 +145,11 @@ final class SpeechListener {
       errors += 1
       lastError = error.localizedDescription
       if errors > 5 {
+        if liveSession != nil {
+          onError("Live microphone stopped: \(error.localizedDescription)")
+          cancel()
+          return
+        }
         finish(deliver: true)
         return
       }
@@ -167,6 +185,16 @@ final class SpeechListener {
   // MARK: ending
 
   private func tick() {
+    if state == .listening, let session = liveSession {
+      guard endpoint.livePhraseReady(at: Date()) else { return }
+      let text = endpoint.text
+      liveSequence += 1
+      endpoint = Endpointing(pause: Self.defaultPause)
+      // Replace only the recognition request. The audio engine and mic tap keep running.
+      beginStretch()
+      onLivePhrase(text, session, liveSequence)
+      return
+    }
     guard state == .listening, endpoint.shouldEnd(at: Date()) else { return }
     finish(deliver: true)
   }
