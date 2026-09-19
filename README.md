@@ -245,6 +245,15 @@ searches Desktop, Documents, GitHub and the usual code folders for a close name 
 misheard is fine), picks the git repo that fits, and saves the project with its path in the same
 reply. It never asks you to type a path. `cos folders ml gorilla` shows what it would find.
 
+With `TYPESAFE_API_KEY` set, anything the rules don't catch goes to Jev, TypeSafe's "System One"
+model, before the language model. Jev doesn't write; it picks from a list in about a tenth of a
+second. So "Darius, open the browser for me", "get Cursor up" or "take me to my email" open your
+default browser, an app, a shortcut, a project folder, Slate or a privacy settings page without a
+model call. Anything else (a question, a note, an agent to start, "open it", "open X and search
+for Y") goes to the model as before and is answered out loud. It only acts when it's sure: below
+80% that you only want something opened, or 75% on which thing, the model decides. A slow or
+failing Jev falls back to the model after 1.5 s. The server log says what Jev did or why it passed.
+
 Your browser favorites work too: "open Campuswire from my UIUC favorites" finds it in Edge, Chrome,
 Brave or Arc (any profile, misheard names included) and opens it in the browser it's saved in. Reading
 Edge, Chrome and Brave needs Full Disk Access, which is part of the app's setup; without it, it says so

@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChatRequest, ChatResponse, LLMProvider } from "../src/brain/llm/types.js";
+import type { JevRequest, JevResult } from "../src/brain/jev.js";
 import { loadConfig } from "../src/config.js";
 import { git } from "../src/core/git.js";
 import { Ledger } from "../src/core/ledger.js";
@@ -427,8 +428,33 @@ describe("ui server (scripted model)", () => {
   let ran: string[];
   let screenAllowed: boolean;
   let requested: number;
+  let opened: string[][];
+  let jevAsked: JevRequest[];
+  /** What Jev answers; by default it's sure nothing should be opened, so everything goes on to the model. */
+  let jevAnswer: (req: JevRequest) => JevResult;
 
   const reply = (o: Partial<ChatResponse>): ChatResponse => ({ text: "", toolCalls: [], stop: "end", model: "scripted", ...o });
+  /** Jev, sure that `said` only asks to open the target whose description matches. */
+  const jevOpens = (match: RegExp) => (req: JevRequest): JevResult => {
+    const criteria = (req.questions.target as { criteria: Record<string, string> }).criteria;
+    const hit = Object.keys(criteria).find((k) => match.test(criteria[k]))!;
+    return {
+      model: "jev-test",
+      answers: {
+        wants: { type: "choice", choice: "open", confidence: 0.98, probabilities: { open: 0.98, other: 0.02 } },
+        target: { type: "choice", choice: hit, confidence: 0.96, probabilities: { [hit]: 0.96, none: 0.04 } },
+        more: { type: "noul", noul: 0.01 },
+      },
+    };
+  };
+  const jevOther = (): JevResult => ({
+    model: "jev-test",
+    answers: {
+      wants: { type: "choice", choice: "other", confidence: 0.99, probabilities: { open: 0.01, other: 0.99 } },
+      target: { type: "choice", choice: "none", confidence: 0.99, probabilities: { none: 0.99 } },
+      more: { type: "noul", noul: 0.01 },
+    },
+  });
   const post = (b: unknown, path = "/api/pill") => fetch(`${base}${path}`, { method: "POST", body: JSON.stringify(b) });
 
   beforeEach(async () => {
@@ -437,6 +463,9 @@ describe("ui server (scripted model)", () => {
     ran = [];
     screenAllowed = true;
     requested = 0;
+    opened = [];
+    jevAsked = [];
+    jevAnswer = jevOther;
     ({ dir, cleanup } = await makeTmpSelfhub());
     await cp(resolve("examples/selfhub-sample"), dir, { recursive: true });
     process.env.COS_CALENDAR = "none";
@@ -457,8 +486,14 @@ describe("ui server (scripted model)", () => {
       today: THU,
       allowSpeech: false,
       llm: { provider, spec: { provider: "openai", model: "gpt-test" } },
+      jev: async (req) => {
+        jevAsked.push(req);
+        return jevAnswer(req);
+      },
       backgroundSummaries: false,
-      openRunner: async () => {},
+      openRunner: async (args) => {
+        opened.push(args);
+      },
       slateLoader: async () => ({ boards: [], live: true }),
       access: () => ({ terminal: "ask", agents: "ask", links: "auto", screen: "auto", browser: "ask" }),
       screen: {
@@ -487,6 +522,42 @@ describe("ui server (scripted model)", () => {
     await rm(home, { recursive: true, force: true });
     delete process.env.COS_CALENDAR;
     delete process.env.COS_HOME;
+  });
+
+  it("opens what Jev picks without asking the model, and says Jev did it", async () => {
+    jevAnswer = jevOpens(/^Slate/);
+    const r = await (await post({ text: "Darius, can you get my canvas up", command: "can you get my canvas up" })).json();
+    expect(r).toMatchObject({ kind: "action", text: "Opened Slate.", model: "jev-test", user: "Darius, can you get my canvas up" });
+    expect(opened).toEqual([["https://slate-iota-lac.vercel.app/app"]]);
+    expect(requests).toHaveLength(0);
+    expect(jevAsked[0].state).toEqual({ said: "can you get my canvas up" });
+  });
+
+  it("sends questions on to the model, which answers as before", async () => {
+    queue.push(reply({ text: "Record the intro video." }));
+    const r = await (await post({ text: "what should I do today?" })).json();
+    expect(r).toMatchObject({ kind: "answer", text: "Record the intro video.", model: "openai:gpt-test" });
+    expect(jevAsked).toHaveLength(1);
+    expect(opened).toEqual([]);
+  });
+
+  it("falls back to the model when Jev fails", async () => {
+    jevAnswer = () => {
+      throw new Error("Jev answered 401: invalid api key");
+    };
+    queue.push(reply({ text: "Opening it." }));
+    const r = await (await post({ text: "get my canvas up" })).json();
+    expect(r).toMatchObject({ kind: "answer", model: "openai:gpt-test" });
+    expect(requests).toHaveLength(1);
+  });
+
+  it("reads what follows the name, so 'Darius, open slate' opens by the rules without Jev or the model", async () => {
+    const r = await (await post({ text: "Darius, open slate", command: "open slate" })).json();
+    expect(r).toMatchObject({ kind: "action", text: "Opened Slate.", model: "rules" });
+    expect(jevAsked).toHaveLength(0);
+    expect(requests).toHaveLength(0);
+    // Kept as said: the name only comes off for the rules and Jev.
+    expect((await (await fetch(`${base}/api/conversation`)).json()).turns.map((t: { text: string }) => t.text)).toEqual(["Darius, open slate", "Opened Slate."]);
   });
 
   it("answers follow-ups with the earlier exchanges, including what the rules did", async () => {
