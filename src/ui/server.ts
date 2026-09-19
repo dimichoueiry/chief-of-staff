@@ -15,7 +15,7 @@ import type { LLMProvider, ChatMessage } from "../brain/llm/types.js";
 import type { ModelSpec } from "../brain/llm/registry.js";
 import { providerFor, runIntent } from "../brain/loop.js";
 import { LiveCommands } from "../brain/live.js";
-import { agentModelTargets, decideAgentStart, decideOpen, openTargets } from "../brain/fastlane.js";
+import { decideOpen, openTargets } from "../brain/fastlane.js";
 import { jevFromEnv, type Jev } from "../brain/jev.js";
 import { WRITES } from "../brain/tools.js";
 import { chatPreview, findConversation, nameConversations, renderRecall, summarizeEnded } from "../brain/recall.js";
@@ -47,12 +47,12 @@ import { addDays, todayISO } from "../util/dates.js";
 import { reloadHomeEnv } from "../util/env.js";
 import { KEY_PROVIDERS, cleanKey, keysState, saveKey } from "../util/keys.js";
 import type { Access } from "../actions/access.js";
-import { AgentGrid, type AgentStart } from "../actions/agentgrid.js";
+import { AgentGrid } from "../actions/agentgrid.js";
 import { STATUS_LABELS, areaTree } from "../actions/gridboard.js";
 import { watchAgents, type Watcher } from "../actions/agentwatch.js";
 import type { AssistantBrowser } from "../actions/browser.js";
 import { macOpen, openOrQueue, performOpen, type Runner } from "../actions/open.js";
-import { confirmView, isPending, queue, take, type ConfirmView } from "../actions/pending.js";
+import { confirmView, isPending, take, type ConfirmView } from "../actions/pending.js";
 import { performPending } from "../actions/perform.js";
 import type { Shell } from "../actions/terminal.js";
 import { findFolders, formatFolderSearch } from "../actions/folders.js";
@@ -181,19 +181,6 @@ const OPEN_SHAPE = /^(?:(?:please\s+)?(?:open|launch|pull up|bring up|go to|show
  * it had before the fast lane. Keep natural forms that the deterministic open rules cannot resolve.
  */
 const FAST_OPEN_SHAPE = /^(?:(?:please\s+)?(?:open|launch|pull up|bring up|go to|show me)\s+.+|(?:can|could|would)\s+you\s+(?:open|launch|pull up|bring up|go to|show me|get)\s+.+|get\s+.+\s+up|take\s+me\s+(?:to|into)\s+.+)$/i;
-const AGENT_START_SHAPE = /\b(?:start|launch|create|spawn|open)\b[\s\S]{0,160}\b(?:agent|codex\s+session|claude\s+session|session)\b/i;
-
-/** An interactive session can use this neutral brief; otherwise preserve the work after "to". */
-function agentTask(said: string): string {
-  const m = said.match(/\b(?:to|and\s+have\s+(?:it|them))\s+(.+)$/i);
-  const task = m?.[1]
-    .replace(/\s+(?:with|using)\s+(?:the\s+)?(?:model\s+)?[\w.-]+[\s\S]*$/i, "")
-    .replace(/\s+(?:in|on)\s+(?:an?\s+)?interactive[\s\S]*$/i, "")
-    .replace(/[.?!]+$/, "")
-    .trim();
-  if (!task || /^(?:me|us|that|this)(?:\s+please)?$/i.test(task)) return "Open an interactive coding session and wait for the user's instructions.";
-  return task;
-}
 
 /**
  * With a model available, the instant rules step aside when a request could mean memory rather than the web:
@@ -583,40 +570,6 @@ export function createUiServer(o: UiOptions): Server {
     }
   }
 
-  /**
-   * Jev can recognize a complete "start an agent" command and select an offered model. The task
-   * remains the user's words, and this code owns the Agent Grid call and the access confirmation.
-   */
-  async function fastStartAgent(said: string): Promise<PillReply | null> {
-    const jev = o.jev !== undefined ? o.jev : o.offline ? null : jevFromEnv();
-    if (!jev || access().agents === "off") return null;
-    const started = Date.now();
-    const ms = () => `${Date.now() - started} ms`;
-    try {
-      const catalog = await grid().models();
-      const d = await decideAgentStart(jev, said, agentModelTargets(catalog));
-      if ("skip" in d) {
-        Log(`jev: agent start left to the model (${d.skip}, ${ms()})`);
-        return null;
-      }
-      const task = agentTask(said);
-      const job: AgentStart = { task, engine: d.start.engine, model: d.start.model, visible: d.start.visible };
-      const modelLabel = job.model ? ` on ${job.model}` : "";
-      const detail = `${job.engine}${modelLabel} in ~/Desktop (no project)${job.visible ? ", in a Terminal tab" : ""}\nTask: ${task}`;
-      if (access().agents === "ask") {
-        const pending = queue("agent-start", job, { label: `${job.engine} agent`, detail, verb: "Start agent" });
-        Log(`jev: prepared ${job.engine} agent${modelLabel} (${Math.round(d.sure * 100)}%, ${ms()})`);
-        return { kind: "confirm", text: `Ready to start the ${job.engine} agent${modelLabel}${job.visible ? " in an interactive Terminal window" : ""}.`, confirm: [confirmView(pending)], model: d.model };
-      }
-      const text = await grid().start(job);
-      Log(`jev: started ${job.engine} agent${modelLabel} (${Math.round(d.sure * 100)}%, ${ms()})`);
-      return { kind: "action", text, model: d.model };
-    } catch (err) {
-      Log(`jev: agent start left to the model (${(err as Error).message}, ${ms()})`);
-      return null;
-    }
-  }
-
   const liveCommands = new LiveCommands(async (said) => {
     const jev = o.jev !== undefined ? o.jev : o.offline ? null : jevFromEnv();
     if (!jev || awaiting(conversations.current()).length) return { skip: "not ready" };
@@ -756,10 +709,6 @@ export function createUiServer(o: UiOptions): Server {
     // Something waiting on a yes stays with the model, which knows what "do it" refers to.
     if (mode !== "capture" && FAST_OPEN_SHAPE.test(text) && !forModel && !awaiting(convo).length) {
       const quick = await fastOpen(text);
-      if (quick) return quick;
-    }
-    if (mode !== "capture" && AGENT_START_SHAPE.test(text) && !forModel && !awaiting(convo).length) {
-      const quick = await fastStartAgent(text);
       if (quick) return quick;
     }
     if (couldNotOpen) return { kind: "answer", text: couldNotOpen, model: "rules" };

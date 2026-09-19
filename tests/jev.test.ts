@@ -2,8 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { agentModelTargets, decideAgentStart, decideOpen, openTargets, type OpenTarget } from "../src/brain/fastlane.js";
-import type { ModelCatalog } from "../src/actions/agentgrid.js";
+import { decideOpen, openTargets, type OpenTarget } from "../src/brain/fastlane.js";
 import { jevFromEnv, type Jev, type JevRequest, type JevResult } from "../src/brain/jev.js";
 import { defaultBrowser } from "../src/actions/open.js";
 
@@ -113,53 +112,6 @@ describe("decideOpen", () => {
 
   it("doesn't guess a browser when the default one can't be found", async () => {
     expect(await decideOpen(fakeJev({ match: /web browser/ }), "open the browser", TARGETS, async () => null)).toEqual({ skip: "no default browser found" });
-  });
-});
-
-describe("decideAgentStart", () => {
-  const MODELS: ModelCatalog = {
-    claude: [["", "Default"], ["claude-sonnet-5", "Claude Sonnet 5"]],
-    codex: [["", "Default"], ["gpt-5.6-luna", "GPT-5.6-Luna"]],
-  };
-
-  it("selects the named Agent Grid model and an interactive session without generating text", async () => {
-    const targets = agentModelTargets(MODELS);
-    const jev: Jev = async (req) => {
-      const criteria = (req.questions.model as { criteria: Record<string, string> }).criteria;
-      const hit = Object.keys(criteria).find((k) => /gpt-5\.6-luna/i.test(criteria[k]))!;
-      return {
-        model: "jev-test",
-        answers: {
-          wants: { type: "choice", choice: "start", confidence: 0.98, probabilities: { start: 0.98, other: 0.02 } },
-          model_named: { type: "noul", noul: 0.99 },
-          model: { type: "choice", choice: hit, confidence: 0.96, probabilities: Object.fromEntries(Object.keys(criteria).map((k) => [k, k === hit ? 0.96 : 0])) },
-          interactive: { type: "noul", noul: 0.98 },
-          more: { type: "noul", noul: 0.01 },
-        },
-      };
-    };
-    await expect(decideAgentStart(jev, "start an interactive Codex session with 5.6 Luna", targets)).resolves.toEqual({
-      start: { engine: "codex", model: "gpt-5.6-luna", visible: true }, model: "jev-test", sure: 0.98,
-    });
-  });
-
-  it("leaves compound requests for the model", async () => {
-    const targets = agentModelTargets(MODELS);
-    const jev: Jev = async (req) => {
-      const criteria = (req.questions.model as { criteria: Record<string, string> }).criteria;
-      const first = Object.keys(criteria)[0];
-      return {
-        model: "jev-test",
-        answers: {
-          wants: { type: "choice", choice: "start", confidence: 0.98, probabilities: { start: 0.98, other: 0.02 } },
-          model_named: { type: "noul", noul: 0.01 },
-          model: { type: "choice", choice: first, confidence: 1, probabilities: Object.fromEntries(Object.keys(criteria).map((k) => [k, k === first ? 1 : 0])) },
-          interactive: { type: "noul", noul: 0.01 },
-          more: { type: "noul", noul: 0.9 },
-        },
-      };
-    };
-    await expect(decideAgentStart(jev, "start an agent and message it", targets)).resolves.toEqual({ skip: "asks for more 90%" });
   });
 });
 

@@ -15,7 +15,6 @@ import { decide } from "../src/logic/decide.js";
 import { resolveDate, scribe } from "../src/logic/scribe.js";
 import { saveAccess } from "../src/actions/access.js";
 import { ScreenPermissionError } from "../src/sensors/screen.js";
-import { AgentGrid, type AgentStart } from "../src/actions/agentgrid.js";
 import { createUiServer } from "../src/ui/server.js";
 import { makeTmpSelfhub } from "./helpers/tmp-selfhub.js";
 
@@ -430,7 +429,6 @@ describe("ui server (scripted model)", () => {
   let screenAllowed: boolean;
   let requested: number;
   let opened: string[][];
-  let agentStarts: AgentStart[];
   let jevAsked: JevRequest[];
   /** What Jev answers; by default it's sure nothing should be opened, so everything goes on to the model. */
   let jevAnswer: (req: JevRequest) => JevResult;
@@ -457,20 +455,6 @@ describe("ui server (scripted model)", () => {
       more: { type: "noul", noul: 0.01 },
     },
   });
-  const jevStartsAgent = (req: JevRequest): JevResult => {
-    const criteria = (req.questions.model as { criteria: Record<string, string> }).criteria;
-    const hit = Object.keys(criteria).find((key) => /gpt-5\.6-luna/i.test(criteria[key]))!;
-    return {
-      model: "jev-test",
-      answers: {
-        wants: { type: "choice", choice: "start", confidence: 0.98, probabilities: { start: 0.98, other: 0.02 } },
-        model_named: { type: "noul", noul: 0.99 },
-        model: { type: "choice", choice: hit, confidence: 0.96, probabilities: Object.fromEntries(Object.keys(criteria).map((key) => [key, key === hit ? 0.96 : 0])) },
-        interactive: { type: "noul", noul: 0.98 },
-        more: { type: "noul", noul: 0.01 },
-      },
-    };
-  };
   const post = (b: unknown, path = "/api/pill") => fetch(`${base}${path}`, { method: "POST", body: JSON.stringify(b) });
 
   beforeEach(async () => {
@@ -480,7 +464,6 @@ describe("ui server (scripted model)", () => {
     screenAllowed = true;
     requested = 0;
     opened = [];
-    agentStarts = [];
     jevAsked = [];
     jevAnswer = jevOther;
     ({ dir, cleanup } = await makeTmpSelfhub());
@@ -498,19 +481,11 @@ describe("ui server (scripted model)", () => {
         return r;
       },
     };
-    const agentGrid = {
-      models: async () => ({ claude: [["", "Default"]], codex: [["", "Default"], ["gpt-5.6-luna", "GPT-5.6-Luna"]] }),
-      start: async (job: AgentStart) => {
-        agentStarts.push(job);
-        return `Started ${job.engine}.`;
-      },
-    } as unknown as AgentGrid;
     const server = createUiServer({
       config: loadConfig({ COS_SELFHUB: dir, COS_PROJECT_ROOTS: "/nonexistent", COS_NAME: "Dimitri" }),
       today: THU,
       allowSpeech: false,
       llm: { provider, spec: { provider: "openai", model: "gpt-test" } },
-      agentGrid,
       jev: async (req) => {
         jevAsked.push(req);
         return jevAnswer(req);
@@ -596,17 +571,6 @@ describe("ui server (scripted model)", () => {
     expect(r).toMatchObject({ kind: "action", text: "Opened Slate.", model: "jev-test" });
     expect(jevAsked).toHaveLength(1);
     expect(requests).toHaveLength(0);
-  });
-
-  it("prepares a clear interactive Agent Grid session through Jev, without a language-model turn", async () => {
-    jevAnswer = jevStartsAgent;
-    const r = await (await post({ text: "start a Codex session with 5.6 Luna in an interactive window on Agent Grid" })).json();
-    expect(r).toMatchObject({ kind: "confirm", model: "jev-test", text: expect.stringMatching(/interactive Terminal window/) });
-    expect(r.confirm).toHaveLength(1);
-    expect(r.confirm[0]).toMatchObject({ kind: "agent-start", verb: "Start agent" });
-    expect(r.confirm[0].detail).toContain("gpt-5.6-luna");
-    expect(requests).toHaveLength(0);
-    expect(agentStarts).toEqual([]);
   });
 
   it("falls back to the model when Jev fails", async () => {
