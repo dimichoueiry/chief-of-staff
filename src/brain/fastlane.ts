@@ -12,6 +12,7 @@
  * Wrong is worse than slow here, since the model gets a second look at anything this lets go.
  */
 import type { Project } from "../core/ledger.js";
+import type { AgentEngine, ModelCatalog } from "../actions/agentgrid.js";
 import { defaultBrowser, installedApps, safeWebUrl, type OpenAction } from "../actions/open.js";
 import { PRIVACY_PANES } from "../actions/permissions.js";
 import type { Shortcut } from "../actions/shortcuts.js";
@@ -64,6 +65,85 @@ export function openTargets(o: {
 export type FastDecision =
   | { open: OpenAction; model: string; sure: number }
   | { skip: string };
+
+export interface AgentModelTarget {
+  engine: AgentEngine;
+  /** Undefined means the CLI's own default model. */
+  model?: string;
+  describe: string;
+}
+
+export type AgentDecision =
+  | { start: { engine: AgentEngine; model?: string; visible: boolean }; model: string; sure: number }
+  | { skip: string };
+
+/** The models Agent Grid can start, in the compact form Jev needs to select one. */
+export function agentModelTargets(models: ModelCatalog | null): AgentModelTarget[] {
+  const targets: AgentModelTarget[] = [];
+  for (const engine of ["codex", "claude"] as const) {
+    for (const [model, label] of models?.[engine] ?? []) {
+      targets.push({ engine, model: model || undefined, describe: `${label || "Default"} (${engine}${model ? ` model ID ${model}` : " default model"})` });
+    }
+  }
+  return targets.slice(0, MAX_TARGETS);
+}
+
+/**
+ * A narrow command router for starting one Agent Grid session. Jev selects only from the models
+ * Agent Grid actually offers; code retains the request text as the agent's task and does the write.
+ */
+export async function decideAgentStart(jev: Jev, said: string, targets: AgentModelTarget[]): Promise<AgentDecision> {
+  if (!targets.length) return { skip: "Agent Grid has no models" };
+  const labels = targets.map((_, i) => `m${i + 1}`);
+  const result = await jev({
+    state: { said },
+    questions: {
+      wants: {
+        type: "choice",
+        instructions: "What does the person want their assistant to do, going by `said`?",
+        criteria: {
+          start: "Start exactly one Claude Code or Codex session in Agent Grid. It may be an interactive session the person will use themselves.",
+          other: "Anything else: a question, an open request, a request to inspect or message an existing agent, several actions, or something unclear.",
+        },
+      },
+      model_named: {
+        type: "noul",
+        instructions: "Does `said` explicitly name which Claude or Codex model the new session should use?",
+      },
+      model: {
+        type: "choice",
+        instructions: "If `said` names a model for the new Agent Grid session, which listed model is it? If it does not name one, choose default.",
+        criteria: { ...Object.fromEntries(labels.map((label, i) => [label, targets[i].describe])), default: "No model is named; use the selected engine's default." },
+      },
+      interactive: {
+        type: "noul",
+        instructions: "Does `said` ask to open the new coding session in an interactive, visible window or Terminal tab?",
+      },
+      more: {
+        type: "noul",
+        instructions: "Apart from the work assigned to the new agent, does `said` ask the assistant to do more than starting this one Agent Grid session, such as sending a message, reading output, or another separate action?",
+      },
+    },
+  });
+  const wants = result.answers.wants as ChoiceAnswer;
+  const named = result.answers.model_named as NoulAnswer;
+  const picked = result.answers.model as ChoiceAnswer;
+  const interactive = result.answers.interactive as NoulAnswer;
+  const more = result.answers.more as NoulAnswer;
+  if ((wants.probabilities.start ?? 0) < SURE_WANTS_OPEN) return { skip: `wants start ${pct(wants.probabilities.start ?? 0)}` };
+  if (more.noul > MAX_ASKS_MORE) return { skip: `asks for more ${pct(more.noul)}` };
+
+  let target: AgentModelTarget | undefined;
+  if (named.noul >= SURE_OF_TARGET) {
+    const index = labels.indexOf(picked.choice);
+    if (index < 0 || (picked.probabilities[picked.choice] ?? 0) < SURE_OF_TARGET) return { skip: `model ${pct(picked.confidence)}` };
+    target = targets[index];
+  } else {
+    const engine: AgentEngine = /\b(?:codex|gpt)\b/i.test(said) ? "codex" : "claude";
+    target = targets.find((t) => t.engine === engine && !t.model) ?? targets.find((t) => t.engine === engine) ?? targets[0];
+  }
+  return { start: { engine: target.engine, model: target.model, visible: interactive.noul >= SURE_OF_TARGET }, model: result.model, sure: wants.probabilities.start ?? 0 };
+}
 
 /**
  * Ask Jev, in one call, whether this only asks to open something, which listed thing it is, and whether
