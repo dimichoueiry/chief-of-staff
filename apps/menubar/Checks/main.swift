@@ -159,5 +159,22 @@ do {
   check("plural: switch them on", both.contains("Switch them on"))
 }
 
+// Live phrase boundaries never close the microphone and do not inherit ordinary listen caps.
+do {
+  var e = Endpointing(pause: 2.5, now: at(0))
+  check("live stays quiet indefinitely with no words", !e.livePhraseReady(at: at(500)))
+  e.recognized("open Cursor", at: at(1))
+  check("live waits for a stable phrase", !e.livePhraseReady(at: at(1.6)))
+  e.voice(at: at(1.6))
+  check("live waits while voice continues", !e.livePhraseReady(at: at(2)))
+  check("live emits after a short real pause", e.livePhraseReady(at: at(2.4)))
+  e.recognized("open Cursor and", at: at(3))
+  check("live never commits a dangling conjunction on a timer", !e.livePhraseReady(at: at(500)))
+  e.recognized("open Cursor and Safari", at: at(501))
+  check("live permits a completed phrase for Jev to judge", e.livePhraseReady(at: at(502)))
+  e = Endpointing(pause: 2.5, now: at(503))
+  check("a delivered phrase is cleared", !e.livePhraseReady(at: at(600)))
+}
+
 print(failures == 0 ? "all checks passed" : "\(failures) failed")
 exit(failures == 0 ? 0 : 1)

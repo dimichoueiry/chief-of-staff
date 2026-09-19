@@ -70,11 +70,13 @@ npm run cos -- menubar install   # builds ~/Applications/Chief of Staff.app, ope
 npm run package                  # a self-contained .app + .dmg to hand to someone: docs/DISTRIBUTION.md
 ```
 
-- **Double-tap Control** anywhere: the pill appears and listens. (Fn is left alone for Wispr Flow. Control used
-  in a shortcut, like ⌃C, never triggers it.) What you say ends after 2.5 seconds of real quiet: the microphone
-  level decides, not the recogniser, so thinking pauses mid-sentence don't cut you off. It waits 1.5 s longer
-  when you trail off ("and…", "so um"), and a talk can run two minutes. Double-tap again to send right away.
-  `cos voice pause 3.5` changes the pause (1 to 10 seconds).
+- **Hold Control** anywhere: push-to-talk. The pill appears after a brief hold, listens while
+  you hold it, and sends when you release. A short double-tap still opens a normal listen.
+  When the pill is already open, a short Control tap starts listening and the next tap stops it.
+  (Fn is left alone for Wispr Flow. Control used in a shortcut, like ⌃C, never triggers it.)
+  What you say ends after 2.5 seconds of real quiet: the microphone level decides, not the recogniser,
+  so thinking pauses mid-sentence don't cut you off. It waits 1.5 s longer when you trail off
+  ("and…", "so um"), and a talk can run two minutes. `cos voice pause 3.5` changes the pause (1 to 10 seconds).
 - **Hands-free follow-ups.** After a spoken reply a soft two-note chime plays and the mic opens again on
   its own ("Your turn…"), so you can just keep talking. The chime comes after the last word has played, never
   over it, and a quieter single note marks the start of a spoken reply. It closes after 8 quiet seconds, on Esc, or when you say "thanks" or "that's all"
@@ -253,6 +255,21 @@ model call. Anything else (a question, a note, an agent to start, "open it", "op
 for Y") goes to the model as before and is answered out loud. It only acts when it's sure: below
 80% that you only want something opened, or 75% on which thing, the model decides. A slow or
 failing Jev falls back to the model after 1.5 s. The server log says what Jev did or why it passed.
+
+The desktop pill's **Live** toggle keeps the microphone open for successive Jev commands.
+Say “open Cursor”, pause briefly, then “open Slate”: it checks each stable phrase after about
+0.7 seconds of quiet, plus the Jev request time, without stopping the microphone between commands.
+This first version handles the same apps, saved sites, folders and settings as the fast lane;
+questions, ambiguous phrases and multi-step requests show a hint to use normal mic mode.
+Results appear silently in the chat, so the microphone does not hear spoken replies.
+Live requires `TYPESAFE_API_KEY` and starts off each time. Click Live or the mic, press Escape,
+double-tap Control, or say “stop listening” to stop. It also ends after 30 minutes.
+Stopping cancels queued commands and ignores late decisions; repeated delivery of a phrase cannot
+execute it twice. An action already dispatched to macOS cannot be undone by stopping.
+
+Live changes the native speech listener, so installing this version requires
+`npm run build && npm run cos -- menubar build`, then restarting the app. A server-only refresh
+is not enough. Plain-browser mic mode is unchanged; Live is available in the desktop app.
 
 Your browser favorites work too: "open Campuswire from my UIUC favorites" finds it in Edge, Chrome,
 Brave or Arc (any profile, misheard names included) and opens it in the browser it's saved in. Reading
