@@ -557,12 +557,20 @@ describe("ui server (scripted model)", () => {
     expect(jevAsked[0].state).toEqual({ said: "can you get my canvas up" });
   });
 
-  it("sends questions on to the model, which answers as before", async () => {
+  it("sends questions straight to the model, which answers as before", async () => {
     queue.push(reply({ text: "Record the intro video." }));
     const r = await (await post({ text: "what should I do today?" })).json();
     expect(r).toMatchObject({ kind: "answer", text: "Record the intro video.", model: "openai:gpt-test" });
-    expect(jevAsked).toHaveLength(1);
+    expect(jevAsked).toHaveLength(0);
     expect(opened).toEqual([]);
+  });
+
+  it("keeps natural open requests on Jev's fast lane", async () => {
+    jevAnswer = jevOpens(/^Slate/);
+    const r = await (await post({ text: "can you get my canvas up" })).json();
+    expect(r).toMatchObject({ kind: "action", text: "Opened Slate.", model: "jev-test" });
+    expect(jevAsked).toHaveLength(1);
+    expect(requests).toHaveLength(0);
   });
 
   it("falls back to the model when Jev fails", async () => {

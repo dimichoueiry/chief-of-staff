@@ -176,6 +176,13 @@ function explainImageError(err: unknown, model: string): string | null {
 const OPEN_SHAPE = /^(?:(?:please\s+)?(?:open|launch|pull up|bring up|go to|show me)\s+.+|(?:search(?: the web| google)?(?: for)?|google|look up)\s+.+)$/i;
 
 /**
+ * Jev is an acceleration for plausible open commands, not a gate before every conversation.
+ * Questions go straight to the chosen model, so “what's 1 + 1?” keeps the same voice and latency
+ * it had before the fast lane. Keep natural forms that the deterministic open rules cannot resolve.
+ */
+const FAST_OPEN_SHAPE = /^(?:(?:please\s+)?(?:open|launch|pull up|bring up|go to|show me)\s+.+|(?:can|could|would)\s+you\s+(?:open|launch|pull up|bring up|go to|show me|get)\s+.+|get\s+.+\s+up|take\s+me\s+(?:to|into)\s+.+)$/i;
+
+/**
  * With a model available, the instant rules step aside when a request could mean memory rather than the web:
  * "search for …" / "look up …" without saying web or Google, and anything that refers back to what was said.
  */
@@ -700,7 +707,7 @@ export function createUiServer(o: UiOptions): Server {
       }
     }
     // Something waiting on a yes stays with the model, which knows what "do it" refers to.
-    if (mode !== "capture" && !forModel && !awaiting(convo).length) {
+    if (mode !== "capture" && FAST_OPEN_SHAPE.test(text) && !forModel && !awaiting(convo).length) {
       const quick = await fastOpen(text);
       if (quick) return quick;
     }
