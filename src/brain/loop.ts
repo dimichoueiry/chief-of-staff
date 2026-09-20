@@ -92,7 +92,7 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
 
   const context =
     opts.context ??
-    (await buildContext({ config, intent, project: opts.project, today: opts.today, calendarProvider: opts.calendarProvider }));
+    (await buildContext({ config, intent, project: opts.project, today: opts.today, calendarProvider: opts.calendarProvider, query: opts.message }));
   const runtime = new ToolRuntime(config, context.today, opts.calendarProvider, opts.actions);
   const tools = toolsFor(intent);
   const serverTools = serverToolsFor(intent);

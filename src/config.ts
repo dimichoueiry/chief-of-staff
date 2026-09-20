@@ -4,6 +4,9 @@ import { loadEnvFile, reloadHomeEnv, syncProjectEnv } from "./util/env.js";
 
 export { loadEnvFile };
 
+/** How much of selfhub goes into every message (COS_IDENTITY_CHARS). Roughly 8k tokens. */
+export const DEFAULT_IDENTITY_CHARS = 32_000;
+
 export interface Config {
   selfhubDir: string;
   /** COS_MODEL as written, if set. Which model actually runs is decided in brain/llm/registry.ts. */
@@ -16,6 +19,8 @@ export interface Config {
   journalDays: number;
   /** Calendar days loaded into context, starting today. */
   calendarDays: number;
+  /** Rough size limit for the selfhub identity block in every prompt. */
+  identityChars: number;
   /** Minutes of quiet after which the pill starts a new conversation. */
   conversationIdleMinutes: number;
 }
@@ -55,6 +60,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     silenceDays: Number(env.COS_SILENCE_DAYS) || 14,
     journalDays: Number(env.COS_JOURNAL_DAYS) || 7,
     calendarDays: Math.min(31, Math.max(1, Number(env.COS_CALENDAR_DAYS) || 7)),
+    identityChars: Math.max(1_000, Number(env.COS_IDENTITY_CHARS) || DEFAULT_IDENTITY_CHARS),
     conversationIdleMinutes: Math.max(1, Number(env.COS_CONVERSATION_IDLE_MINUTES) || 120),
   };
 }

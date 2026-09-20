@@ -18,7 +18,7 @@ import { LiveCommands } from "../brain/live.js";
 import { decideOpen, openTargets } from "../brain/fastlane.js";
 import { jevFromEnv, type Jev } from "../brain/jev.js";
 import { WRITES } from "../brain/tools.js";
-import { chatPreview, findConversation, nameConversations, renderRecall, summarizeEnded } from "../brain/recall.js";
+import { findConversation, nameConversations, renderRecall, summarizeEnded } from "../brain/recall.js";
 import type { Brief } from "../brain/schema.js";
 import type { Config } from "../config.js";
 import { buildContext } from "../core/context.js";
@@ -1027,12 +1027,13 @@ export function createUiServer(o: UiOptions): Server {
       }
       case "GET /api/conversations": {
         // Every saved chat they said something in, most recently active first: no cap, so none goes missing.
+        // Built from the store's index, so opening the list never reads a transcript.
         const current = conversations.current();
-        const { conversations: all, unreadable } = conversations.list();
-        const chats = all
-          .filter((c) => messageCount(c) > 0)
+        const { metas, unreadable } = conversations.metas();
+        const chats = metas
+          .filter((c) => c.messages > 0)
           .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-          .map((c) => ({ id: c.id, title: displayTitle(c), named: Boolean(c.title), startedAt: c.startedAt, updatedAt: c.updatedAt, messages: messageCount(c), preview: chatPreview(c), current: c.id === current.id }));
+          .map((c) => ({ id: c.id, title: c.name, named: Boolean(c.title), startedAt: c.startedAt, updatedAt: c.updatedAt, messages: c.messages, preview: c.preview, current: c.id === current.id }));
         return json(res, 200, { current: current.id, chats, unreadable });
       }
       case "POST /api/conversation/open": {

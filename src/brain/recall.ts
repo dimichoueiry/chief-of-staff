@@ -3,13 +3,19 @@
  * lines about it (what was discussed, decided, filed, left open). The summaries
  * of the last days go into every request, and get_conversations searches every
  * saved conversation for the details a summary leaves out.
+ *
+ * What goes into every request is built from the store's index (see metas in
+ * conversation.ts), never from the transcripts: a message costs a stat per chat,
+ * not a parse of everything ever said. Only searching by keyword and finding a
+ * chat by name read the conversations themselves, and only when asked.
  */
 import type { ModelSpec } from "./llm/registry.js";
 import type { LLMProvider } from "./llm/types.js";
-import { Conversations, displayTitle, localStamp, type Conversation, type Turn } from "./conversation.js";
+import { Conversations, digest, displayTitle, localStamp, type Conversation, type ConversationMeta, type Turn } from "./conversation.js";
 import { formatSpec } from "./llm/registry.js";
 import { ACTIONS, WRITES } from "./tools.js";
 import { addDays, todayISO } from "../util/dates.js";
+import { STOP } from "../util/words.js";
 
 const SUMMARY_PROMPT = `You keep the memory of a personal chief of staff. Below is one finished conversation between the user ("Them") and the chief of staff ("You").
 
@@ -28,16 +34,14 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n).trimEnd(
 const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
 const weekday = (date: string) => new Date(`${date}T12:00:00`).toLocaleDateString("en-US", { weekday: "short" });
 
-function spoke(c: Conversation): boolean {
-  return c.turns.some((t) => t.role === "user");
-}
+/** Local dates a conversation touches. Its timestamps are all this needs, so it works on an index entry too. */
+type Dated = Pick<Conversation, "startedAt" | "updatedAt">;
 
-/** Local dates a conversation touches. */
-function span(c: Conversation): { from: string; to: string } {
+function span(c: Dated): { from: string; to: string } {
   return { from: localStamp(c.startedAt).date, to: localStamp(c.updatedAt).date };
 }
 
-function when(c: Conversation): string {
+function when(c: Dated): string {
   const a = localStamp(c.startedAt);
   const b = localStamp(c.updatedAt);
   return `${a.date} ${weekday(a.date)} ${a.time}${b.date === a.date ? `–${b.time}` : ` to ${b.date} ${b.time}`}`;
@@ -76,16 +80,11 @@ export function transcript(c: Conversation, max = MAX_TRANSCRIPT_CHARS): { text:
   return { text: `(The start of this conversation is left out: it was too long to summarise at once.)\n…${text.slice(-max)}`, partial: true };
 }
 
-/** A summary built from the conversation's own words, used until (or instead of) a model summary. */
-export function digest(c: Conversation): string {
-  const asked = c.turns.filter((t) => t.role === "user").map((t) => `"${clip(oneLine(t.text), 90)}"`);
-  const shown = asked.length > 4 ? [...asked.slice(0, 3), `and ${asked.length - 3} more messages`] : asked;
-  const last = [...c.turns].reverse().find((t) => t.role === "assistant" && t.kind !== "error");
-  return `They said ${shown.join(", ")}.${last ? ` Last reply: ${clip(oneLine(last.text), 160)}` : ""}`;
-}
+export { chatPreview, digest } from "./conversation.js";
 
-export function summaryText(c: Conversation): string {
-  if (!c.summary) return digest(c);
+/** What a conversation is remembered as: the model's summary, or its own words. Works from the index alone. */
+export function summaryText(c: Conversation | ConversationMeta): string {
+  if (!c.summary) return "digest" in c ? c.digest : digest(c);
   return c.summary.partial ? `${c.summary.text} (summary of the later part only)` : c.summary.text;
 }
 
@@ -103,7 +102,7 @@ export function renderRecall(store: Conversations, o: RecallOptions = {}): strin
   const days = o.days ?? 7;
   const maxChars = o.maxChars ?? 4_000;
   const since = addDays(today, -(days - 1));
-  const recent = store.list().conversations.filter((c) => c.id !== o.excludeId && spoke(c) && span(c).to >= since);
+  const recent = store.metas().metas.filter((c) => c.id !== o.excludeId && c.messages > 0 && span(c).to >= since);
   if (!recent.length) return "";
 
   const lines: string[] = [];
@@ -132,13 +131,13 @@ export interface SearchOptions {
   limit?: number;
 }
 
-const STOP = new Set(["the", "and", "for", "that", "this", "with", "what", "was", "were", "did", "about", "we", "i", "you", "a", "an", "to", "of", "on", "in", "is", "it", "my", "me"]);
-
 /** Search every saved conversation. Results are capped for the model; the counts are not. */
 export function searchConversations(store: Conversations, o: SearchOptions = {}): string {
   const limit = o.limit ?? 8;
-  const { conversations, unreadable } = store.list();
-  const inRange = conversations.filter((c) => spoke(c) && (!o.from || span(c).to >= o.from) && (!o.to || span(c).from <= o.to));
+  // The dates and the counts come from the index; only a search by keyword reads what was said, and
+  // then only in the conversations the dates left in.
+  const { metas, unreadable } = store.metas();
+  const inRange = metas.filter((c) => c.messages > 0 && (!o.from || span(c).to >= o.from) && (!o.to || span(c).from <= o.to));
   const range = o.from || o.to ? ` from ${o.from ?? "the start"} to ${o.to ?? "today"}` : "";
   const scope = `${inRange.length} saved conversation${inRange.length === 1 ? "" : "s"}${range}`;
   const damaged = unreadable ? `; ${unreadable} damaged file${unreadable === 1 ? "" : "s"} could not be read` : "";
@@ -154,10 +153,12 @@ export function searchConversations(store: Conversations, o: SearchOptions = {})
     ].join("\n");
   }
 
-  interface Hit { c: Conversation; at: string; said: string; reply: string; score: number }
+  interface Hit { id: string; at: string; said: string; reply: string; score: number }
   const hits: Hit[] = [];
   const need = Math.ceil(words.length / 2);
-  for (const c of inRange) {
+  for (const m of inRange) {
+    const c = store.get(m.id);
+    if (!c) continue; // deleted while this was running
     c.turns.forEach((t, i) => {
       if (t.role !== "user") return;
       const next = c.turns.slice(i + 1).find((x) => x.role !== "event");
@@ -165,13 +166,13 @@ export function searchConversations(store: Conversations, o: SearchOptions = {})
       const extra = reply ? actionsOf(reply).join(" ") : "";
       const hay = `${t.text}\n${reply?.text ?? ""}\n${extra}`.toLowerCase();
       const score = words.filter((w) => hay.includes(w)).length;
-      if (score >= need) hits.push({ c, at: t.at, said: t.text, reply: reply ? `${reply.text}${extra ? `\n(Done: ${extra})` : ""}` : "(no reply)", score });
+      if (score >= need) hits.push({ id: c.id, at: t.at, said: t.text, reply: reply ? `${reply.text}${extra ? `\n(Done: ${extra})` : ""}` : "(no reply)", score });
     });
   }
   if (!hits.length) return `Nothing matching "${o.query}" in ${scope}${damaged}.`;
   hits.sort((a, b) => b.score - a.score || b.at.localeCompare(a.at));
   const shown = hits.slice(0, limit);
-  const convs = new Set(hits.map((h) => h.c.id)).size;
+  const convs = new Set(hits.map((h) => h.id)).size;
   return [
     `${hits.length} exchange${hits.length === 1 ? "" : "s"} matching "${o.query}" in ${convs} conversation${convs === 1 ? "" : "s"} (searched ${scope}${damaged}).` +
       (hits.length > shown.length ? ` Showing the best ${shown.length}; use more specific words or dates to see the rest.` : ""),
@@ -180,14 +181,6 @@ export function searchConversations(store: Conversations, o: SearchOptions = {})
       return `\n${date} ${weekday(date)} ${time}\nThey said: ${clip(h.said, 600)}\nYou replied: ${clip(h.reply, 1_200)}`;
     }),
   ].join("\n");
-}
-
-/** A line under a chat's name in the list: the model's summary, or the last reply. Shortened for display only, with "…". */
-export function chatPreview(c: Conversation): string {
-  const plain = (s: string) => clip(oneLine(s.replace(/\*\*|__|`/g, "").replace(/^\s*(?:[-*]|\d+\.)\s+/gm, "")), 160);
-  if (c.summary && c.summary.model !== "rules") return plain(c.summary.text);
-  const last = [...c.turns].reverse().find((t) => t.role === "assistant" && t.kind !== "error");
-  return plain(last?.text ?? ""); // a rules summary only repeats what was said
 }
 
 const CHAT_WORDS = new Set(["chat", "chats", "conversation", "conversations", "thread", "called", "named", "where", "from", "our"]);
@@ -201,7 +194,9 @@ const numerals = (s: string) => s.toLowerCase().replace(/\b(one|two|three|four|f
  * then the most recently active. Searches every saved conversation in full. Null when none fits.
  */
 export function findConversation(store: Conversations, query: string, o: { excludeId?: string } = {}): Conversation | null {
-  const chats = store.list().conversations.filter((c) => spoke(c) && c.id !== o.excludeId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  // The only thing here that reads every transcript. It has to: a word that isn't in a chat's name
+  // may still be somewhere in it. It runs when someone asks for a chat by name, not on every message.
+  const chats = store.list().conversations.filter((c) => c.turns.some((t) => t.role === "user") && c.id !== o.excludeId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   if (PREVIOUS.test(query.trim())) return chats[0] ?? null;
   // "the Campuswire one": a trailing "one" means the chat, not the number.
   const words = numerals(query.trim().replace(/(\S)\s+one$/i, "$1"))
@@ -255,8 +250,9 @@ export async function summarizeEnded(
   const current = store.current();
   const active = [current.id, current.asideOf];
   const retryAfter = now.getTime() - 6 * 3_600_000;
-  const pending = store.list().conversations.filter(
-    (c) => !active.includes(c.id) && spoke(c) && !c.summary && span(c).to >= since && !(c.summaryFailedAt && new Date(c.summaryFailedAt).getTime() > retryAfter),
+  // Which conversations still need one is decided from the index; only those are read.
+  const pending = store.metas().metas.filter(
+    (c) => !active.includes(c.id) && c.messages > 0 && !c.summary && span(c).to >= since && !(c.summaryFailedAt && new Date(c.summaryFailedAt).getTime() > retryAfter),
   );
 
   let summarized = 0;
@@ -268,7 +264,9 @@ export async function summarizeEnded(
       if (fresh.updatedAt === c.updatedAt) change(fresh);
     });
 
-  for (const c of pending) {
+  for (const m of pending) {
+    const c = store.get(m.id);
+    if (!c) continue; // deleted since the index was read: still waiting, not failed
     if (transcript(c).text.length < TRIVIAL_CHARS) {
       const summary = { text: digest(c), model: "rules", at: now.toISOString() };
       save(c, (fresh) => (fresh.summary = summary));
@@ -310,16 +308,18 @@ export async function nameConversations(
   const now = o.now ?? new Date();
   const since = addDays(todayISO(now), -(o.days ?? 30));
   const retryAfter = now.getTime() - 6 * 3_600_000;
-  const due = store.list().conversations.filter((c) => {
-    const said = c.turns.filter((t) => t.role === "user").length;
+  // Which chats are due is decided from the index; only the few that are get read.
+  const due = store.metas().metas.filter((c) => {
     const seen = c.autoTitleMessages ?? 0;
-    return !c.title && said > seen && seen < TITLE_UNTIL_MESSAGES && span(c).to >= since && c.turns.some((t) => t.role === "assistant") &&
+    return !c.title && c.messages > seen && seen < TITLE_UNTIL_MESSAGES && span(c).to >= since && c.replied &&
       !(c.titleFailedAt && new Date(c.titleFailedAt).getTime() > retryAfter);
   });
   let named = 0;
   let failed = 0;
-  for (const c of due.slice(0, o.limit ?? 3)) {
-    const said = c.turns.filter((t) => t.role === "user").length;
+  for (const m of due.slice(0, o.limit ?? 3)) {
+    const c = store.get(m.id);
+    if (!c) continue; // deleted since the index was read
+    const said = m.messages;
     try {
       const res = await llm.provider.chat({
         model: llm.spec.model,

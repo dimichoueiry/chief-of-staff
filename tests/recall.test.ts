@@ -1,3 +1,4 @@
+import { rmSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -270,5 +271,114 @@ describe("recall across conversations", () => {
     expect(await nameConversations(store, llm, { now: clock })).toEqual({ named: 0, failed: 0 }); // named after three messages: it stays
     expect(await nameConversations(store, null, { now: clock })).toEqual({ named: 0, failed: 0 });
     expect(requests).toHaveLength(3);
+  });
+
+  /**
+   * What a message costs. Recall used to read and parse every conversation ever saved, three
+   * times over (recall, names, summaries), so the price of asking anything grew with everything
+   * that had been said before. These are the tests that keep that from coming back.
+   */
+  describe("what a message reads", () => {
+    /** Counts conversation files read, whichever way they are reached. */
+    class Counted extends Conversations {
+      reads = 0;
+      override get(id: string) {
+        const c = super.get(id);
+        if (c) this.reads++;
+        return c;
+      }
+      override list() {
+        const r = super.list();
+        this.reads += r.conversations.length + r.unreadable;
+        return r;
+      }
+      override metas() {
+        const r = super.metas();
+        this.reads += r.read;
+        return r;
+      }
+    }
+
+    const dirs: string[] = [];
+    afterEach(async () => {
+      await Promise.all(dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+    });
+
+    /** A store used for a while: `chats` conversations, all ended, named and summarised. */
+    async function settled(chats: number): Promise<string> {
+      const d = await mkdtemp(join(tmpdir(), "cos-cost-"));
+      dirs.push(d);
+      let at = new Date(on("2026-01-01"));
+      const s = new Conversations(d, 60, () => at);
+      for (let i = 0; i < chats; i++) {
+        at = new Date(new Date(on("2026-01-01")).getTime() + i * 86_400_000);
+        const c = s.startNew();
+        s.append(c, ...pricing());
+        const day = todayISO(at);
+        s.patch(c.id, (fresh) => {
+          fresh.title = `Chat ${i}`;
+          fresh.summary = { text: `They talked about pricing on ${day}.`, model: "openai:gpt-test", at: at.toISOString() };
+        });
+      }
+      new Conversations(d, 60, () => clock).metas(); // the index is built once, on the first message
+      return d;
+    }
+
+    /** What one message costs: the summaries in memory, then naming and summarising in the background. */
+    async function costOfAMessage(d: string): Promise<number> {
+      const s = new Counted(d, 60, () => clock);
+      renderRecall(s, { today: todayISO(clock) });
+      await summarizeEnded(s, null, { now: clock });
+      await nameConversations(s, null, { now: clock });
+      return s.reads;
+    }
+
+    it("costs the same whether a dozen conversations were saved before it or a hundred", async () => {
+      const few = await settled(12);
+      const many = await settled(100);
+      expect(await costOfAMessage(many)).toBe(await costOfAMessage(few));
+
+      // For contrast, the old way round: the price was the whole history, every time.
+      const everything = new Counted(many, 60, () => clock);
+      everything.list();
+      expect(everything.reads).toBe(100);
+    });
+
+    it("reads only the conversation that changed when something is said", async () => {
+      const d = await settled(12);
+      // One, whatever the history: the chat in progress, which has to be read to be answered.
+      expect(await costOfAMessage(d)).toBe(1);
+
+      const writer = new Conversations(d, 60, () => clock);
+      const older = writer.metas().metas[3];
+      writer.append(writer.get(older.id)!, { role: "user", text: "one more thing" }, { role: "assistant", text: "Noted." });
+
+      const s = new Counted(d, 60, () => clock);
+      renderRecall(s, { today: todayISO(clock) });
+      expect(s.reads).toBe(1); // the one that changed, re-indexed; the other eleven untouched
+      // Picking it up again dropped its summary, so it is one to write again: that reads it, and the chat in progress.
+      expect(await summarizeEnded(s, null, { now: clock })).toEqual({ summarized: 1, failed: 0, waiting: 0 });
+      expect(s.reads).toBe(4); // it, the chat in progress, and it again to write the summary on top of what is saved now
+    });
+
+    it("searches only the conversations the dates leave in, and reads none at all without keywords", async () => {
+      const d = await settled(12);
+      const listing = new Counted(d, 60, () => clock);
+      expect(searchConversations(listing, { from: "2026-01-01" })).toContain("12 saved conversations");
+      expect(listing.reads).toBe(0); // the summaries are in the index
+
+      const dated = new Counted(d, 60, () => clock);
+      expect(searchConversations(dated, { query: "launch pro tier", from: "2026-01-02", to: "2026-01-03" })).toMatch(/in 2 conversations/);
+      expect(dated.reads).toBe(2);
+    });
+
+    it("says the same thing when there is no index to lean on", async () => {
+      const d = await settled(12);
+      const withIndex = renderRecall(new Conversations(d, 60, () => clock), { today: todayISO(clock) });
+      rmSync(join(d, ".index"), { force: true });
+      const cold = new Counted(d, 60, () => clock);
+      expect(renderRecall(cold, { today: todayISO(clock) })).toBe(withIndex);
+      expect(cold.reads).toBe(12); // it builds the index first, this once
+    });
   });
 });

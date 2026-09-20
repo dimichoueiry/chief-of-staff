@@ -6,6 +6,11 @@
  * another, or after a quiet spell; any saved one can be picked up again.
  * An aside ("by the way…") is a short side conversation kept apart from the one
  * in progress and thrown away on the way back to it. Long-term memory stays in selfhub.
+ *
+ * Listing, recall and the background summariser only need to know *about* each
+ * conversation, not what was said in it, so those go through metas(): an index
+ * beside the files that costs one small read and a stat per chat instead of
+ * parsing every transcript on every message.
  */
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
@@ -80,6 +85,76 @@ export interface ConversationSummary {
   partial?: boolean;
 }
 
+const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n).trimEnd()}…` : s);
+const oneLine = (s: string) => s.replace(/\s+/g, " ").trim();
+
+/** A summary built from the conversation's own words, used until (or instead of) a model summary. */
+export function digest(c: Conversation): string {
+  const asked = c.turns.filter((t) => t.role === "user").map((t) => `"${clip(oneLine(t.text), 90)}"`);
+  const shown = asked.length > 4 ? [...asked.slice(0, 3), `and ${asked.length - 3} more messages`] : asked;
+  const last = lastReply(c);
+  return `They said ${shown.join(", ")}.${last ? ` Last reply: ${clip(oneLine(last.text), 160)}` : ""}`;
+}
+
+function lastReply(c: Conversation): Turn | undefined {
+  return [...c.turns].reverse().find((t) => t.role === "assistant" && t.kind !== "error");
+}
+
+/** A line under a chat's name in the list: the model's summary, or the last reply. Shortened for display only, with "…". */
+export function chatPreview(c: Conversation): string {
+  const plain = (s: string) => clip(oneLine(s.replace(/\*\*|__|`/g, "").replace(/^\s*(?:[-*]|\d+\.)\s+/gm, "")), 160);
+  if (c.summary && c.summary.model !== "rules") return plain(c.summary.text);
+  return plain(lastReply(c)?.text ?? ""); // a rules summary only repeats what was said
+}
+
+/**
+ * What the chat list, recall and the background summariser need to know about a conversation
+ * without reading what was said in it. Everything here is derived from the file it came from,
+ * so it can be cached beside the files and reused until that file changes.
+ */
+export interface ConversationMeta {
+  id: string;
+  startedAt: string;
+  updatedAt: string;
+  title?: string;
+  autoTitle?: string;
+  autoTitleMessages?: number;
+  summary?: ConversationSummary;
+  summaryFailedAt?: string;
+  titleFailedAt?: string;
+  asideOf?: string;
+  /** How many messages they sent. Zero means nothing was said in it, so it is never listed or remembered. */
+  messages: number;
+  /** Whether it ever got a reply: a chat with none is too new to name. */
+  replied: boolean;
+  /** What the list of chats calls it (see displayTitle). */
+  name: string;
+  /** See digest. */
+  digest: string;
+  /** See chatPreview. */
+  preview: string;
+}
+
+export function conversationMeta(c: Conversation): ConversationMeta {
+  return {
+    id: c.id,
+    startedAt: c.startedAt,
+    updatedAt: c.updatedAt,
+    ...(c.title === undefined ? {} : { title: c.title }),
+    ...(c.autoTitle === undefined ? {} : { autoTitle: c.autoTitle }),
+    ...(c.autoTitleMessages === undefined ? {} : { autoTitleMessages: c.autoTitleMessages }),
+    ...(c.summary === undefined ? {} : { summary: c.summary }),
+    ...(c.summaryFailedAt === undefined ? {} : { summaryFailedAt: c.summaryFailedAt }),
+    ...(c.titleFailedAt === undefined ? {} : { titleFailedAt: c.titleFailedAt }),
+    ...(c.asideOf === undefined ? {} : { asideOf: c.asideOf }),
+    messages: messageCount(c),
+    replied: c.turns.some((t) => t.role === "assistant"),
+    name: displayTitle(c),
+    digest: digest(c),
+    preview: chatPreview(c),
+  };
+}
+
 export function conversationsDir(): string {
   return join(cosHome(), "conversations");
 }
@@ -89,6 +164,16 @@ export const KEEP_DELETED_DAYS = 30;
 
 /** Asides are saved under this prefix, so listing leaves them out without reading any file. */
 const ASIDE_PREFIX = "aside-";
+
+/** Bumped when ConversationMeta changes shape, so an index written by an older build is rebuilt. */
+const INDEX_VERSION = 1;
+
+/** One conversation in the index: the fingerprint of the file it was read from, and what was read. A null meta is a damaged file. */
+interface IndexEntry {
+  size: number;
+  mtime: number;
+  meta: ConversationMeta | null;
+}
 
 export class Conversations {
   constructor(
@@ -105,6 +190,14 @@ export class Conversations {
   private get pointerFile(): string {
     return join(this.dir, ".active");
   }
+
+  /** The metadata index; like the pointer, not a .json, so it is never mistaken for a chat. */
+  private get indexFile(): string {
+    return join(this.dir, ".index");
+  }
+
+  /** The index as it was last seen in this process, so repeated calls in one reply don't re-read it. */
+  private cache: Map<string, IndexEntry> | null = null;
 
   private chosen(): { id: string; at: string } | null {
     try {
@@ -196,7 +289,11 @@ export class Conversations {
     return this.names().length;
   }
 
-  /** Every saved conversation, newest first. Damaged files are skipped and counted. */
+  /**
+   * Every saved conversation, newest first, read in full. Damaged files are skipped and counted.
+   * Only for the things that need what was actually said (searching by keyword, finding a chat by
+   * name); anything that just lists or ranks conversations uses metas instead.
+   */
   list(): { conversations: Conversation[]; unreadable: number } {
     const conversations: Conversation[] = [];
     let unreadable = 0;
@@ -206,6 +303,70 @@ export class Conversations {
       else unreadable++;
     }
     return { conversations, unreadable };
+  }
+
+  /**
+   * What is known about every saved conversation, newest first, without reading the transcripts:
+   * one small index read plus a stat per chat. A file whose size or timestamp no longer matches the
+   * index is read again and re-indexed, so the answer is always current; `read` reports how many had
+   * to be, which is what the cost of a message comes down to. The index is only a cache: losing it,
+   * or failing to write it, costs a rebuild and nothing else.
+   */
+  metas(): { metas: ConversationMeta[]; unreadable: number; read: number } {
+    const known = this.cache ?? this.loadIndex();
+    const fresh = new Map<string, IndexEntry>();
+    const metas: ConversationMeta[] = [];
+    let unreadable = 0;
+    let read = 0;
+    for (const name of this.names()) {
+      const id = name.slice(0, -".json".length);
+      let size: number;
+      let mtime: number;
+      try {
+        const stat = statSync(join(this.dir, name));
+        size = stat.size;
+        mtime = stat.mtimeMs;
+      } catch {
+        continue; // deleted between listing and reading it
+      }
+      let entry = known.get(id);
+      // An entry that doesn't fingerprint the file as it is now is no entry at all, whether the
+      // conversation changed or something got at the index file.
+      if (entry?.size !== size || entry?.mtime !== mtime) {
+        const c = this.read(name);
+        read++;
+        entry = { size, mtime, meta: c ? conversationMeta(c) : null };
+      }
+      fresh.set(id, entry);
+      if (entry.meta) metas.push(entry.meta);
+      else unreadable++;
+    }
+    this.cache = fresh;
+    if (read || fresh.size !== known.size) this.saveIndex(fresh);
+    return { metas, unreadable, read };
+  }
+
+  private loadIndex(): Map<string, IndexEntry> {
+    try {
+      const f = JSON.parse(readFileSync(this.indexFile, "utf8")) as { v?: unknown; entries?: unknown };
+      if (f.v === INDEX_VERSION && f.entries && typeof f.entries === "object") {
+        return new Map(Object.entries(f.entries as Record<string, IndexEntry>));
+      }
+    } catch {
+      /* missing, damaged, or written by an older build: rebuilt from the conversations themselves */
+    }
+    return new Map();
+  }
+
+  private saveIndex(entries: Map<string, IndexEntry>): void {
+    try {
+      mkdirSync(this.dir, { recursive: true });
+      const tmp = `${this.indexFile}.tmp`;
+      writeFileSync(tmp, JSON.stringify({ v: INDEX_VERSION, entries: Object.fromEntries(entries) }), { mode: 0o600 });
+      renameSync(tmp, this.indexFile);
+    } catch {
+      /* a read-only home only costs the next caller a rebuild */
+    }
   }
 
   /** Save changes to a conversation that was read from the store. */
@@ -247,6 +408,7 @@ export class Conversations {
     const tmp = `${this.file(c.id)}.tmp`;
     writeFileSync(tmp, JSON.stringify(c, null, 2), { mode: 0o600 });
     renameSync(tmp, this.file(c.id));
+    this.cache?.delete(c.id); // never trust size and timestamp for a file this process just wrote
   }
 
   /**
