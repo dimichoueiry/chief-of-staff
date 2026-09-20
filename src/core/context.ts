@@ -5,10 +5,11 @@
  */
 import { readdir, readFile } from "node:fs/promises";
 import { join, relative } from "node:path";
-import type { Config } from "../config.js";
+import { DEFAULT_IDENTITY_CHARS, type Config } from "../config.js";
 import { cadenceDueToday, daysIdle, describeCadence, isSilent, parkedDueForReview } from "../logic/cadence.js";
 import { eventDays, eventsInRange, formatAgenda, formatEvent, type CalendarEvent, type CalendarProvider } from "../sensors/calendar.js";
 import { addDays, longDate, todayISO, weekdayName } from "../util/dates.js";
+import { STOP } from "../util/words.js";
 import { Journal, type JournalEntry } from "./journal.js";
 import { Ledger, findProject, normalizeStatus, type Project } from "./ledger.js";
 import { Notes, type Note } from "./notes.js";
@@ -44,13 +45,30 @@ export interface ContextOptions {
   project?: string;
   today?: string;
   calendarProvider?: CalendarProvider;
+  /** What they said, so identity is loaded around it (see readIdentity). */
+  query?: string;
 }
 
 const STORE_DIRS = new Set(["goals", "journal", "notes", "links", ".git", "node_modules", "assets"]);
 
-/** Every markdown file in selfhub that is not one of the stores: who you are. */
-export async function readIdentity(selfhubDir: string): Promise<string> {
-  const files: string[] = [];
+export interface IdentityOptions {
+  /** What is being asked, so the files it is about are loaded too. */
+  query?: string;
+  /** Rough size limit for the files that go into every message whatever is asked. */
+  maxChars?: number;
+  /** How much more the files a question is about may add on top. Half of maxChars by default. */
+  focusChars?: number;
+}
+
+interface IdentityFile {
+  /** Path relative to selfhub, which is how the model sees it. */
+  name: string;
+  text: string;
+}
+
+/** Every markdown file in selfhub that is not one of the stores, in path order. Empty files are left out. */
+async function identityFiles(selfhubDir: string): Promise<IdentityFile[]> {
+  const paths: string[] = [];
   async function walk(dir: string) {
     let entries;
     try {
@@ -62,16 +80,89 @@ export async function readIdentity(selfhubDir: string): Promise<string> {
       if (e.isDirectory()) {
         if (!STORE_DIRS.has(e.name) && !e.name.startsWith(".")) await walk(join(dir, e.name));
       } else if (e.name.endsWith(".md") && !(dir === selfhubDir && e.name.toLowerCase() === "readme.md")) {
-        files.push(join(dir, e.name));
+        paths.push(join(dir, e.name));
       }
     }
   }
   await walk(selfhubDir);
-  files.sort();
-  const parts: string[] = [];
-  for (const f of files) {
-    const text = (await readFile(f, "utf8")).trim();
-    if (text) parts.push(`### ${relative(selfhubDir, f)}\n${text}`);
+  paths.sort();
+  const files: IdentityFile[] = [];
+  for (const p of paths) {
+    const text = (await readFile(p, "utf8")).trim();
+    if (text) files.push({ name: relative(selfhubDir, p), text });
+  }
+  return files;
+}
+
+const size = (f: IdentityFile) => f.name.length + f.text.length + 8; // "### ", two newlines, the blank line between files
+
+/** How many left-out files are named one by one, so the note itself stays short. */
+const MAX_NAMED = 20;
+
+/**
+ * Who you are, from selfhub, within a size budget.
+ *
+ * All of this is in the prompt on every single message, so it cannot be all of selfhub: one long
+ * working document kept in there would otherwise crowd out the short files that actually say who
+ * you are. Two passes. The first takes files shortest first until the budget is spent, so the
+ * short ones are always here and the same ones are here every time, whatever is asked. The second
+ * spends a smaller allowance on the files this particular question is about — it only ever adds,
+ * so asking about one project can't cost you your own profile. Nothing is cut in the middle: a
+ * file is either here in full or named at the end as one you have but aren't looking at.
+ */
+export async function readIdentity(selfhubDir: string, o: IdentityOptions = {}): Promise<string> {
+  const maxChars = o.maxChars ?? DEFAULT_IDENTITY_CHARS;
+  const focusChars = o.focusChars ?? Math.round(maxChars / 2);
+  const files = await identityFiles(selfhubDir);
+  const chosen = new Set<string>();
+
+  // Always here: the short files, which is what identity is made of.
+  let used = 0;
+  for (const f of [...files].sort((a, b) => size(a) - size(b) || a.name.localeCompare(b.name))) {
+    if (chosen.size && used + size(f) > maxChars) continue; // too big for what's left; a shorter one may still fit
+    chosen.add(f.name);
+    used += size(f);
+  }
+
+  // Here because of what was asked: a word in the path is what a file is about, so any match on the
+  // name outranks any number in the body ("my ML Guerilla writing style" has to reach
+  // ml-guerilla/writing-style.md, not the nearest shorter file that happens to use those words).
+  const words = [...new Set((o.query ?? "").toLowerCase().split(/[^\p{L}\p{N}]+/u))].filter((w) => w.length > 1 && !STOP.has(w));
+  if (words.length) {
+    const score = (f: IdentityFile) => {
+      const name = f.name.toLowerCase();
+      const body = f.text.toLowerCase();
+      return words.filter((w) => name.includes(w)).length * (words.length + 1) + words.filter((w) => body.includes(w)).length;
+    };
+    const asked = files
+      .filter((f) => !chosen.has(f.name))
+      .map((f) => ({ f, score: score(f) }))
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score || size(a.f) - size(b.f) || a.f.name.localeCompare(b.f.name));
+    let extra = 0;
+    let first = true;
+    for (const { f } of asked) {
+      // The best match gets in even when it alone is more than the allowance — it is the file the
+      // question is about — as long as no one file outweighs everything that is always here.
+      const room = first && size(f) <= maxChars ? Math.max(focusChars, size(f)) : focusChars;
+      if (extra + size(f) > room) continue;
+      chosen.add(f.name);
+      extra += size(f);
+      first = false;
+    }
+  }
+
+  // Written back in path order: the same files always read the same way.
+  const parts = files.filter((f) => chosen.has(f.name)).map((f) => `### ${f.name}\n${f.text}`);
+  const left = files.filter((f) => !chosen.has(f.name));
+  if (left.length) {
+    const named = left.slice(0, MAX_NAMED);
+    const rest = left.length - named.length;
+    parts.push(
+      `### not loaded\nYou also have ${left.length} file${left.length === 1 ? "" : "s"} in selfhub that ${left.length === 1 ? "is" : "are"} not in this memory, because everything here is in every message: ` +
+        `${named.map((f) => `${f.name} (${Math.round(size(f) / 1_000)}k)`).join(", ")}${rest ? `, and ${rest} more` : ""}. ` +
+        `Say so rather than guessing at what ${left.length === 1 ? "it says" : "they say"}.`,
+    );
   }
   return parts.join("\n\n");
 }
@@ -81,7 +172,7 @@ export async function buildContext(opts: ContextOptions): Promise<ContextBundle>
   const today = opts.today ?? todayISO();
   const dir = config.selfhubDir;
   const [identity, projects, journal, cal, remindersDue, remindersUpcoming, notes] = await Promise.all([
-    readIdentity(dir),
+    readIdentity(dir, { query: opts.query, maxChars: config.identityChars }),
     new Ledger(dir).read(),
     new Journal(dir).entries(config.journalDays, today),
     eventsInRange(today, addDays(today, config.calendarDays - 1), opts.calendarProvider),

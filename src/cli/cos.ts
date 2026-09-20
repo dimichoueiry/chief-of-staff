@@ -378,19 +378,18 @@ const conversationsCmd = program
     const store = new Conversations(conversationsDir(), cfg.conversationIdleMinutes);
     const days = Math.max(1, Number(o.days) || 7);
     const since = addDays(today(), -(days - 1));
-    const { conversations, unreadable } = store.list();
+    const { metas, unreadable, read } = store.metas();
     const active = store.current().id;
-    const shown = conversations.filter((c) => c.turns.some((t) => t.role === "user") && todayISO(new Date(c.updatedAt)) >= since);
+    const shown = metas.filter((c) => c.messages > 0 && todayISO(new Date(c.updatedAt)) >= since);
     if (!shown.length) console.log(`No conversations in the last ${days} day${days === 1 ? "" : "s"}.`);
     for (const c of shown) {
       const start = new Date(c.startedAt);
       const label = `${todayISO(start)} ${start.toTimeString().slice(0, 5)}`;
-      const said = c.turns.filter((t) => t.role === "user").length;
-      console.log(`${bold(label)}  ${dim(`${said} message${said === 1 ? "" : "s"}${c.id === active ? " · in progress" : c.summary ? ` · ${c.summary.model}` : " · not summarised yet"}`)}`);
+      console.log(`${bold(label)}  ${dim(`${c.messages} message${c.messages === 1 ? "" : "s"}${c.id === active ? " · in progress" : c.summary ? ` · ${c.summary.model}` : " · not summarised yet"}`)}`);
       console.log(`  ${summaryText(c)}`);
     }
     if (unreadable) console.log(dim(`${unreadable} damaged file${unreadable === 1 ? "" : "s"} in ${store.dir} could not be read.`));
-    console.log(dim(`${conversations.length} saved in ${store.dir}`));
+    console.log(dim(`${metas.length} saved in ${store.dir}; ${read} read this time, the rest from the index`));
   });
 
 conversationsCmd
@@ -573,10 +572,14 @@ program
   .command("context")
   .argument("[intent]", "brief | ask | focus | capture | wrap", "brief")
   .option("--project <name>")
+  .option("--about <words>", "a question, so identity is loaded around it as it would be in a real message")
   .description("print the memory block the model would see")
-  .action(async (intent: Intent, o: { project?: string }) => {
-    const ctx = await buildContext({ config: config(), intent, project: o.project, today: today() });
-    console.log(renderContext(ctx));
+  .action(async (intent: Intent, o: { project?: string; about?: string }) => {
+    const ctx = await buildContext({ config: config(), intent, project: o.project, today: today(), query: o.about });
+    const text = renderContext(ctx);
+    console.log(text);
+    // On stderr, so piping the block stays clean: this is the floor every message pays.
+    console.error(dim(`\n${text.length} characters (~${Math.round(text.length / 4)} tokens), of which identity ${ctx.identity.length}. COS_IDENTITY_CHARS=${config().identityChars}.`));
   });
 
 // ---------- initiative: scheduler and nudges ----------

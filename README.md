@@ -21,6 +21,15 @@ the first time the app runs):
 | Commitments ledger | every project: why, status, cadence, next action, last touched | `goals/projects.md` |
 | Journal | two lines a day: what happened, what's next | `journal/YYYY-MM-DD.md` |
 
+Identity is every markdown file in selfhub that isn't one of the stores, and all of it is in the
+prompt on every message, so it has a size budget (`COS_IDENTITY_CHARS`, 32,000 characters by
+default). The short files — profile, preferences, voice — always fit and are always there; the files
+a question is about are loaded on top of them; and anything left over is named in the prompt, with
+its size, so the assistant tells you it doesn't have a file instead of guessing at it. Nothing is
+ever cut in the middle. `cos context --about "…"` prints exactly what a message would carry, and its
+size. Keeping a long working document inside selfhub is what the budget is for: without one, it
+never comes up.
+
 One tool-use loop, running on whichever model you choose, reads those stores plus your calendar and git activity,
 and answers through a small set of intents. The "specialists" are prompt templates,
 not services. Every write to memory is a git commit, so you can see and undo
@@ -160,6 +169,10 @@ filed, and what it opened (even the instant "open …" requests that never touch
   dropped and rewritten when it ends again.
 - Conversations are saved in `~/.cos/conversations`, so restarting the app doesn't lose the thread.
   Only the most recent exchanges that fit a size budget are sent to the model.
+- What each chat is *about* — its name, its summary, how many messages — is kept in a small index
+  (`~/.cos/conversations/.index`) beside them, so listing your chats and remembering earlier ones
+  costs one small read and not a pass over everything you have ever said. It is only a cache: delete
+  it and it rebuilds itself on the next message.
 
 ### And earlier conversations
 
@@ -168,9 +181,13 @@ decided, what it filed or opened, and what was left open. Short conversations ar
 words instead, with no model call. Every new message carries the summaries from the last 7 days,
 so "what did we decide about pricing yesterday?" just works.
 
+Those summaries come from the index, so a message costs the same whether ten conversations were
+saved before it or a thousand.
+
 For anything a summary leaves out, or anything older, the model searches every saved conversation
-by keywords and dates (`get_conversations`), and quotes what was actually said. When there is more
-than fits, it is told how much it isn't seeing, never a silent cut.
+by keywords and dates (`get_conversations`), and quotes what was actually said. That search, and
+only that search, reads the conversations themselves — and only the ones the dates leave in. When
+there is more than fits, it is told how much it isn't seeing, never a silent cut.
 
 ```bash
 cos conversations                     # the last 7 days, with summaries
@@ -507,6 +524,7 @@ Everything is an environment variable (see `.env.example`):
 - `COS_EFFORT` — `low`, `medium` (default) or `high` reasoning depth, where the model supports it
 - `COS_PROJECT_ROOTS` — folders scanned for git activity, default `~/Desktop`
 - `COS_NAME` — your first name for greetings
+- `COS_IDENTITY_CHARS` — how much of selfhub goes into every message, default `32000` (~8k tokens)
 
 ## Layout
 
