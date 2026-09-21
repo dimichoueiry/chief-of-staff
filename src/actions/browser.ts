@@ -544,6 +544,28 @@ export class AssistantBrowser {
     return this.settled();
   }
 
+  /**
+   * Answer the browser's own alert or confirm box. Like a file chooser, it stops the page being
+   * readable until it is answered, so it cannot wait for an OK; the click that raised it already
+   * went through the gate, and saying yes here is finishing that, not starting something new.
+   */
+  async answerDialog(accept: boolean, promptText?: string): Promise<string> {
+    await this.call("browser_handle_dialog", { accept, ...(promptText ? { promptText } : {}) });
+    return this.settled();
+  }
+
+  /** A key with nowhere to type it: Escape to close an overlay, Tab and the arrows to move about. */
+  async press(key: string): Promise<string> {
+    await this.call("browser_press_key", { key });
+    return this.settled();
+  }
+
+  /** The windows it has open, and moving between them: a click can leave the real page in a new one. */
+  async tabs(action: "list" | "close" | "select", index?: number): Promise<string> {
+    const out = await this.call("browser_tabs", { action, ...(index === undefined ? {} : { index }) });
+    return action === "list" ? out : `${out}\n${await this.settled()}`;
+  }
+
   async back(): Promise<string> {
     await this.call("browser_navigate_back", {});
     return this.settled();

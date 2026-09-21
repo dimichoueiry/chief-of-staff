@@ -340,6 +340,9 @@ It can scroll what's shown, too: "scroll down", "go to the chorus", or "scroll s
 - **Putting a picture on a site:** it clicks what adds a photo and answers the file chooser that opens
   with a picture or page it made, or a file of yours under your home folder — nothing else on the disk.
   Attaching is not posting: whatever publishes it still waits for your OK.
+- **When a page stops answering** something is in front of it: it answers the browser's own "Are you
+  sure?" box, presses Escape on an overlay with no close, and looks in the other windows for what a
+  click opened somewhere else. Enter waits for your OK, because Enter sends.
 - The window closes after 30 quiet minutes and opens again when needed. Sign-ins stay.
 - Chrome is used if installed, otherwise Edge (`COS_BROWSER=msedge` to choose).
 
