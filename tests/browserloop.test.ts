@@ -174,6 +174,21 @@ describe("running a goal on a page", () => {
     expect((out as { why: string }).why).toMatch(/type something the goal doesn't say/);
   });
 
+  it("hands the page back with what it did when Jev cannot be reached", async () => {
+    const { browser, fake } = browserOf();
+    let asked = 0;
+    const flaky: Jev = async (req) => {
+      if (++asked > 1) throw new Error("Jev answered 503");
+      return fakeJev({ want: /Assignments/ })(req);
+    };
+    const out = await runGoal(flaky, browser, { goal: "open the assignments page" });
+    expect(out).toMatchObject({ kind: "handover", steps: ['clicked link "Assignments"'] });
+    expect((out as { why: string }).why).toMatch(/Jev couldn't answer \(Jev answered 503\)/);
+    // The page it hands back is the real one, so the model can pick up where this left off.
+    expect((out as { page: string }).page).toMatch(/Nothing left/);
+    expect(fake.calls.filter((c) => c.startsWith("browser_click"))).toHaveLength(1);
+  });
+
   it("gives up instead of clicking the same dead element over and over", async () => {
     // "More actions" changes nothing, so the second step picks it again.
     const out = await runGoal(fakeJev({ want: /More actions/ }), browserOf().browser, { goal: "open the menu" });

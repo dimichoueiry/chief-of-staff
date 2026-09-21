@@ -83,7 +83,14 @@ export async function runGoal(jev: Jev, browser: AssistantBrowser, o: GoalReques
     if (!elements.length) return { kind: "handover", why: "the page has nothing to act on yet", page, steps };
 
     const labels = elements.map((_, i) => `a${i + 1}`);
-    const answers = await ask(jev, o, steps, labels, elements);
+    let answers: Awaited<ReturnType<typeof ask>>;
+    try {
+      answers = await ask(jev, o, steps, labels, elements);
+    } catch (err) {
+      // A slow, unreachable or unreadable Jev costs one step, never the run: the model is holding
+      // the page and everything done so far, so it carries on from here as it would have anyway.
+      return { kind: "handover", why: `Jev couldn't answer (${(err as Error).message})`, page, steps };
+    }
     const finished = answers.finished as NoulAnswer;
     if (finished.noul >= SURE_ITS_DONE) return { kind: "done", page, steps };
 
