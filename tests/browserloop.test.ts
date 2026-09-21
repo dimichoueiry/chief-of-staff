@@ -8,7 +8,7 @@ import { confirmView } from "../src/actions/pending.js";
 import { performPending } from "../src/actions/perform.js";
 import { describeElement, runGoal } from "../src/brain/browserloop.js";
 import type { Jev, JevRequest, JevResult } from "../src/brain/jev.js";
-import { withoutOldPages } from "../src/brain/loop.js";
+import { runIntent, withoutOldPages } from "../src/brain/loop.js";
 import { ToolRuntime } from "../src/brain/tools.js";
 import { loadConfig } from "../src/config.js";
 import { makeTmpSelfhub } from "./helpers/tmp-selfhub.js";
@@ -378,5 +378,36 @@ describe("a site that asks before it does the thing", () => {
     )).text;
     expect(out).not.toMatch(/NOT happened yet/);
     expect(browser.dialog()).toBeNull();
+  });
+});
+
+describe("running out of steps", () => {
+  let selfhub: string;
+  let cleanup: () => Promise<void>;
+  beforeEach(async () => { ({ dir: selfhub, cleanup } = await makeTmpSelfhub()); });
+  afterEach(async () => { await cleanup(); });
+
+  it("says it ran out and what it managed, instead of replying with nothing", async () => {
+    let turn = 0;
+    const provider = {
+      id: "openai" as const,
+      async chat() {
+        turn++;
+        // Always wants another tool: the cap is what stops it, with nothing said.
+        return { text: "", toolCalls: [{ id: `t${turn}`, name: "add_note", input: { text: "keeping busy" } }], stop: "tool_use" as const, model: "test" };
+      },
+    };
+    const r = await runIntent({
+      config: loadConfig({ COS_SELFHUB: selfhub, COS_PROJECT_ROOTS: "/nonexistent" }),
+      intent: "ask",
+      message: "do the long thing",
+      today: "2026-09-15",
+      maxTurns: 3,
+      llm: { provider, spec: { provider: "openai", model: "test" } as never },
+    });
+    expect(r.turns).toBe(3);
+    expect(r.text).toMatch(/^I ran out of steps before finishing that \(3 in one go\)/);
+    expect(r.text).toMatch(/I got as far as: add_note ×3/);
+    expect(r.text).toMatch(/Tell me to carry on/);
   });
 });
