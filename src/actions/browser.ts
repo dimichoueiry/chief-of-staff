@@ -368,6 +368,21 @@ export class AssistantBrowser {
     private readonly settle: Settle = { stepMs: 500, maxMs: 3000, thinMs: 2000 },
   ) {}
 
+  /**
+   * Everything this does goes through here, so a page in a state Playwright refuses to work with
+   * says which tool gets out of it instead of repeating wording only Playwright understands.
+   */
+  private async call(tool: string, args: Record<string, unknown>): Promise<string> {
+    try {
+      return await this.driver.call(tool, args);
+    } catch (err) {
+      if (/does not handle the modal state/i.test((err as Error).message)) {
+        throw new Error("A file chooser is open on the page and nothing can be read or clicked until it is answered. Use browser_upload with the picture's id, or with nothing to close it.");
+      }
+      throw err;
+    }
+  }
+
   sites(): string[] {
     return readSites(this.sitesFile);
   }
@@ -382,7 +397,7 @@ export class AssistantBrowser {
 
   /** The page now: on the list, its outline; off it, only where it is. */
   async read(find?: string): Promise<string> {
-    const page = parsePage(await this.driver.call("browser_snapshot", {}));
+    const page = parsePage(await this.call("browser_snapshot", {}));
     if (page.url && !/^(?:about|chrome|edge|data):/.test(page.url) && !this.allowed(page.url)) {
       this.last = null;
       const site = siteOf(page.url) ?? page.url;
@@ -418,7 +433,7 @@ export class AssistantBrowser {
 
   async open(url: string): Promise<string> {
     if (!this.allowed(url)) throw new Error(`${siteOf(url) ?? url} isn't on the browser's site list`);
-    await this.driver.call("browser_navigate", { url });
+    await this.call("browser_navigate", { url });
     return this.settled();
   }
 
@@ -471,7 +486,7 @@ export class AssistantBrowser {
 
   async isPassword(el: Element): Promise<boolean> {
     if (/password|passcode|\bpin\b|one-time code|security code/i.test(el.name)) return true;
-    const out = await this.driver.call("browser_evaluate", {
+    const out = await this.call("browser_evaluate", {
       element: el.name || el.role,
       target: el.ref,
       function: "(el) => el.type === 'password' || /password|one-time-code/.test(el.autocomplete || '')",
@@ -480,18 +495,18 @@ export class AssistantBrowser {
   }
 
   async click(el: Element): Promise<string> {
-    await this.driver.call("browser_click", { element: el.name || el.role, target: el.ref });
+    await this.call("browser_click", { element: el.name || el.role, target: el.ref });
     return this.settled();
   }
 
   async type(el: Element, text: string, submit: boolean): Promise<string> {
     if (await this.isPassword(el)) throw new Error("Refused: that's a password field. They sign in themselves, in the assistant's browser window.");
-    await this.driver.call("browser_type", { element: el.name || el.role, target: el.ref, text, submit });
+    await this.call("browser_type", { element: el.name || el.role, target: el.ref, text, submit });
     return this.settled();
   }
 
   async select(el: Element, values: string[]): Promise<string> {
-    await this.driver.call("browser_select_option", { element: el.name || el.role, target: el.ref, values });
+    await this.call("browser_select_option", { element: el.name || el.role, target: el.ref, values });
     return this.settled();
   }
 
@@ -504,13 +519,13 @@ export class AssistantBrowser {
     if (!this.last) throw new Error("Read the page first (browser_read), then scroll it.");
     if (o.ref) {
       const el = this.element(o.ref);
-      const out = await this.driver.call("browser_evaluate", { element: el.name || el.role, target: el.ref, function: SCROLL_TO_ELEMENT });
+      const out = await this.call("browser_evaluate", { element: el.name || el.role, target: el.ref, function: SCROLL_TO_ELEMENT });
       return `Scrolled to “${el.name || el.role}”. ${describeScroll(parseScroll(out))}`;
     }
     const screens = Math.min(Math.max(Number(o.screens) || 1, 0.25), 10);
     const speed = SCROLL_SPEEDS[o.speed ?? "slow"] ?? SCROLL_SPEEDS.slow;
     const call = `(${SCROLL_PAGE})(${JSON.stringify({ to: o.to, screens, speed })})`;
-    const state = parseScroll(await this.driver.call("browser_evaluate", { function: `async () => ${call}` }));
+    const state = parseScroll(await this.call("browser_evaluate", { function: `async () => ${call}` }));
     if (o.to === "auto") return state.scrollable ? `Scrolling on its own, ${o.speed ?? "slow"} (about ${speed} px a second), until they say stop or it reaches the end. ${describeScroll(state)}` : describeScroll(state);
     if (o.to === "stop") return `Stopped scrolling. ${describeScroll(state)}`;
     if (!state.moved) return describeScroll(state);
@@ -518,8 +533,19 @@ export class AssistantBrowser {
     return `Scrolled ${what}. ${describeScroll(state)}`;
   }
 
+  /**
+   * Answer the file chooser a click has just opened, or close it with nothing. Until it is answered
+   * the page cannot even be read — every snapshot comes back "does not handle the modal state" — so
+   * this is not something that can wait for an OK without wedging the browser. What it sends is
+   * limited to files the assistant itself made or the user's own; what publishes them still asks.
+   */
+  async upload(paths: string[]): Promise<string> {
+    await this.call("browser_file_upload", paths.length ? { paths } : {});
+    return this.settled();
+  }
+
   async back(): Promise<string> {
-    await this.driver.call("browser_navigate_back", {});
+    await this.call("browser_navigate_back", {});
     return this.settled();
   }
 

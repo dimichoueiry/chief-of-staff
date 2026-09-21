@@ -337,6 +337,9 @@ It can scroll what's shown, too: "scroll down", "go to the chorus", or "scroll s
   read it.
 - Long pages are cut at about 24,000 characters, and it says how much it isn't seeing; it can then
   search the page for words instead.
+- **Putting a picture on a site:** it clicks what adds a photo and answers the file chooser that opens
+  with a picture or page it made, or a file of yours under your home folder — nothing else on the disk.
+  Attaching is not posting: whatever publishes it still waits for your OK.
 - The window closes after 30 quiet minutes and opens again when needed. Sign-ins stay.
 - Chrome is used if installed, otherwise Edge (`COS_BROWSER=msedge` to choose).
 
