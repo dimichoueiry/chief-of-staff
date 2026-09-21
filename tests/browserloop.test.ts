@@ -640,3 +640,83 @@ describe("answering a file chooser", () => {
     expect(out.result).toMatch(/A file chooser is open .* Use browser_upload with the picture's id, or with nothing to close it\./);
   });
 });
+
+describe("getting a stuck page moving again", () => {
+  let selfhub: string;
+  let cleanup: () => Promise<void>;
+  let home: string;
+  beforeEach(async () => {
+    ({ dir: selfhub, cleanup } = await makeTmpSelfhub());
+    home = await mkdtemp(join(tmpdir(), "cos-stuck-"));
+  });
+  afterEach(async () => { await cleanup(); await rm(home, { recursive: true, force: true }); });
+
+  function spy() {
+    const calls: { tool: string; args: Record<string, unknown> }[] = [];
+    const driver: BrowserDriver = {
+      async call(tool, args) {
+        calls.push({ tool, args });
+        if (tool === "browser_snapshot") return "### Page\n- Page URL: https://x.test/\n- Page Title: X\n### Snapshot\n```yaml\n- button \"Send\" [ref=e1]\n```";
+        if (tool === "browser_tabs") return "1: X\n2: Y";
+        return "";
+      },
+      async close() {},
+    };
+    return { driver, calls };
+  }
+
+  const runtime = (browser: AssistantBrowser) =>
+    new ToolRuntime(loadConfig({ COS_SELFHUB: selfhub, COS_PROJECT_ROOTS: "/nonexistent" }), "2026-09-15", undefined, {
+      browser, access: () => ({ terminal: "ask", agents: "ask", links: "auto", screen: "auto", browser: "ask" }),
+    });
+
+  const browserOf = (fake: ReturnType<typeof spy>) => {
+    const b = new AssistantBrowser(fake.driver, join(home, "browser.json"), { stepMs: 0, maxMs: 0 });
+    b.allow("https://x.test/");
+    return b;
+  };
+
+  it("answers the browser's own confirm box either way", async () => {
+    const fake = spy();
+    const tools = runtime(browserOf(fake));
+    await tools.execute("browser_dialog", { accept: true });
+    await tools.execute("browser_dialog", { accept: false });
+    expect(fake.calls.filter((c) => c.tool === "browser_handle_dialog").map((c) => c.args.accept)).toEqual([true, false]);
+  });
+
+  it("presses Escape freely but makes Enter wait, because Enter sends", async () => {
+    const fake = spy();
+    const tools = runtime(browserOf(fake));
+    const esc = await tools.execute("browser_key", { key: "Escape" });
+    expect(esc.isError).toBe(false);
+    expect(fake.calls.some((c) => c.tool === "browser_press_key" && c.args.key === "Escape")).toBe(true);
+
+    const enter = await tools.execute("browser_key", { key: "Enter" });
+    expect(enter.result).toMatch(/Not pressed yet: Enter can send/);
+    expect(fake.calls.some((c) => c.tool === "browser_press_key" && c.args.key === "Enter")).toBe(false);
+    expect(tools.pending.map(confirmView)).toEqual([expect.objectContaining({ verb: "Press" })]);
+  });
+
+  it("presses the Enter they agreed to", async () => {
+    const fake = spy();
+    const browser = browserOf(fake);
+    const out = await performPending(
+      { id: "1", kind: "browser-act", createdAt: Date.now(), label: "press Enter", detail: "d", verb: "Press",
+        payload: { action: "key", key: "Enter", url: "https://x.test/" } },
+      { browser },
+    );
+    expect(out.finished).toBe(true);
+    expect(fake.calls.some((c) => c.tool === "browser_press_key" && c.args.key === "Enter")).toBe(true);
+  });
+
+  it("lists tabs, and will not select one without saying which", async () => {
+    const fake = spy();
+    const tools = runtime(browserOf(fake));
+    expect((await tools.execute("browser_tabs", { action: "list" })).result).toContain("1: X");
+    const bad = await tools.execute("browser_tabs", { action: "select" });
+    expect(bad.isError).toBe(true);
+    expect(bad.result).toMatch(/"index" is required/);
+    await tools.execute("browser_tabs", { action: "select", index: 2 });
+    expect(fake.calls.some((c) => c.tool === "browser_tabs" && c.args.action === "select" && c.args.index === 2)).toBe(true);
+  });
+});

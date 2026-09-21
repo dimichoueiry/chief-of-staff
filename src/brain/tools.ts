@@ -477,6 +477,42 @@ export const TOOLS: Record<string, ToolSpec> = {
       },
     },
   },
+  browser_dialog: {
+    name: "browser_dialog",
+    description:
+      "Answer the browser's own alert or confirm box (\"Are you sure?\"), which freezes the page until it is answered. " +
+      "Accept to go through with what the click started, or decline to call it off. Only for the browser's own boxes: " +
+      "a box drawn by the site is part of the page, so click its buttons by their [ref=…] instead.",
+    parameters: {
+      type: "object",
+      properties: {
+        accept: { type: "boolean", description: "True to go through with it, false to call it off" },
+        text: s("For a box that asks them to type something, what to type"),
+      },
+      required: ["accept"],
+    },
+  },
+  browser_key: {
+    name: "browser_key",
+    description:
+      "Press a key with nowhere to type it: Escape to close an overlay that has no visible close, Tab to move on, " +
+      "ArrowDown or ArrowUp to move through a list of suggestions. To type words into a field, use browser_type.",
+    parameters: { type: "object", properties: { key: s("Escape, Tab, Enter, ArrowDown, PageDown, …") }, required: ["key"] },
+  },
+  browser_tabs: {
+    name: "browser_tabs",
+    description:
+      "The windows your browser has open, and moving between them: a click can open what you want in a new one and leave you looking at the old. " +
+      "List them, go to one by its number, or close one.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["list", "select", "close"], description: "What to do" },
+        index: { type: "number", description: "Which tab, from the list, for select and close" },
+      },
+      required: ["action"],
+    },
+  },
   browser_back: {
     name: "browser_back",
     description: "Go back to the previous page in your browser.",
@@ -1280,6 +1316,36 @@ private async pursue(goal: string, rawValues: unknown): Promise<string> {
         if (!paths.length) return `Closed the file chooser without sending anything.\n${out}`;
         this.done.push({ kind: "browser-act", detail: `Send ${paths.map((p) => basename(p)).join(", ")} to ${siteOf(this.browser().address) ?? "the page"}` });
         return `Sent ${paths.map((p) => basename(p)).join(", ")} to the page. It is attached, not posted: what publishes it still waits for their OK.\n${out}`;
+      }
+      case "browser_dialog": {
+        const mode = this.browserAllowed();
+        const accept = input.accept === true;
+        const browser = this.browser();
+        const detail = `${accept ? "Go through with" : "Call off"} what the browser is asking about on ${browser.address}`;
+        if (accept && mode === "ask") this.done.push({ kind: "browser-act", detail });
+        return browser.answerDialog(accept, this.str(input, "text") || undefined);
+      }
+      case "browser_key": {
+        const mode = this.browserAllowed();
+        const key = this.str(input, "key", true);
+        const browser = this.browser();
+        // Enter can send whatever is in front of it, so it waits the way typing with Enter does.
+        if (/^(Enter|NumpadEnter)$/i.test(key) && mode === "ask") {
+          const detail = `Press Enter on ${browser.address}`;
+          const twice = this.repeated("browser-act", detail, true);
+          if (twice) return twice;
+          this.pending.push(queue("browser-act", { action: "key", key, url: browser.address }, { label: `press Enter on ${siteOf(browser.address) ?? "the page"}`, detail, verb: "Press" }));
+          return "Not pressed yet: Enter can send what's in front of it. Ask them in one short sentence whether to, saying what it would send.";
+        }
+        return browser.press(key);
+      }
+      case "browser_tabs": {
+        this.browserAllowed();
+        const action = this.str(input, "action", true);
+        if (!["list", "select", "close"].includes(action)) throw new Error('"action" must be list, select or close');
+        const index = input.index === undefined ? undefined : Number(input.index);
+        if (action !== "list" && !Number.isInteger(index)) throw new Error('"index" is required for select and close: list the tabs first.');
+        return this.browser().tabs(action as "list" | "select" | "close", index);
       }
       case "browser_back":
         this.browserAllowed();

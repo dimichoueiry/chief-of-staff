@@ -69,9 +69,11 @@ export async function performPending(p: Pending, deps: PerformDeps = {}): Promis
       return done(`Added ${site} to the browser's site list.\n${await browser.open(url)}`);
     }
     case "browser-act": {
-      const a = p.payload as { action: "click" | "type"; element: Element; url: string; text?: string; submit?: boolean };
+      const a = p.payload as { action: "click" | "type" | "key"; element?: Element; url: string; text?: string; submit?: boolean; key?: string };
       const browser = deps.browser ?? sharedBrowser();
-      const el = await browser.again(a.element, a.url);
+      if (a.action === "key") return done(await browser.press(a.key ?? "Enter"));
+      const el0 = a.element!;
+      const el = await browser.again(el0, a.url);
       const out = a.action === "click" ? await browser.click(el) : await browser.type(el, a.text ?? "", Boolean(a.submit));
       const dialog = browser.dialog();
       if (!dialog) return done(out);
