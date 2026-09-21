@@ -7,7 +7,7 @@
  * is refused outright. The copy lives in a folder nobody needs permission for.
  */
 import { execFile } from "node:child_process";
-import { access, copyFile, cp, mkdir, rename, rm } from "node:fs/promises";
+import { access, copyFile, cp, mkdir, readdir, rename, rm, stat } from "node:fs/promises";
 import { dirname, join, relative, sep } from "node:path";
 import { promisify } from "node:util";
 import { homeEnvFile, syncProjectEnv } from "../util/env.js";
@@ -74,7 +74,42 @@ export async function copyRuntime(repoRoot: string, dest: string): Promise<numbe
   return packages.length;
 }
 
+/** The newest mtime under a folder, or 0 if it isn't there. */
+async function newest(dir: string, ext: string): Promise<number> {
+  let latest = 0;
+  const walk = async (at: string): Promise<void> => {
+    let entries;
+    try {
+      entries = await readdir(at, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const full = join(at, e.name);
+      if (e.isDirectory()) await walk(full);
+      else if (e.name.endsWith(ext)) latest = Math.max(latest, (await stat(full)).mtimeMs);
+    }
+  };
+  await walk(dir);
+  return latest;
+}
+
+/**
+ * The app runs the compiled copy, so deploying without building ships whatever was built last and
+ * says it shipped what you just wrote. Refuse instead: it costs one command to be sure, where the
+ * alternative is watching a change you made not happen and looking for the reason somewhere else.
+ */
+async function requireFreshBuild(repoRoot: string): Promise<void> {
+  const [src, built] = await Promise.all([newest(join(repoRoot, "src"), ".ts"), newest(join(repoRoot, "dist"), ".js")]);
+  if (!built) throw new Error("Nothing is built yet. Run `npm run build` first.");
+  if (src > built) {
+    const behind = Math.round((src - built) / 60_000);
+    throw new Error(`dist is ${behind > 0 ? `${behind} minutes ` : ""}older than src, so this would deploy the previous version. Run \`npm run build\` first.`);
+  }
+}
+
 export async function deployRuntime(repoRoot: string, log: (line: string) => void = () => {}): Promise<DeployResult> {
+  await requireFreshBuild(repoRoot);
   const dir = runtimeDir();
   const next = `${dir}.next`;
   const old = `${dir}.old`;
