@@ -674,6 +674,7 @@ export function createUiServer(o: UiOptions): Server {
       const p = take(c.id);
       if (!p) continue;
       if (consent === "no") {
+        step("confirmed", `they said no, so this was dropped: ${p.detail}`, { kind: p.kind });
         turns.push({ role: "event", text: `They said no, so this was not done: ${p.label}.` });
         continue;
       }
@@ -691,8 +692,11 @@ export function createUiServer(o: UiOptions): Server {
       });
       try {
         const out = await performPending(p, deps);
+        step("confirmed", `they said yes, so: ${p.detail}`, { kind: p.kind });
+        step("result", out.split("\n")[0] ?? "");
         turns.push({ role: "event", text: `They said yes and it is already done (do not do it again): ${p.label}. Result: ${outcome(out)}`, done: { kind: p.kind, detail: p.detail } });
       } catch (err) {
+        step("confirmed", `they said yes, but it failed: ${p.detail}`, { kind: p.kind, failed: true });
         turns.push({ role: "event", text: `They said yes, but ${p.label} failed: ${(err as Error).message}` });
       }
     }
