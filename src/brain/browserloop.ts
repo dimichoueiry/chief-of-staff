@@ -17,12 +17,13 @@ const MAX_TARGETS = 251;
 
 /**
  * How sure Jev has to be of the element before it is acted on. A page offers two hundred choices
- * where a spoken command offers twenty, and the same certainty spread over ten times the labels is
- * a much smaller number, so a clear lead over the runner-up counts as well as a high share on its
- * own. Both of these are the first numbers to tune once there are real pages to tune them against.
+ * where a spoken command offers twenty, so the lead over the runner-up says more than the share
+ * itself: on real pages the right answer and a genuinely ambiguous one both sit around 0.42, and
+ * what separates them is that the right one leaves the next candidate far behind (0.42 against
+ * 0.15) while the ambiguous one does not (0.44 against 0.39).
  */
 const SURE_OF_TARGET = 0.6;
-const CLEARLY_AHEAD = { atLeast: 0.25, times: 3 };
+const CLEARLY_AHEAD = { atLeast: 0.25, times: 2 };
 const SURE_ITS_DONE = 0.8;
 
 const WAYS_OUT = {
