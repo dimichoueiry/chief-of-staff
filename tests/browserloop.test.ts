@@ -495,3 +495,58 @@ describe("knowing which one it is about to act on", () => {
     }
   });
 });
+
+describe("finishing what a yes started", () => {
+  let dir: string;
+  let selfhub: string;
+  let cleanup: () => Promise<void>;
+  const access = (browser: Access["browser"]): Access => ({ terminal: "ask", agents: "ask", links: "auto", screen: "auto", browser });
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "cos-fin2-")); ({ dir: selfhub, cleanup } = await makeTmpSelfhub()); });
+  afterEach(async () => { await cleanup(); await rm(dir, { recursive: true, force: true }); });
+
+  const DIALOG = '- dialog [ref=e1]:\n  - button "Delete" [ref=e2]\n  - button "Cancel" [ref=e3]';
+
+  it("does not ask which one about a Delete that nothing says belongs to anything", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cos-fin-"));
+    try {
+      const driver: BrowserDriver = {
+        async call(tool) {
+          if (tool === "browser_snapshot") return `### Page\n- Page URL: https://www.facebook.com/x\n- Page Title: F\n### Snapshot\n\`\`\`yaml\n${DIALOG}\n\`\`\``;
+          if (tool === "browser_evaluate") return "### Result\nfalse";
+          return "";
+        },
+        async close() {},
+      };
+      const browser = new AssistantBrowser(driver, join(dir, "b.json"), { stepMs: 0, maxMs: 0 });
+      browser.allow("https://www.facebook.com/");
+      let askedWhichOne = false;
+      const jev: Jev = async (req) => {
+        if (req.questions.right_one) { askedWhichOne = true; return { model: "t", answers: { right_one: { type: "noul", noul: 0.6 } } }; }
+        return fakeJev({ want: /"Delete"/ })(req);
+      };
+      const out = await runGoal(jev, browser, { goal: "confirm deleting the Clothes Rack listing" });
+      // The button has nothing above it saying what it deletes, so it is not asked and not blocked.
+      expect(askedWhichOne).toBe(false);
+      expect(out).toMatchObject({ kind: "confirm", ask: { element: { ref: "e2" } } });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("still guards a page click against being queued twice in one reply, but not for minutes after", async () => {
+    const fake = fakeBrowser();
+    const browser = new AssistantBrowser(fake.driver, join(dir, "browser.json"), { stepMs: 0, maxMs: 0 });
+    browser.allow("https://canvas.illinois.edu/");
+    const earlier = [{ kind: "browser-act", detail: "Click “Delete course” on https://canvas.illinois.edu/" }];
+    const tools = new ToolRuntime(loadConfig({ COS_SELFHUB: selfhub, COS_PROJECT_ROOTS: "/nonexistent" }), "2026-09-15", undefined, {
+      browser, jev: null, access: () => access("ask"), recentlyDone: earlier,
+    });
+    await tools.execute("browser_read", {});
+    // The same words were clicked minutes ago; on a live page that is a different thing now.
+    const first = await tools.execute("browser_click", { ref: "e5", element: "Delete course" });
+    expect(first.result).not.toMatch(/already done a moment ago/);
+    // Queued twice in the same reply is still refused.
+    const again = await tools.execute("browser_click", { ref: "e5", element: "Delete course" });
+    expect(again.result).toMatch(/already waiting for their OK/);
+  });
+});

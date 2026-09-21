@@ -145,7 +145,10 @@ export async function runGoal(jev: Jev, browser: AssistantBrowser, o: GoalReques
     if (consequentialClick(el)) {
       // Picking the best of two hundred labels is not the same as being right about this one. Before
       // something that cannot be undone, ask plainly whether it belongs to what the goal named.
-      const right = await isTheOne(jev, o.goal, el).catch(() => null);
+      // Only worth asking when the page says which one this is. The Delete in a confirmation dialog
+      // never carries the name of what it deletes, so the honest answer there is "can't tell", and
+      // letting that stop a 93%-certain pick left the deletion hanging open instead.
+      const right = el.within ? await isTheOne(jev, o.goal, el).catch(() => null) : null;
       if (right !== null && right < SURE_ITS_THE_ONE) {
         return { kind: "handover", why: `${describeElement(el)} may not be the one “${o.goal}” means (${pct(right)})`, page, steps };
       }
