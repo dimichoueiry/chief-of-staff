@@ -590,7 +590,7 @@ export function createUiServer(o: UiOptions): Server {
       const settled = mode === "focus" ? [] : await settlePending(convo, said, emit);
       if (settled.length && !ready("ask")) reply = { kind: "action", text: settled.join("\n"), model: "rules" };
       // Anything that happened since the last reply (this yes, a tapped button) travels with the message.
-      else reply = await respond(command || said, mode, focusOn, convo, emit, withEvents(eventsSinceReply(convo), said));
+      else reply = await respond(command || said, mode, focusOn, convo, emit, withEvents(eventsSinceReply(convo), said), settled);
     } catch (err) {
       reply = { kind: "error", text: `That didn't work: ${String((err as Error).message).split("\n")[0]}` };
     }
@@ -707,7 +707,7 @@ export function createUiServer(o: UiOptions): Server {
     return turns.map((t) => t.text);
   }
 
-  async function respond(text: string, mode: string, focusOn: string | undefined, convo: Conversation, emit: Emit, modelText = text): Promise<PillReply> {
+  async function respond(text: string, mode: string, focusOn: string | undefined, convo: Conversation, emit: Emit, modelText = text, settled: string[] = []): Promise<PillReply> {
     // "look at this": the screenshot goes with the message, before anything else is tried.
     let shot: Screenshot | null = null;
     let seen: PillReply["screen"];
@@ -735,7 +735,7 @@ export function createUiServer(o: UiOptions): Server {
         images: shot ? [{ mediaType: shot.mediaType, data: shot.data }] : undefined,
         actions: {
           run: openRunner, slate: boards, conversations, shell: o.shell, agentGrid: o.agentGrid, access: o.access, browser: o.browser,
-          awaiting: awaiting(convo), recentlyDone: recentlyDone(convo), bookmarks, screen, images: o.images,
+          awaiting: awaiting(convo), recentlyDone: recentlyDone(convo), justSettled: settled, bookmarks, screen, images: o.images,
         },
         onTool: (name) => emit({ type: "status", text: DOING[name] ?? "Updating your memory…" }),
         onText: (delta) => emit({ type: "text", delta }),
