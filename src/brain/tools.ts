@@ -472,8 +472,10 @@ export const TOOLS: Record<string, ToolSpec> = {
   make_page: {
     name: "make_page",
     description:
-      "Put a page you write on their screen: a post exactly as it would look in a feed, a landing page, a content calendar, a table of options, a mock-up — anything easier looked at than listened to. " +
-      "You write the whole HTML yourself, as one finished file: styles in a <style> tag, scripts inline. Pictures from the web (https) and Google Fonts load; a picture you made with make_image loads from /artifacts/<its id>. " +
+      "Put a page you write on their screen. Use it whenever the answer has shape rather than sentences: a content calendar or a week's schedule, a post exactly as it would look in a feed, " +
+      "a landing page, a table comparing options, a checklist, a plan, a mock-up. You write the whole HTML yourself, as one finished file — a real design, not a wireframe: styles in a " +
+      "<style> tag, a system font stack, room to breathe, and it still has to read on a phone. Scripts go inline; pictures from the web (https) and Google Fonts load; a picture you made " +
+      "with make_image loads from /artifacts/<its id>. Put the real content in it — their projects, their dates, their words — never lorem ipsum or a placeholder. " +
       "It is a draft they can look at, change and save, not something kept in memory.",
     parameters: {
       type: "object",

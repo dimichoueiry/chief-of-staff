@@ -2,7 +2,7 @@
  * In a browser it is a full page. Hosted by the native shell (?shell=1) it is a
  * transparent strip anchored at the bottom of the screen, and the shell drives
  * it through window.cosShell (hotkeys, native listening). */
-const { $, el, get, post } = window.cosDom;
+const { $, el, get, post, when } = window.cosDom;
 const params = new URLSearchParams(location.search);
 const SHELL = params.get("shell") === "1" && Boolean(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.shell);
 const root = document.documentElement;
@@ -390,23 +390,10 @@ function openArtifact(id) {
   openLink(new URL(`/artifact.html?id=${encodeURIComponent(id)}`, location.href).href);
 }
 
-/**
- * What a reply made, shown under it: the picture itself, or the top of the page as it will look.
- * Both open full size; the preview is a picture of the page, so nothing in it can be clicked.
- */
+/** What a reply made, shown under it. Same card as the gallery (artifact-card.js). */
 function artifactCards(items) {
   const box = el("div", { class: "artifacts" });
-  for (const a of items) {
-    const open = () => openArtifact(a.id);
-    const url = `/artifacts/${encodeURIComponent(a.id)}`;
-    box.append(
-      el("figure", { class: `artifact ${a.kind}` },
-        a.kind === "image"
-          ? el("img", { src: url, alt: a.title, onclick: open })
-          : el("div", { class: "page-preview", onclick: open }, el("iframe", { src: url, sandbox: "allow-scripts", title: a.title, tabindex: "-1" })),
-        el("figcaption", {}, el("span", { class: "name" }, a.title), el("button", { class: "chip", onclick: open }, "open"))),
-    );
-  }
+  for (const a of items) box.append(cosArtifacts.card(a, { open: () => openArtifact(a.id) }));
   return box;
 }
 
@@ -541,14 +528,6 @@ async function endAside(fromVoice) {
 // ---------- the list of chats ----------
 let chats = [];
 
-function when(iso) {
-  const d = new Date(iso);
-  const days = Math.round((new Date().setHours(0, 0, 0, 0) - new Date(iso).setHours(0, 0, 0, 0)) / 86_400_000);
-  if (days === 0) return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-  if (days === 1) return "yesterday";
-  if (days < 7) return d.toLocaleDateString(undefined, { weekday: "short" });
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
 
 /** Every saved chat, most recent first, narrowed by what's typed in the filter (name and preview). */
 function renderChats() {

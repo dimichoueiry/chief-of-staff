@@ -12,7 +12,7 @@ import {
 } from "../brain/llm/registry.js";
 import { imageModels, type ImageMaker, type ImageModel } from "../brain/images.js";
 import { MAX_INSTRUCTIONS, PERSONA, instructionsFile, readInstructions, saveInstructions } from "../brain/persona.js";
-import { getArtifact, listArtifacts, readArtifact, type ArtifactRef } from "../core/artifacts.js";
+import { deleteArtifact, getArtifact, listArtifacts, readArtifact, type ArtifactRef } from "../core/artifacts.js";
 import { Conversations, conversationsDir, displayTitle, eventsSinceReply, historyMessages, messageCount, visibleTurns, withEvents, type Conversation, type Turn } from "../brain/conversation.js";
 import type { LLMProvider, ChatMessage } from "../brain/llm/types.js";
 import type { ModelSpec } from "../brain/llm/registry.js";
@@ -254,14 +254,39 @@ export function createUiServer(o: UiOptions): Server {
     }
   }
 
-  /** Which model draws, and whether it can. Never throws: a bad saved choice is a thing to say, not a crash. */
-  function imagesState() {
+  /**
+   * The model that draws, as the Model menu draws it: the same shape as the chat models above —
+   * a list to pick from, a check on the one in use, and the ways past the list. Never throws:
+   * a saved choice that no longer parses is a thing to say, not a crash.
+   */
+  function imagesState(settings = readModelSettings()) {
+    let spec: string | null = null;
+    let rest: { source: string | null; ready: boolean; missing: string | null; error: string | null } =
+      { source: null, ready: false, missing: null, error: null };
     try {
-      const r = resolveImageModel();
-      return { spec: formatSpec(r.spec), source: r.source, ready: r.ready, missing: r.missing ?? null, error: null };
+      const r = resolveImageModel({ settings });
+      spec = formatSpec(r.spec);
+      rest = { source: r.source, ready: r.ready, missing: r.missing ?? null, error: null };
     } catch (err) {
-      return { spec: null, source: null, ready: false, missing: null, error: (err as Error).message };
+      rest = { ...rest, error: (err as Error).message };
     }
+    // Their own choice first, then the handful worth naming; the live list of 50-odd belongs behind "another".
+    const listed = [...new Set([...(settings.image ? [settings.image] : []), ...IMAGE_PRESETS])];
+    return {
+      spec,
+      ...rest,
+      presets: listed.map((p) => ({ spec: p, label: parseModelSpec(p).model, current: p === spec })),
+      actions: [
+        {
+          kind: "input", title: "Use another image model…", prompt: "Which model draws?",
+          message:
+            "An OpenRouter image model, as it is written there — google/gemini-3.1-flash-image, openai/gpt-image-2, " +
+            "qwen/qwen-image-3. It is checked against OpenRouter's list before it is used.",
+          placeholder: "google/gemini-3.1-flash-image", value: spec ?? "", button: "Use it", path: "api/models/image",
+        },
+        { kind: "open", title: "Browse image models…", url: "https://openrouter.ai/models?output_modalities=image" },
+      ],
+    };
   }
 
   function modelsState() {
@@ -276,7 +301,7 @@ export function createUiServer(o: UiOptions): Server {
       }
     }
     const current = (intents.ask as { spec?: string } | null)?.spec ?? "";
-    const images = imagesState();
+    const images = imagesState(settings);
     return {
       default: settings.default ?? null,
       intents,
@@ -293,13 +318,6 @@ export function createUiServer(o: UiOptions): Server {
           placeholder: "~openai/gpt-luna-latest", value: current, button: "Try and use", path: "api/models/use",
         },
         { kind: "open", title: "Browse OpenRouter models…", url: "https://openrouter.ai/models" },
-        {
-          kind: "input", title: `Images: ${images.spec ?? "not set"}…`, prompt: "Which model draws?",
-          message:
-            "An OpenRouter image model. google/gemini-3.1-flash-image is quick, cheap and the one that gets words inside a picture right; " +
-            "google/gemini-3-pro-image is slower and better. Browse them at openrouter.ai/models?output_modalities=image.",
-          placeholder: "google/gemini-3.1-flash-image", value: images.spec ?? "", button: "Use it", path: "api/models/image",
-        },
         ...((settings.presets ?? []).includes(current)
           ? [{ kind: "post", title: `Remove ${current} from this list`, path: "api/models/forget", body: { spec: current } }]
           : []),
@@ -1031,6 +1049,14 @@ export function createUiServer(o: UiOptions): Server {
         if (!id) return json(res, 200, { artifacts: listArtifacts() });
         const a = getArtifact(id);
         return a ? json(res, 200, a) : json(res, 404, { error: "That isn't here anymore." });
+      }
+      case "POST /api/artifacts/delete": {
+        const b = await body(req);
+        const id = String(b.id ?? "");
+        const gone = getArtifact(id);
+        if (!gone || !deleteArtifact(id)) return json(res, 404, { error: "That isn't here anymore." });
+        Log(`artifact deleted: ${id}`);
+        return json(res, 200, { ok: true, message: `Deleted "${gone.title}"`, artifacts: listArtifacts() });
       }
       case "GET /api/instructions":
         return json(res, 200, { text: readInstructions(), file: instructionsFile(), max: MAX_INSTRUCTIONS, default: PERSONA });
