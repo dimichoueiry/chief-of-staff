@@ -415,6 +415,16 @@ export class AssistantBrowser {
   }
 
   /**
+   * The dialog the page is waiting on, if it has one. A site asks "are you sure?" for exactly the
+   * clicks that already waited for the user's OK, so a click that opens one has started the thing,
+   * not finished it.
+   */
+  dialog(): Element | null {
+    if (!this.last) return null;
+    return findElements(this.last.outline).find((e) => e.role === "dialog" || e.role === "alertdialog") ?? null;
+  }
+
+  /**
    * The same element on the page now, for an OK given after the page was read: the page must still be
    * at the same address, and the element found by its ref, or by its role and name if the ref moved.
    */

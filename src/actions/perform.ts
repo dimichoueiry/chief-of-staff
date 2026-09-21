@@ -62,7 +62,16 @@ export async function performPending(p: Pending, deps: PerformDeps = {}): Promis
       const a = p.payload as { action: "click" | "type"; element: Element; url: string; text?: string; submit?: boolean };
       const browser = deps.browser ?? sharedBrowser();
       const el = await browser.again(a.element, a.url);
-      return a.action === "click" ? browser.click(el) : browser.type(el, a.text ?? "", Boolean(a.submit));
+      const out = a.action === "click" ? await browser.click(el) : await browser.type(el, a.text ?? "", Boolean(a.submit));
+      const dialog = browser.dialog();
+      if (!dialog) return out;
+      // Without this the model is told the deletion is done, sees a box in the way, and closes it.
+      const name = dialog.name ? `\u201c${dialog.name}\u201d` : "a dialog";
+      return [
+        `The click landed, and the site answered with ${name}: it is asking before it does the thing, so ${p.label} has NOT happened yet.`,
+        "Do not close or dismiss it. Read it, and ask them in one short sentence about the button that goes through with it.",
+        out,
+      ].join("\n");
     }
     default:
       throw new Error(`Don't know how to do "${p.kind}".`);
