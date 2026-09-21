@@ -11,6 +11,7 @@
  */
 import { consequentialClick, type AssistantBrowser, type Element } from "../actions/browser.js";
 import type { ChoiceAnswer, Jev, NoulAnswer } from "./jev.js";
+import { step } from "../util/trace.js";
 
 /** Jev picks from at most 255 labels, three of which are the ways out of the page. */
 const MAX_TARGETS = 251;
@@ -77,13 +78,14 @@ export async function runGoal(jev: Jev, browser: AssistantBrowser, o: GoalReques
   let page = "";
   let previous = "";
 
-  for (let step = 0; step < maxSteps; step++) {
+  for (let step0 = 0; step0 < maxSteps; step0++) {
     page = await browser.read();
     const elements = browser.elements().slice(0, MAX_TARGETS);
     if (!elements.length) return { kind: "handover", why: "the page has nothing to act on yet", page, steps };
 
     const labels = elements.map((_, i) => `a${i + 1}`);
     let answers: Awaited<ReturnType<typeof ask>>;
+    const asked = Date.now();
     try {
       answers = await ask(jev, o, steps, labels, elements);
     } catch (err) {
@@ -97,6 +99,10 @@ export async function runGoal(jev: Jev, browser: AssistantBrowser, o: GoalReques
     const target = answers.target as ChoiceAnswer;
     const chance = target.probabilities[target.choice] ?? 0;
     const runnerUp = Object.values(target.probabilities).sort((a, b) => b - a)[1] ?? 0;
+    const picked = labels.indexOf(target.choice);
+    step("browser", `step ${step0 + 1}: ${picked >= 0 ? describeElement(elements[picked]) : target.choice}`, {
+      p: chance, runnerUp, done: finished.noul, of: elements.length, ms: Date.now() - asked,
+    });
     if (chance < SURE_OF_TARGET && !(chance >= CLEARLY_AHEAD.atLeast && chance >= CLEARLY_AHEAD.times * runnerUp)) {
       return { kind: "handover", why: `not sure what to do next (${pct(chance)})`, page, steps };
     }

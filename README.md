@@ -358,6 +358,32 @@ cos browser forget canvas.illinois.edu
 cos access browser auto              # off | ask (default) | auto: auto also sends and submits on its own
 ```
 
+## Seeing what it did
+
+Every time you say something, what it did with it is written to `~/.cos/traces/YYYY-MM-DD.jsonl`:
+one line per turn, holding what you said, every step on the way and how long each took.
+
+```bash
+cos trace                            # the last 5 turns, step by step
+cos trace 20                         # more of them
+cos trace --json | jq                # the raw lines
+```
+
+```
+20:22:53  "open the article about Microsoft"  3990ms
+       0ms  tool    browser_open {"url":"https://en.wikipedia.org/wiki/Playwright_(software)"}
+    1887ms  browser step 1: link "Microsoft"  p=0.46 runnerUp=0.19 done=0.03 of=192 ms=399
+    3990ms  browser step 2: none  p=0.62 runnerUp=0.11 done=0.57 of=251 ms=191
+    3990ms  reply   handover: clicked link "Microsoft"  kind=handover
+```
+
+A step says who took it: `jev` for the fast lane, `model` for a turn of the language model, `tool`
+and `result` for what it ran, `browser` for a step of the page loop (with the numbers its thresholds
+are judged on), `reply` for what you got back, and `error` when a turn threw.
+
+`COS_TRACE=off` turns it off. Deleting the traces directory is safe at any time, and `src/util/trace.ts`
+says at the top exactly what to delete to take the whole thing back out.
+
 ## Making things: pictures and pages
 
 Ask for something to look at and it appears on your screen, instead of a description of itself.
