@@ -852,8 +852,10 @@ private async pursue(goal: string, rawValues: unknown): Promise<string> {
           }
           try {
             const out = await performPending(p, { run: this.actions.run, shell: this.actions.shell, agentGrid: this.actions.agentGrid, browser: this.actions.browser });
-            this.done.push({ kind: p.kind, detail: p.detail });
-            lines.push(`Done, as they said (already done: do not do it again): ${p.label}. Result: ${out}`);
+            if (out.finished) this.done.push({ kind: p.kind, detail: p.detail });
+            lines.push(out.finished
+              ? `Done, as they said (already done: do not do it again): ${p.label}. Result: ${out.text}`
+              : `Started, as they said, but not finished: ${p.label}. Result: ${out.text}`);
           } catch (err) {
             lines.push(`They said yes, but it failed: ${p.label}: ${(err as Error).message}`);
           }

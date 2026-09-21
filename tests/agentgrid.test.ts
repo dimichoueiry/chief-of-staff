@@ -390,7 +390,7 @@ describe("Agent Grid client", () => {
       const msg = await ask.execute("message_agent", { session: "quiz", message: "multiple choice" });
       expect(msg.result).toMatch(/^Not sent yet/);
       const p = take(ask.pending[1].id)!;
-      expect(await performPending(p, { agentGrid: new AgentGrid(() => ({ base, token: "tok" })) })).toBe("Sent to Module 6 quiz.");
+      expect((await performPending(p, { agentGrid: new AgentGrid(() => ({ base, token: "tok" })) })).text).toBe("Sent to Module 6 quiz.");
       expect(fake.calls.at(-1)).toBe('POST /api/chat {"sessionId":"bbbb2222-blocked","message":"multiple choice"}');
 
       const auto = runtime({ terminal: "ask", agents: "auto", links: "auto", screen: "auto", browser: "ask" });
@@ -411,7 +411,7 @@ describe("Agent Grid client", () => {
       expect(ask.pending[0].detail).toBe("claude on claude-opus-5 in ~/Desktop/drawcal\nTask: review the export code");
       expect(fake.calls.some((c) => c.includes("/api/spawn"))).toBe(false);
       const p = take(ask.pending[0].id)!;
-      expect(await performPending(p, { agentGrid: new AgentGrid(() => ({ base, token: "tok" })) })).toBe("Started claude in drawcal on claude-opus-5.");
+      expect((await performPending(p, { agentGrid: new AgentGrid(() => ({ base, token: "tok" })) })).text).toBe("Started claude in drawcal on claude-opus-5.");
       expect(fake.calls.at(-1)).toContain('"engine":"claude","name":"","interactive":false,"model":"claude-opus-5"');
 
       const auto = runtime({ terminal: "ask", agents: "auto", links: "auto", screen: "auto", browser: "ask" });
@@ -503,7 +503,7 @@ describe("Agent Grid client", () => {
       expect((await auto.execute("run_command", { command: "rm -rf ~/cos-tools/tmp" })).result).toMatch(/^Not run yet \(it deletes files\)/);
 
       const p = take(ask.pending[0].id)!;
-      expect(await performPending(p, { shell })).toMatch(/^\$ mkdir -p ~\/cos-tools\n\(in ~; exit 0;/);
+      expect((await performPending(p, { shell })).text).toMatch(/^\$ mkdir -p ~\/cos-tools\n\(in ~; exit 0;/);
       expect(take(p.id)).toBeNull();
     });
 
@@ -517,7 +517,7 @@ describe("Agent Grid client", () => {
       expect(queued.result).toMatch(/^Not started yet/);
       expect(ask.pending.map((p) => [p.kind, p.verb, p.label])).toEqual([["orchestrator-start", "Start", "start Marketing sweep"]]);
       expect(fake.calls.some((c) => c.includes("/api/orchestrators/start"))).toBe(false);
-      expect(await performPending(take(ask.pending[0].id)!, { agentGrid: new AgentGrid(() => ({ base, token: "tok" })) })).toContain("Sweep Q4 campaigns");
+      expect((await performPending(take(ask.pending[0].id)!, { agentGrid: new AgentGrid(() => ({ base, token: "tok" })) })).text).toContain("Sweep Q4 campaigns");
 
       const stopQueued = await ask.execute("stop_orchestrator", { orchestrator: "nightly qa", reason: "done for the day" });
       expect(stopQueued.result).toMatch(/^Not stopped yet/);
@@ -526,7 +526,7 @@ describe("Agent Grid client", () => {
       const sendQueued = await ask.execute("message_orchestrator", { orchestrator: "nightly qa", message: "also check staging" });
       expect(sendQueued.result).toMatch(/^Not sent yet/);
       const sent = take(ask.pending.at(-1)!.id)!;
-      expect(await performPending(sent, { agentGrid: new AgentGrid(() => ({ base, token: "tok" })) })).toBe("Sent to Nightly QA.");
+      expect((await performPending(sent, { agentGrid: new AgentGrid(() => ({ base, token: "tok" })) })).text).toBe("Sent to Nightly QA.");
       expect(fake.calls.at(-1)).toBe('POST /api/orchestrators/send {"id":"cccc3333runningorchestrator","text":"also check staging"}');
 
       const auto = runtime({ terminal: "ask", agents: "auto", links: "auto", screen: "auto", browser: "ask" });
@@ -547,7 +547,7 @@ describe("Agent Grid client", () => {
       ]);
       expect(fake.calls.some((c) => c.includes("/api/orchestrators/approve"))).toBe(false);
 
-      const approved = await performPending(take(auto.pending[0].id)!, { agentGrid: new AgentGrid(() => ({ base, token: "tok" })) });
+      const approved = (await performPending(take(auto.pending[0].id)!, { agentGrid: new AgentGrid(() => ({ base, token: "tok" })) })).text;
       expect(approved).toContain("[working]");
       expect(fake.calls.at(-1)).toBe('POST /api/orchestrators/approve {"id":"bbbb2222waitingorchestrator","approvalId":"appr-1"}');
 
