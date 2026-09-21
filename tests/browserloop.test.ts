@@ -630,6 +630,20 @@ describe("answering a file chooser", () => {
     expect(existsSync(join(home, "artifacts", `${made.id}.png`))).toBe(true);
   });
 
+  it("will not put the same picture in the post twice", async () => {
+    const made = saveArtifact({ kind: "image", title: "dog", mediaType: "image/png", data: Buffer.from("png"), prompt: "a dog" });
+    const fake = chooserOpen();
+    const browser = new AssistantBrowser(fake.driver, join(home, "browser.json"), { stepMs: 0, maxMs: 0 });
+    browser.allow("https://www.facebook.com/");
+    const tools = runtime(browser);
+    const first = await tools.execute("browser_upload", { ids: [made.id] });
+    expect(first.result).toMatch(/is now in the post\. Don't click the photo button again/);
+
+    const second = await tools.execute("browser_upload", { ids: [made.id] });
+    expect(second.result).toMatch(/already in the post from a moment ago/);
+    expect(fake.calls.filter((c) => c === "browser_file_upload")).toHaveLength(1);
+  });
+
   it("refuses a file that is not theirs", async () => {
     const browser = new AssistantBrowser(chooserOpen().driver, join(home, "browser.json"), { stepMs: 0, maxMs: 0 });
     const out = await runtime(browser).execute("browser_upload", { paths: ["/etc/passwd"] });
