@@ -20,6 +20,7 @@ import { BRIEF_SCHEMA, type Brief } from "./schema.js";
 import { ToolRuntime, serverToolsFor, toolsFor, type ToolCall } from "./tools.js";
 import type { Pending } from "../actions/pending.js";
 import type { ArtifactRef } from "../core/artifacts.js";
+import { step } from "../util/trace.js";
 
 export interface RunOptions {
   config: Config;
@@ -155,6 +156,9 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
     );
     last = res;
     webSearches += res.usage?.webSearches ?? 0;
+    step("model", `turn ${turns}: ${res.stop}${res.toolCalls.length ? `, wants ${res.toolCalls.map((c) => c.name).join(", ")}` : ""}`, {
+      model: res.model, ...(res.usage ? { in: res.usage.inputTokens, out: res.usage.outputTokens } : {}),
+    });
 
     if (res.stop === "refusal") throw new RefusedError();
     if (res.stop === "pause") {
@@ -168,7 +172,10 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
     const images: ImageInput[] = [];
     for (const call of res.toolCalls) {
       opts.onTool?.(call.name, call.input);
+      const began = Date.now();
       const done = await runtime.execute(call.name, call.input);
+      step("tool", `${call.name} ${JSON.stringify(call.input)}`, { ms: Date.now() - began, ...(done.isError ? { failed: true } : {}) });
+      step("result", done.result.split("\n")[0] ?? "", { turn: turns });
       results.push({ id: call.id, content: done.result, isError: done.isError || undefined });
       images.push(...(done.images ?? []));
     }

@@ -20,6 +20,7 @@ import { providerFor, runIntent } from "../brain/loop.js";
 import { LiveCommands } from "../brain/live.js";
 import { decideOpen, openTargets } from "../brain/fastlane.js";
 import { jevFromEnv, type Jev } from "../brain/jev.js";
+import { step, traced } from "../util/trace.js";
 import { WRITES } from "../brain/tools.js";
 import { findConversation, nameConversations, renderRecall, summarizeEnded } from "../brain/recall.js";
 import type { Brief } from "../brain/schema.js";
@@ -576,6 +577,13 @@ export function createUiServer(o: UiOptions): Server {
     const convo = conversations.current();
     emit({ type: "start", conversation: convo.id, user: said });
     await syncActivity().catch(() => undefined);
+    return traced(said, mode, () => answer(said, command, mode, focusOn, convo, emit));
+  }
+
+  /** The turn itself, so everything it reaches can note what it did (see util/trace.ts). */
+  async function answer(
+    said: string, command: string, mode: string, focusOn: string | undefined, convo: Conversation, emit: Emit,
+  ): Promise<{ status: number; body: Record<string, unknown> }> {
     let reply: PillReply;
     try {
       // "yes" or "no" to what the last reply was waiting on: do it (or drop it) first, then answer with the result in hand.
@@ -586,6 +594,7 @@ export function createUiServer(o: UiOptions): Server {
     } catch (err) {
       reply = { kind: "error", text: `That didn't work: ${String((err as Error).message).split("\n")[0]}` };
     }
+    step("reply", reply.text, { kind: reply.kind, ...(reply.model ? { model: reply.model } : {}), ...(reply.confirm?.length ? { waiting: reply.confirm.length } : {}) });
     conversations.append(
       convo,
       { role: "user", text: said, ...(reply.screen ? { screen: reply.screen } : {}) },
@@ -616,13 +625,16 @@ export function createUiServer(o: UiOptions): Server {
       const d = await decideOpen(jev, said, targets);
       if ("skip" in d) {
         Log(`jev: left to the model (${d.skip}, ${ms()})`);
+        step("jev", `fast lane left it to the model: ${d.skip}`, { ms: Date.now() - started, targets: targets.length });
         return null;
       }
       const text = await performOpen(d.open, openRunner);
       Log(`jev: opened ${d.open.label} (${Math.round(d.sure * 100)}%, ${ms()})`);
+      step("jev", `fast lane opened ${d.open.label}`, { sure: d.sure, ms: Date.now() - started, model: d.model });
       return { kind: "action", text, model: d.model };
     } catch (err) {
       Log(`jev: left to the model (${(err as Error).message}, ${ms()})`);
+      step("jev", `fast lane failed, left to the model: ${(err as Error).message}`, { ms: Date.now() - started });
       return null;
     }
   }

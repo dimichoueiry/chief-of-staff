@@ -48,6 +48,7 @@ import { findFolders, formatFolderSearch } from "../actions/folders.js";
 import { Shortcuts } from "../actions/shortcuts.js";
 import { findBoards, slateBaseUrl, slateBoardUrl, slateBoards } from "../actions/slate.js";
 import { buildMenubar, installLoginItem, openMenubar, restartMenubar, uninstallMenubar } from "./menubar.js";
+import { formatTurn, readTraces, tracesDir } from "../util/trace.js";
 import { packageApp } from "./package.js";
 import { ask, confirm } from "./prompt.js";
 
@@ -1115,6 +1116,18 @@ program
     } catch (err) {
       await modelError(err);
     }
+  });
+
+program
+  .command("trace")
+  .argument("[n]", "how many turns to show", "5")
+  .option("--json", "the raw lines, for grep or jq")
+  .description("what the assistant did with the last few things you said, step by step")
+  .action((n: string, o: { json?: boolean }) => {
+    const turns = readTraces(Math.max(1, Number(n) || 5));
+    if (!turns.length) return console.log(`Nothing traced yet. Traces are written to ${tracesDir()} as you use it (COS_TRACE=off turns them off).`);
+    if (o.json) return console.log(turns.map((t) => JSON.stringify(t)).join("\n"));
+    console.log(turns.map(formatTurn).join("\n\n"));
   });
 
 program.parseAsync().catch((err) => fail(err instanceof Error ? err.message : String(err)));
