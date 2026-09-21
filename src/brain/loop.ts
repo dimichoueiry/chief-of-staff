@@ -20,6 +20,7 @@ import { BRIEF_SCHEMA, type Brief } from "./schema.js";
 import { ToolRuntime, serverToolsFor, toolsFor, type ToolCall } from "./tools.js";
 import type { Pending } from "../actions/pending.js";
 import type { ArtifactRef } from "../core/artifacts.js";
+import { isPageText } from "../actions/browser.js";
 import { step } from "../util/trace.js";
 
 export interface RunOptions {
@@ -83,7 +84,10 @@ const PAGE_DROPPED = "(A page read earlier in this run. Only the latest read is 
 export function withoutOldPages(messages: ChatMessage[]): ChatMessage[] {
   const name = new Map<string, string>();
   for (const m of messages) if (m.role === "assistant") for (const c of m.toolCalls) name.set(c.id, c.name);
-  const isPage = (r: ToolResult) => !r.isError && PAGE_TOOLS.has(name.get(r.id) ?? "");
+  // A browser tool answers with a page, or with a line saying why there isn't one ("Not clicked yet:
+  // it needs their OK"). Counting the second as the newest page throws away the only page there was,
+  // and the model then answers about a page it can no longer see.
+  const isPage = (r: ToolResult) => !r.isError && PAGE_TOOLS.has(name.get(r.id) ?? "") && isPageText(r.content);
   const pages = messages.flatMap((m) => (m.role === "tool" ? m.results.filter(isPage) : []));
   if (pages.length < 2) return messages;
   const newest = pages.at(-1);

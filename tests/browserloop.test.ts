@@ -282,6 +282,20 @@ describe("keeping only the newest page in the record", () => {
     expect(messages[1]).toMatchObject({ results: [{ content: page(1) }] });
   });
 
+  it("keeps the last real page when a later browser step only says it needs an OK", () => {
+    // This is what happened on Facebook: the newest browser result was "Not clicked yet", so both
+    // real pages were replaced and the model answered by inventing listings it had never seen.
+    const withPending = [
+      ...messages.slice(0, 4),
+      { role: "assistant" as const, text: "", toolCalls: [{ id: "5", name: "browser_click", input: {} }] },
+      { role: "tool" as const, results: [{ id: "5", content: "Not clicked yet: “Delete listing” may send or change something." }] },
+    ];
+    const contents = withoutOldPages(withPending).flatMap((m) => (m.role === "tool" ? m.results.map((r) => r.content) : []));
+    expect(contents[0]).toMatch(/^\(A page read earlier in this run\./);
+    expect(contents[1]).toBe(page(2));
+    expect(contents[3]).toMatch(/^Not clicked yet/);
+  });
+
   it("changes nothing when only one page was read", () => {
     const one = messages.slice(0, 2);
     expect(withoutOldPages(one)).toBe(one);
