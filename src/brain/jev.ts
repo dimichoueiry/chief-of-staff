@@ -84,8 +84,13 @@ function readResult(body: Record<string, unknown> | null, questions: JevRequest[
           labels.every((label) => Object.hasOwn(probabilities, label) && probability(probabilities[label]));
         if (ok) {
           const values = labels.map((label) => probabilities[label] as number);
-          // Allow floating-point rounding, but never invent missing probability mass.
-          ok = Math.abs(values.reduce((sum, p) => sum + p, 0) - 1) <= 0.001 &&
+          // Each probability comes back rounded, so the more labels there are the further their sum
+          // drifts from 1: over ~200 it lands on 0.99 more often than not. What actually keeps a bad
+          // answer from authorizing anything is the two checks around this one, that every label was
+          // answered and that the chosen one leads, so the sum is only a sentinel against a mangled
+          // response and is given room to be rounded.
+          const drift = Math.max(0.01, labels.length * 0.0005);
+          ok = Math.abs(values.reduce((sum, p) => sum + p, 0) - 1) <= drift &&
             (probabilities[a.choice] as number) >= Math.max(...values);
         }
       }

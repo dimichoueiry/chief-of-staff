@@ -340,6 +340,17 @@ It can scroll what's shown, too: "scroll down", "go to the chorus", or "scroll s
 - The window closes after 30 quiet minutes and opens again when needed. Sign-ins stay.
 - Chrome is used if installed, otherwise Edge (`COS_BROWSER=msedge` to choose).
 
+With `TYPESAFE_API_KEY` set, the model can hand a small goal to Jev instead of clicking through it
+itself: "open the first result", "find what's due this week". Jev picks the next element from what
+the page offers, a step at a time, for a fraction of the cost of asking the language model each
+time; the page is read fresh at every step, so it is never working from a stale picture of it.
+
+It only picks, so any text to type comes from the model with the goal. It hands the page straight
+back the moment it isn't sure what to do next, when nothing on the page fits, when it would need to
+make text up, or after fifteen steps. Everything that waits for your OK still waits for it, and a
+page read earlier in the same run is dropped from what the model is sent, since only the newest one
+is still true.
+
 ```bash
 cos browser                          # the sites it may use
 cos browser allow canvas.illinois.edu

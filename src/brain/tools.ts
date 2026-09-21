@@ -30,6 +30,8 @@ import { performTicketChange, planTicketChange } from "../actions/tickets.js";
 import { openOrQueue, safeWebUrl, checkPath, macOpen, type Runner } from "../actions/open.js";
 import { findBookmarks, formatBookmarks, readBookmarks, type BookmarkRead } from "../actions/bookmarks.js";
 import { baseDomain, consequentialClick, sharedBrowser, siteOf, type AssistantBrowser, type ScrollSpeed, type ScrollTo } from "../actions/browser.js";
+import { runGoal } from "./browserloop.js";
+import { jevFromEnv, type Jev } from "./jev.js";
 import { isPending, queue, take, type ConfirmView, type Pending } from "../actions/pending.js";
 import { performPending } from "../actions/perform.js";
 import { classifyCommand, decide, formatResult, resolveCwd, runCommand, runVisible, tildePath, type CommandRequest, type Shell } from "../actions/terminal.js";
@@ -452,6 +454,23 @@ export const TOOLS: Record<string, ToolSpec> = {
     description: "Go back to the previous page in your browser.",
     parameters: { type: "object", properties: {} },
   },
+  browser_do: {
+    name: "browser_do",
+    description:
+      "Carry out a small goal on the page already open in your browser, in as many steps as it takes, without returning to you between them: " +
+      "\"open the first result\", \"find what's due this week\", \"put this in the message box\". " +
+      "Each step costs a fraction of a browser_click, so prefer it once the right page is open. " +
+      "It hands the page straight back to you whenever it isn't sure what to do next, and anything that sends or submits still waits for their OK. " +
+      "Pass values for any text it should type: it chooses which field, but it cannot make text up.",
+    parameters: {
+      type: "object",
+      properties: {
+        goal: s("What to get done on this page, e.g. \"open the assignment called MP3\""),
+        values: { type: "array", items: { type: "string" }, description: "Text it may type, e.g. what to put in a message box" },
+      },
+      required: ["goal"],
+    },
+  },
   make_image: {
     name: "make_image",
     description:
@@ -500,7 +519,7 @@ export const TOOLS: Record<string, ToolSpec> = {
 const ALL = Object.keys(TOOLS);
 /** Tools that do something outside memory: the conversation record lists what they did. */
 export const ACTIONS = [
-  "open", "run_command", "start_agent", "message_agent", "browser_click", "browser_type", "make_image", "make_page",
+  "open", "run_command", "start_agent", "message_agent", "browser_click", "browser_type", "browser_do", "make_image", "make_page",
   "start_orchestrator", "stop_orchestrator", "message_orchestrator", "respond_orchestrator_approval",
 ];
 
@@ -583,6 +602,8 @@ export class ToolRuntime {
       bookmarks?: () => Promise<BookmarkRead>;
       screen?: ScreenCapturer;
       browser?: AssistantBrowser;
+      /** Who picks the next step for browser_do (tests). Null turns the loop off. */
+      jev?: Jev | null;
       /** How pictures are drawn (tests). */
       images?: ImageMaker;
     } = {},
@@ -1170,6 +1191,31 @@ export class ToolRuntime {
       case "browser_back":
         this.browserAllowed();
         return this.browser().back();
+      case "browser_do": {
+        const mode = this.browserAllowed();
+        const jev = this.actions.jev ?? jevFromEnv();
+        if (!jev) throw new Error("browser_do needs a TypeSafe API key; use browser_read and browser_click instead.");
+        const browser = this.browser();
+        const values = Array.isArray(input.values) ? input.values.map(String).filter(Boolean) : undefined;
+        const out = await runGoal(jev, browser, { goal: this.str(input, "goal", true), values });
+        const did = out.steps.length ? `Did this, in order: ${out.steps.join("; ")}.` : "Did nothing on the page.";
+        if (out.kind === "done") return `${did}\n${out.page}`;
+        if (out.kind === "handover") return `Stopped after ${out.steps.length}: ${out.why}. Carry on yourself from the page below.\n${did}\n${out.page}`;
+
+        const { action, element: el, url, text } = out.ask;
+        const what = el.name ? `\u201c${el.name}\u201d` : `the unlabeled ${el.role}`;
+        const detail = action === "click" ? `Click ${what} on ${url}` : `Type into ${what} on ${url} and press Enter:\n${text}`;
+        const twice = this.repeated("browser-act", detail);
+        if (twice) return twice;
+        if (mode === "ask") {
+          const label = action === "click" ? `click ${what} on ${siteOf(url) ?? "the page"}` : `search ${what} on ${siteOf(url) ?? "the page"}`;
+          this.pending.push(queue("browser-act", { action, element: el, url, text, submit: action === "type" }, { label, detail, verb: action === "click" ? "Click" : "Send" }));
+          return `${did}\nThen it stopped: ${detail.split("\n")[0]} may send or change something. Ask them in one short sentence whether to do it. They can just say yes, and you can call browser_do again with the same goal afterwards.`;
+        }
+        this.done.push({ kind: "browser-act", detail });
+        const after = action === "click" ? await browser.click(el) : await browser.type(el, text ?? "", true);
+        return `${did}\n${after}`;
+      }
       case "get_git_log": {
         const projectName = this.str(input, "project", true);
         const limit = Math.min(Math.max(Number(input.limit) || 15, 1), 100);
