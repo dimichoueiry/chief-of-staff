@@ -4,6 +4,7 @@
  * what actually happened (git) before ranking.
  */
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -11,7 +12,7 @@ import type { Config } from "../config.js";
 import type { ImageInput, ServerTools, ToolSpec } from "./llm/types.js";
 import { openRouterImages, type ImageMaker } from "./images.js";
 import { formatSpec, resolveImageModel } from "./llm/registry.js";
-import { readArtifact, ref, saveArtifact, type ArtifactRef } from "../core/artifacts.js";
+import { artifactsDir, getArtifact, readArtifact, ref, saveArtifact, type ArtifactRef } from "../core/artifacts.js";
 import { describeShot, helperCapturer, type ScreenCapturer } from "../sensors/screen.js";
 import { Conversations } from "./conversation.js";
 import { searchConversations } from "./recall.js";
@@ -460,6 +461,20 @@ export const TOOLS: Record<string, ToolSpec> = {
         ref: s("Scroll to this element instead, from the page as last read"),
       },
       required: ["to"],
+    },
+  },
+  browser_upload: {
+    name: "browser_upload",
+    description:
+      "Answer the file chooser that a click just opened, with a picture or page you made (its id) or a file of theirs under their home folder. " +
+      "Nothing on the page can be read or clicked while a chooser is open, so this is the only thing that works until it is answered. " +
+      "Call it with nothing to close the chooser without sending a file. Sending is not publishing: whatever posts it still waits for their OK.",
+    parameters: {
+      type: "object",
+      properties: {
+        ids: { type: "array", items: { type: "string" }, description: "Ids of pictures or pages you made, e.g. 2026-09-21-e6a19d" },
+        paths: { type: "array", items: { type: "string" }, description: "Files of theirs to send, as full paths under their home folder" },
+      },
     },
   },
   browser_back: {
@@ -1243,6 +1258,28 @@ private async pursue(goal: string, rawValues: unknown): Promise<string> {
         if (!["down", "up", "top", "bottom", "auto", "stop"].includes(to)) throw new Error('"to" must be down, up, top, bottom, auto or stop');
         const speed = this.str(input, "speed") as ScrollSpeed;
         return this.browser().scroll({ to, screens: Number(input.screens) || undefined, speed: speed || undefined, ref: this.str(input, "ref") || undefined });
+      }
+      case "browser_upload": {
+        this.browserAllowed();
+        const ids = Array.isArray(input.ids) ? input.ids.map(String) : [];
+        const given = Array.isArray(input.paths) ? input.paths.map(String) : [];
+        const paths: string[] = [];
+        for (const id of ids) {
+          const made = getArtifact(id);
+          if (!made) throw new Error(`There's no picture or page with the id "${id}". Use the id you were given when you made it.`);
+          paths.push(join(artifactsDir(), made.file));
+        }
+        for (const raw of given) {
+          const full = resolve(raw.startsWith("~") ? join(homedir(), raw.slice(1)) : raw);
+          // Only their own files: a page must never be handed something from anywhere else on the disk.
+          if (!full.startsWith(`${homedir()}/`)) throw new Error(`Refused: ${raw} isn't under their home folder.`);
+          if (!existsSync(full)) throw new Error(`There's no file at ${raw}.`);
+          paths.push(full);
+        }
+        const out = await this.browser().upload(paths);
+        if (!paths.length) return `Closed the file chooser without sending anything.\n${out}`;
+        this.done.push({ kind: "browser-act", detail: `Send ${paths.map((p) => basename(p)).join(", ")} to ${siteOf(this.browser().address) ?? "the page"}` });
+        return `Sent ${paths.map((p) => basename(p)).join(", ")} to the page. It is attached, not posted: what publishes it still waits for their OK.\n${out}`;
       }
       case "browser_back":
         this.browserAllowed();

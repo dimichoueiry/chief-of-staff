@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Access } from "../src/actions/access.js";
 import { AssistantBrowser, findElement, findElements, type BrowserDriver } from "../src/actions/browser.js";
 import { confirmView } from "../src/actions/pending.js";
+import { saveArtifact } from "../src/core/artifacts.js";
 import { performPending } from "../src/actions/perform.js";
 import { describeElement, runGoal } from "../src/brain/browserloop.js";
 import type { Jev, JevRequest, JevResult } from "../src/brain/jev.js";
@@ -574,5 +575,68 @@ describe("what a yes already settled", () => {
   it("says plainly that nothing was waiting when this message settled nothing", async () => {
     const out = await runtime([], [{ kind: "browser-act", detail: "Click “Delete” on https://example.com/" }]).execute("confirm_pending", { decision: "yes" });
     expect(out.result).toBe("Nothing is waiting for their OK (it was dropped, or it expired after 5 minutes).");
+  });
+});
+
+describe("answering a file chooser", () => {
+  let selfhub: string;
+  let cleanup: () => Promise<void>;
+  let home: string;
+  beforeEach(async () => {
+    ({ dir: selfhub, cleanup } = await makeTmpSelfhub());
+    home = await mkdtemp(join(tmpdir(), "cos-up-"));
+    process.env.COS_HOME = home;
+  });
+  afterEach(async () => {
+    delete process.env.COS_HOME;
+    await cleanup();
+    await rm(home, { recursive: true, force: true });
+  });
+
+  /** A browser whose snapshot fails the way Playwright's does while a chooser is open. */
+  function chooserOpen() {
+    let modal = true;
+    const calls: string[] = [];
+    const driver: BrowserDriver = {
+      async call(tool, args) {
+        calls.push(tool);
+        if (tool === "browser_file_upload") { modal = false; return ""; }
+        if (modal) throw new Error('Tool "browser_snapshot" does not handle the modal state.');
+        if (tool === "browser_snapshot") return "### Page\n- Page URL: https://www.facebook.com/x\n- Page Title: F\n### Snapshot\n```yaml\n- button \"Post\" [ref=e1]\n```";
+        return "";
+      },
+      async close() {},
+    };
+    return { driver, calls };
+  }
+
+  const runtime = (browser: AssistantBrowser) =>
+    new ToolRuntime(loadConfig({ COS_SELFHUB: selfhub, COS_PROJECT_ROOTS: "/nonexistent" }), "2026-09-15", undefined, {
+      browser, access: () => ({ terminal: "ask", agents: "ask", links: "auto", screen: "auto", browser: "ask" }),
+    });
+
+  it("sends a picture it made and says it is attached, not posted", async () => {
+    const made = saveArtifact({ kind: "image", title: "dog", mediaType: "image/png", data: Buffer.from("not really a png"), prompt: "a dog" });
+    const fake = chooserOpen();
+    const browser = new AssistantBrowser(fake.driver, join(home, "browser.json"), { stepMs: 0, maxMs: 0 });
+    browser.allow("https://www.facebook.com/");
+    const out = await runtime(browser).execute("browser_upload", { ids: [made.id] });
+    expect(out.isError).toBe(false);
+    expect(out.result).toMatch(/It is attached, not posted/);
+    expect(fake.calls).toContain("browser_file_upload");
+  });
+
+  it("refuses a file that is not theirs", async () => {
+    const browser = new AssistantBrowser(chooserOpen().driver, join(home, "browser.json"), { stepMs: 0, maxMs: 0 });
+    const out = await runtime(browser).execute("browser_upload", { paths: ["/etc/passwd"] });
+    expect(out.isError).toBe(true);
+    expect(out.result).toMatch(/isn't under their home folder/);
+  });
+
+  it("says which tool answers a chooser instead of repeating Playwright's wording", async () => {
+    const browser = new AssistantBrowser(chooserOpen().driver, join(home, "browser.json"), { stepMs: 0, maxMs: 0 });
+    browser.allow("https://www.facebook.com/");
+    const out = await runtime(browser).execute("browser_read", {});
+    expect(out.result).toMatch(/A file chooser is open .* Use browser_upload with the picture's id, or with nothing to close it\./);
   });
 });
