@@ -13,7 +13,7 @@ import {
   NoModelError, createProvider, explainNotReady, formatSpec, resolveModel,
   type ModelIntent, type ModelSpec,
 } from "./llm/registry.js";
-import { EFFORTS, type ChatMessage, type Effort, type ImageInput, type LLMProvider } from "./llm/types.js";
+import { EFFORTS, type ChatMessage, type Effort, type ImageInput, type LLMProvider, type ToolResult } from "./llm/types.js";
 import { persona } from "./persona.js";
 import { DEFAULT_MESSAGES, loadPrompt } from "./prompts.js";
 import { BRIEF_SCHEMA, type Brief } from "./schema.js";
@@ -69,6 +69,30 @@ export interface RunResult {
   steps: ChatMessage[];
 }
 
+/**
+ * Tools whose result is the whole page. A browser run reads the page at every step, so by its fifth
+ * step the conversation holds five pages and sends every one of them again. Only the newest says
+ * anything true about the page now; the rest are replaced with a line saying where they went.
+ */
+const PAGE_TOOLS = new Set(["browser_open", "browser_read", "browser_click", "browser_type", "browser_select", "browser_back", "browser_do"]);
+
+const PAGE_DROPPED = "(A page read earlier in this run. Only the latest read is kept; read the page again if you still need it.)";
+
+/** The messages as the model should see them, without altering the record they came from. */
+export function withoutOldPages(messages: ChatMessage[]): ChatMessage[] {
+  const name = new Map<string, string>();
+  for (const m of messages) if (m.role === "assistant") for (const c of m.toolCalls) name.set(c.id, c.name);
+  const isPage = (r: ToolResult) => !r.isError && PAGE_TOOLS.has(name.get(r.id) ?? "");
+  const pages = messages.flatMap((m) => (m.role === "tool" ? m.results.filter(isPage) : []));
+  if (pages.length < 2) return messages;
+  const newest = pages.at(-1);
+  return messages.map((m) =>
+    m.role === "tool"
+      ? { role: "tool", results: m.results.map((r) => (isPage(r) && r !== newest ? { ...r, content: PAGE_DROPPED } : r)) }
+      : m,
+  );
+}
+
 export class RefusedError extends Error {
   constructor(message = "The model declined this request.") {
     super(message);
@@ -120,7 +144,7 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
         model: spec.model,
         instructions,
         context: memory,
-        messages,
+        messages: withoutOldPages(messages),
         tools,
         serverTools,
         json: intent === "brief" ? { name: "brief", schema: BRIEF_SCHEMA as unknown as Record<string, unknown> } : undefined,

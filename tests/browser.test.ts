@@ -61,16 +61,16 @@ describe("reading pages", () => {
   ].join("\n");
 
   it("finds elements by ref and knows which clicks can change something", () => {
-    expect(findElement(outline, "e4")).toEqual({ ref: "e4", role: "link", name: "Grades" });
-    expect(findElement(outline, "f1e15")).toEqual({ ref: "f1e15", role: "button", name: 'Say "hi"' });
+    expect(findElement(outline, "e4")).toEqual({ ref: "e4", role: "link", name: "Grades", nth: 1 });
+    expect(findElement(outline, "f1e15")).toEqual({ ref: "f1e15", role: "button", name: 'Say "hi"', nth: 1 });
     expect(findElement(outline, "e99")).toBeNull();
     const clicks = (ref: string) => consequentialClick(findElement(outline, ref)!);
     expect([clicks("e4"), clicks("e6"), clicks("e13"), clicks("e14")]).toEqual([false, false, true, true]);
     for (const name of ["Place order", "Delete assignment", "Reply", "Cancel my subscription", "Submit quiz", "Pay now"]) {
-      expect([name, consequentialClick({ ref: "e1", role: "button", name })]).toEqual([name, true]);
+      expect([name, consequentialClick({ role: "button", name })]).toEqual([name, true]);
     }
     for (const name of ["Orders", "Comments", "Posts", "Cancel", "Next page", "Show more"]) {
-      expect([name, consequentialClick({ ref: "e1", role: "button", name })]).toEqual([name, false]);
+      expect([name, consequentialClick({ role: "button", name })]).toEqual([name, false]);
     }
   });
 

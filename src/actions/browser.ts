@@ -106,32 +106,54 @@ export interface Element {
   ref: string;
   role: string;
   name: string;
+  /**
+   * Which of the identically named elements on the page this is, counting from 1. A search results
+   * page carries two dozen buttons called "More actions"; the name alone cannot tell them apart.
+   */
+  nth: number;
 }
 
-/** An element from a page outline line, e.g. `- button "Send" [ref=e13]`. */
-export function findElement(outline: string, ref: string): Element | null {
-  for (const raw of outline.split("\n")) {
-    // YAML quotes a whole item when its text has special characters: - 'heading "Sent: a&b" [ref=e2]'
-    const line = raw.trim().replace(/^-\s+'(.*)'(:?)$/, (_, body: string, colon: string) => `- ${body.replace(/''/g, "'")}${colon}`);
-    if (!line.includes(`[ref=${ref}]`)) continue;
-    const m = /^-\s+([\w-]+)(?:\s+"((?:[^"\\]|\\.)*)")?/.exec(line);
-    return { ref, role: m?.[1] ?? "", name: (m?.[2] ?? "").replace(/\\"/g, '"') };
-  }
-  return null;
+/** Roles that can be acted on. Headings, text and layout boxes carry refs too, and are not offered as actions. */
+const INTERACTIVE = new Set([
+  "button", "link", "textbox", "searchbox", "combobox", "checkbox", "radio", "menuitem",
+  "menuitemcheckbox", "menuitemradio", "tab", "switch", "slider", "spinbutton", "option",
+]);
+
+export function interactive(el: Element): boolean {
+  return INTERACTIVE.has(el.role);
 }
 
-/** Every element in a page outline that has a ref. */
+/** YAML quotes a whole item when its text has special characters: - 'heading "Sent: a&b" [ref=e2]'. */
+function outlineLine(raw: string): string {
+  return raw.trim().replace(/^-\s+'(.*)'(:?)$/, (_, body: string, colon: string) => `- ${body.replace(/''/g, "'")}${colon}`);
+}
+
+/** Every element in a page outline that has a ref, in page order. */
 export function findElements(outline: string): Element[] {
   const out: Element[] = [];
-  for (const m of outline.matchAll(/\[ref=((?:f\d+)?e\d+)\]/g)) {
-    const el = findElement(outline, m[1]);
-    if (el) out.push(el);
+  const seen = new Map<string, number>();
+  for (const raw of outline.split("\n")) {
+    const line = outlineLine(raw);
+    const ref = /\[ref=((?:f\d+)?e\d+)\]/.exec(line)?.[1];
+    if (!ref) continue;
+    const m = /^-\s+([\w-]+)(?:\s+"((?:[^"\\]|\\.)*)")?/.exec(line);
+    const role = m?.[1] ?? "";
+    const name = (m?.[2] ?? "").replace(/\\"/g, '"');
+    const key = `${role}\u0000${name}`;
+    const nth = (seen.get(key) ?? 0) + 1;
+    seen.set(key, nth);
+    out.push({ ref, role, name, nth });
   }
   return out;
 }
 
+/** An element from a page outline line, e.g. `- button "Send" [ref=e13]`. */
+export function findElement(outline: string, ref: string): Element | null {
+  return findElements(outline).find((el) => el.ref === ref) ?? null;
+}
+
 /** Whether clicking this could send, buy, post, delete or otherwise change something: those wait for an OK. */
-export function consequentialClick(el: Element): boolean {
+export function consequentialClick(el: Pick<Element, "role" | "name">): boolean {
   if (CONSEQUENTIAL.test(el.name)) return true;
   // A button with no name, or an unlabeled form control that submits: can't tell, so it asks.
   return (el.role === "button" && !el.name.trim()) || el.role === "form";
@@ -387,6 +409,11 @@ export class AssistantBrowser {
     return this.last?.url ?? "";
   }
 
+  /** What can be acted on in the page as last read, in page order. */
+  elements(): Element[] {
+    return this.last ? findElements(this.last.outline).filter(interactive) : [];
+  }
+
   /**
    * The same element on the page now, for an OK given after the page was read: the page must still be
    * at the same address, and the element found by its ref, or by its role and name if the ref moved.
@@ -399,6 +426,9 @@ export class AssistantBrowser {
     if (same && same.role === el.role && same.name === el.name) return same;
     const matches = findElements(this.last!.outline).filter((e) => e.role === el.role && e.name === el.name);
     if (matches.length === 1) return matches[0];
+    // Many pages repeat a name on every row. The one in the same position is the one they were shown.
+    const samePlace = matches.find((e) => e.nth === el.nth);
+    if (samePlace) return samePlace;
     throw new Error(`“${el.name || el.role}” isn't on the page the way it was, so nothing was done. Read it again and ask once more.`);
   }
 
