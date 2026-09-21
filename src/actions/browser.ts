@@ -111,6 +111,12 @@ export interface Element {
    * page carries two dozen buttons called "More actions"; the name alone cannot tell them apart.
    */
   nth: number;
+  /**
+   * The nearest named thing this sits inside. "Delete listing" is the same words under every listing
+   * on the page; what says which one it belongs to is the listing it is nested in, and the outline
+   * has that in its indentation.
+   */
+  within?: string;
 }
 
 /** Roles that can be acted on. Headings, text and layout boxes carry refs too, and are not offered as actions. */
@@ -129,20 +135,33 @@ function outlineLine(raw: string): string {
 }
 
 /** Every element in a page outline that has a ref, in page order. */
+/** Roles that only hold other things; being inside one says nothing about which thing you are. */
+const PLAIN_CONTAINER = new Set(["generic", "group", "list", "listitem", "main", "banner", "navigation", "contentinfo", "complementary", "region", "menu", "document", "none", "presentation"]);
+
 export function findElements(outline: string): Element[] {
   const out: Element[] = [];
   const seen = new Map<string, number>();
+  /** The named things currently open above this line, outermost first. */
+  const open: { depth: number; name: string }[] = [];
   for (const raw of outline.split("\n")) {
+    if (!raw.trim()) continue;
+    const depth = raw.length - raw.trimStart().length;
     const line = outlineLine(raw);
-    const ref = /\[ref=((?:f\d+)?e\d+)\]/.exec(line)?.[1];
-    if (!ref) continue;
+    while (open.length && open[open.length - 1].depth >= depth) open.pop();
+
     const m = /^-\s+([\w-]+)(?:\s+"((?:[^"\\]|\\.)*)")?/.exec(line);
     const role = m?.[1] ?? "";
     const name = (m?.[2] ?? "").replace(/\\"/g, '"');
-    const key = `${role}\u0000${name}`;
-    const nth = (seen.get(key) ?? 0) + 1;
-    seen.set(key, nth);
-    out.push({ ref, role, name, nth });
+    const ref = /\[ref=((?:f\d+)?e\d+)\]/.exec(line)?.[1];
+    if (ref) {
+      const key = `${role}\u0000${name}`;
+      const nth = (seen.get(key) ?? 0) + 1;
+      seen.set(key, nth);
+      const within = open.at(-1)?.name;
+      out.push({ ref, role, name, nth, ...(within ? { within } : {}) });
+    }
+    // Only a named thing that is something in its own right can say what its contents belong to.
+    if (name.trim() && !PLAIN_CONTAINER.has(role)) open.push({ depth, name: name.trim() });
   }
   return out;
 }

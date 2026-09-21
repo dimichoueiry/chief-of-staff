@@ -26,6 +26,8 @@ const MAX_TARGETS = 251;
 const SURE_OF_TARGET = 0.6;
 const CLEARLY_AHEAD = { atLeast: 0.25, times: 2 };
 const SURE_ITS_DONE = 0.8;
+/** How sure it has to be that this is the very thing named, before doing something irreversible. */
+const SURE_ITS_THE_ONE = 0.7;
 
 const WAYS_OUT = {
   scroll: "None of the elements above is the next step, but the page continues below.",
@@ -57,7 +59,10 @@ export type GoalOutcome =
 export function describeElement(el: Element): string {
   const name = el.name.trim();
   const what = name ? `${el.role} "${name.slice(0, 120)}"` : `${el.role} with no label`;
-  return el.nth > 1 ? `${what} (the ${ordinal(el.nth)} one like it on the page)` : what;
+  // What it sits inside is usually what says which one it is: every listing has a "Delete listing".
+  const within = el.within && el.within !== name ? `, in "${el.within.slice(0, 120)}"` : "";
+  const nth = el.nth > 1 && !within ? ` (the ${ordinal(el.nth)} one like it on the page)` : "";
+  return `${what}${within}${nth}`;
 }
 
 function ordinal(n: number): string {
@@ -137,12 +142,36 @@ export async function runGoal(jev: Jev, browser: AssistantBrowser, o: GoalReques
       continue;
     }
     if (verb === "select") return { kind: "handover", why: `${describeElement(el)} is a dropdown, which needs the model to know the options`, page, steps };
-    if (consequentialClick(el)) return { kind: "confirm", ask: { action: "click", element: el, url: browser.address }, page, steps };
+    if (consequentialClick(el)) {
+      // Picking the best of two hundred labels is not the same as being right about this one. Before
+      // something that cannot be undone, ask plainly whether it belongs to what the goal named.
+      const right = await isTheOne(jev, o.goal, el).catch(() => null);
+      if (right !== null && right < SURE_ITS_THE_ONE) {
+        return { kind: "handover", why: `${describeElement(el)} may not be the one “${o.goal}” means (${pct(right)})`, page, steps };
+      }
+      return { kind: "confirm", ask: { action: "click", element: el, url: browser.address }, page, steps };
+    }
 
     page = await browser.click(el);
     steps.push(`clicked ${describeElement(el)}`);
   }
   return { kind: "handover", why: `it took ${maxSteps} steps without getting there`, page, steps };
+}
+
+/** One yes/no, about the thing itself: is this the one the goal names? */
+async function isTheOne(jev: Jev, goal: string, el: Element): Promise<number> {
+  const r = await jev({
+    state: { goal, element: describeElement(el), within: el.within ?? null },
+    questions: {
+      right_one: {
+        type: "noul",
+        instructions:
+          "`element` is about to be clicked, and it cannot be undone. Going by `within`, the thing it belongs to, " +
+          "is this the very one `goal` names? Answer no if `goal` names something else, or if nothing here says which one this is.",
+      },
+    },
+  });
+  return (r.answers.right_one as NoulAnswer).noul;
 }
 
 /** One request: whether the goal is met, what to do next, and which of the given values to type. */
