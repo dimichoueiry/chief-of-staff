@@ -611,6 +611,8 @@ export class ToolRuntime {
       awaiting?: ConfirmView[];
       /** Actions carried out recently in this conversation, so they aren't queued again. */
       recentlyDone?: { kind: string; detail: string }[];
+      /** What a yes in this very message already carried out, or failed to (see settlePending). */
+      justSettled?: string[];
       bookmarks?: () => Promise<BookmarkRead>;
       screen?: ScreenCapturer;
       browser?: AssistantBrowser;
@@ -845,11 +847,12 @@ private async pursue(goal: string, rawValues: unknown): Promise<string> {
         }
         const waiting = (this.actions.awaiting ?? []).filter((v) => isPending(v.id));
         if (!waiting.length) {
-          // A clear yes is carried out before the model runs (see settlePending), so by the time it
-          // asks, the usual answer is that this very turn already did it, not that anything expired.
-          const justDone = (this.actions.recentlyDone ?? []).at(-1);
-          return justDone
-            ? `Nothing is waiting: what they agreed to was already carried out — ${justDone.detail}. Do not do it again; carry on from where that left the page.`
+          // A clear yes is carried out before the model runs (see settlePending), so the usual
+          // answer is what this very message already did — including when it failed. Anything older
+          // belongs to another page and another task, and saying it here sends the model after it.
+          const just = this.actions.justSettled ?? [];
+          return just.length
+            ? `Nothing is waiting, because this message already settled it: ${just.join(" ")} Carry on from there.`
             : "Nothing is waiting for their OK (it was dropped, or it expired after 5 minutes).";
         }
         const yes = this.str(input, "decision", true) === "yes";

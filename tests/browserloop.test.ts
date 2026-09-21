@@ -550,3 +550,29 @@ describe("finishing what a yes started", () => {
     expect(again.result).toMatch(/already waiting for their OK/);
   });
 });
+
+describe("what a yes already settled", () => {
+  let selfhub: string;
+  let cleanup: () => Promise<void>;
+  beforeEach(async () => { ({ dir: selfhub, cleanup } = await makeTmpSelfhub()); });
+  afterEach(async () => { await cleanup(); });
+
+  const runtime = (justSettled: string[], recentlyDone: { kind: string; detail: string }[] = []) =>
+    new ToolRuntime(loadConfig({ COS_SELFHUB: selfhub, COS_PROJECT_ROOTS: "/nonexistent" }), "2026-09-15", undefined, {
+      awaiting: [], justSettled, recentlyDone,
+    });
+
+  it("answers about this message, not about something else minutes ago on another page", async () => {
+    const stale = [{ kind: "browser-act", detail: "Click “Delete” on https://www.facebook.com/marketplace/you/selling" }];
+    const out = await runtime(["They said yes, but Click the unlabeled button failed: the page changed."], stale).execute("confirm_pending", { decision: "yes" });
+    expect(out.result).toMatch(/this message already settled it/);
+    expect(out.result).toMatch(/failed: the page changed/);
+    // The unrelated marketplace delete does not get dragged in.
+    expect(out.result).not.toMatch(/marketplace/);
+  });
+
+  it("says plainly that nothing was waiting when this message settled nothing", async () => {
+    const out = await runtime([], [{ kind: "browser-act", detail: "Click “Delete” on https://example.com/" }]).execute("confirm_pending", { decision: "yes" });
+    expect(out.result).toBe("Nothing is waiting for their OK (it was dropped, or it expired after 5 minutes).");
+  });
+});
