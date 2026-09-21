@@ -188,6 +188,17 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
     if (images.length) messages.push({ role: "user", content: "(The screenshot you just took.)", images });
   }
   if (!last) throw new Error("The model returned nothing.");
+  // The last turn of the cap is usually another tool call, which carries no words: without this the
+  // reply is empty and a minute of work looks to them like nothing happened at all.
+  if (turns >= maxTurns && last.stop === "tool_use" && !last.text.trim()) {
+    const did = runtime.calls.filter((c) => !c.isError).map((c) => c.name);
+    const tally = [...new Set(did)].map((n) => `${n}${did.filter((x) => x === n).length > 1 ? ` ×${did.filter((x) => x === n).length}` : ""}`);
+    last = {
+      ...last,
+      text: `I ran out of steps before finishing that (${maxTurns} in one go)${tally.length ? `. I got as far as: ${tally.join(", ")}` : ""}. Tell me to carry on and I'll pick up where I stopped.`,
+    };
+    step("error", `ran out of turns at ${maxTurns} with nothing said`, { tools: did.length });
+  }
 
   let brief: Brief | undefined;
   if (intent === "brief") {

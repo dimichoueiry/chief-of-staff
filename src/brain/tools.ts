@@ -394,7 +394,11 @@ export const TOOLS: Record<string, ToolSpec> = {
       type: "object",
       properties: {
         url: s("The full address, e.g. https://canvas.illinois.edu/courses"),
-        goal: s("What you want done on the page, in one line, e.g. \"open the assignment called MP3\" or \"read what is due this week\""),
+        goal: s(
+          "What you want done on the page, as one short phrase: \"open the assignment called MP3\", \"delete the iPhone listing\". " +
+          "What picks the next element is a classifier, not a reader: conditions, steps and explanations of what not to do make it less sure, not more. " +
+          "One thing at a time, and say the next thing afterwards.",
+        ),
         values: { type: "array", items: { type: "string" }, description: "Text it may type, e.g. a search term or a message to put in a box" },
       },
       required: ["url", "goal"],
@@ -473,7 +477,7 @@ export const TOOLS: Record<string, ToolSpec> = {
     parameters: {
       type: "object",
       properties: {
-        goal: s("What to get done on this page, e.g. \"open the assignment called MP3\""),
+        goal: s("The next thing to get done on the page, as one short phrase: \"open the assignment called MP3\", \"delete the iPhone listing\". No conditions or steps."),
         values: { type: "array", items: { type: "string" }, description: "Text it may type, e.g. what to put in a message box" },
       },
       required: ["goal"],
@@ -840,7 +844,14 @@ private async pursue(goal: string, rawValues: unknown): Promise<string> {
           throw new Error("confirm_pending has to come first in a reply, decided only from what they said. Nothing was done; ask them again.");
         }
         const waiting = (this.actions.awaiting ?? []).filter((v) => isPending(v.id));
-        if (!waiting.length) return "Nothing is waiting for their OK (it was already done, dropped, or it expired after 5 minutes).";
+        if (!waiting.length) {
+          // A clear yes is carried out before the model runs (see settlePending), so by the time it
+          // asks, the usual answer is that this very turn already did it, not that anything expired.
+          const justDone = (this.actions.recentlyDone ?? []).at(-1);
+          return justDone
+            ? `Nothing is waiting: what they agreed to was already carried out — ${justDone.detail}. Do not do it again; carry on from where that left the page.`
+            : "Nothing is waiting for their OK (it was dropped, or it expired after 5 minutes).";
+        }
         const yes = this.str(input, "decision", true) === "yes";
         const lines: string[] = [];
         for (const v of waiting) {
