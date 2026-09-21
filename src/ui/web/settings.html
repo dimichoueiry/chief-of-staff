@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Settings — Chief of Staff</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body class="page-body">
+  <main class="stage">
+    <section class="panel">
+      <header class="panel-head">
+        <div>
+          <h1>My instructions</h1>
+          <p class="headline">What you want done differently, in every conversation.</p>
+        </div>
+        <div class="head-actions">
+          <button class="chip chip-accent" id="save">save</button>
+          <button class="chip" id="clear" title="Go back to the default on its own">use the default</button>
+        </div>
+      </header>
+      <textarea id="instructions" class="editor" spellcheck="false" placeholder="Call me Dimitri. Keep replies to three sentences unless I ask for more.
+Write my LinkedIn posts in my voice: plain, concrete, no hype, no emoji.
+Instagram posts are 4:5. Always show me the post as a page before we settle on it."></textarea>
+      <p class="note"><span id="count"></span> · added to what it already knows, and it wins where the two disagree. Empty means the default alone. <span id="file" class="mono"></span></p>
+      <details class="fold">
+        <summary>What it already knows</summary>
+        <pre id="default" class="detail"></pre>
+      </details>
+
+      <h2 class="section accent">Pictures</h2>
+      <p class="note">Which OpenRouter model draws when you ask for an image. Nano Banana 2 is quick and gets words inside a picture right; the Pro one is slower and better.</p>
+      <div class="row">
+        <select id="image-model" class="select"></select>
+        <button class="chip chip-accent" id="save-image">use it</button>
+      </div>
+      <p class="note" id="image-note"></p>
+
+      <footer class="panel-foot" id="said"></footer>
+    </section>
+  </main>
+  <script src="/dom.js"></script>
+  <script src="/settings.js"></script>
+</body>
+</html>

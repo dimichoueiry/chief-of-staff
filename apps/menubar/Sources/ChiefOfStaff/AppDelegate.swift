@@ -160,6 +160,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     menu.addItem(model)
     keysItem = add(menu, "API keys…", #selector(showKeys))
     connectionsItem = add(menu, "Connections…", #selector(showConnections))
+    add(menu, "My instructions…", #selector(showSettings))
     memoryItem = NSMenuItem(title: "Memory", action: nil, keyEquivalent: "")
     memoryItem.submenu = memoryMenu
     menu.addItem(memoryItem)
@@ -525,6 +526,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   @objc private func showKeys() { keysWindow.show() }
 
   @objc private func showConnections() { connectionsWindow.show() }
+
+  /// Instructions and the model that draws: a page the app already serves, opened in their browser,
+  /// because a box you write paragraphs in wants a window, not a menu.
+  @objc private func showSettings() { NSWorkspace.shared.open(server.config.baseURL.appendingPathComponent("settings.html")) }
 
   /// The grid menu and the per-area submenus under it don't refresh the whole status menu when they open.
   private func isGridMenu(_ menu: NSMenu) -> Bool {

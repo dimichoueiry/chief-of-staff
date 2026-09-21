@@ -2,7 +2,7 @@
  * In a browser it is a full page. Hosted by the native shell (?shell=1) it is a
  * transparent strip anchored at the bottom of the screen, and the shell drives
  * it through window.cosShell (hotkeys, native listening). */
-const $ = (id) => document.getElementById(id);
+const { $, el, get, post } = window.cosDom;
 const params = new URLSearchParams(location.search);
 const SHELL = params.get("shell") === "1" && Boolean(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.shell);
 const root = document.documentElement;
@@ -47,17 +47,6 @@ function noticeThenClear(text, tone, ms) {
 }
 
 // ---------- render ----------
-function el(tag, attrs = {}, ...children) {
-  const n = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) {
-    if (k === "class") n.className = v;
-    else if (k.startsWith("on")) n.addEventListener(k.slice(2), v);
-    else n.setAttribute(k, v);
-  }
-  for (const c of children) n.append(c);
-  return n;
-}
-
 function renderBrief(data) {
   brief = data.brief;
   offline = Boolean(data.offline);
@@ -132,16 +121,6 @@ function renderBrief(data) {
 
   $("source").textContent = `${data.source}${offline ? " · no API key yet: add one under ✦ › API keys" : ""} · ${data.today}`;
   $("panel").dataset.speech = data.speech;
-}
-
-// ---------- network ----------
-async function get(url) {
-  const r = await fetch(url);
-  return r.json();
-}
-async function post(url, body) {
-  const r = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-  return r.json();
 }
 
 async function loadBrief(refresh = false) {
@@ -406,6 +385,31 @@ function markLooked(node, screen) {
   node.append(el("span", { class: "looked" }, `looked at your screen${screen.app ? ` · ${screen.app}` : ""}`));
 }
 
+/** The window that shows one picture or page full size, with the buttons to save it. */
+function openArtifact(id) {
+  openLink(new URL(`/artifact.html?id=${encodeURIComponent(id)}`, location.href).href);
+}
+
+/**
+ * What a reply made, shown under it: the picture itself, or the top of the page as it will look.
+ * Both open full size; the preview is a picture of the page, so nothing in it can be clicked.
+ */
+function artifactCards(items) {
+  const box = el("div", { class: "artifacts" });
+  for (const a of items) {
+    const open = () => openArtifact(a.id);
+    const url = `/artifacts/${encodeURIComponent(a.id)}`;
+    box.append(
+      el("figure", { class: `artifact ${a.kind}` },
+        a.kind === "image"
+          ? el("img", { src: url, alt: a.title, onclick: open })
+          : el("div", { class: "page-preview", onclick: open }, el("iframe", { src: url, sandbox: "allow-scripts", title: a.title, tabindex: "-1" })),
+        el("figcaption", {}, el("span", { class: "name" }, a.title), el("button", { class: "chip", onclick: open }, "open"))),
+    );
+  }
+  return box;
+}
+
 /** Put a reply (or the text streaming in so far) into an assistant turn. */
 function fillTurn(node, turn) {
   node.dataset.kind = turn.kind || "answer";
@@ -415,6 +419,7 @@ function fillTurn(node, turn) {
   else body.append(renderMarkdown(turn.text));
   node.replaceChildren(body);
   if (turn.confirm && turn.confirm.length) node.append(confirmButtons(turn.confirm, turn.text));
+  if (turn.artifacts && turn.artifacts.length) node.append(artifactCards(turn.artifacts));
 }
 
 function addTurn(turn) {
@@ -784,6 +789,9 @@ async function send(body, thinking, fromVoice = false) {
   $("answer-model").textContent = r.model && r.model !== "rules" ? `· ${r.model}` : "";
   scrollThread();
   if (chatHidden && r.text) $("show-chat").classList.add("unread");
+  // A page is made to be looked at, so it opens full size the moment it exists. A picture is
+  // already in the reply and waits to be clicked. In a browser tab a pop-up would be blocked.
+  if (SHELL) for (const a of r.artifacts || []) if (a.kind === "page") openArtifact(a.id);
   if (r.changes) markStale();
   if (r.title && r.conversation === conversationId) showChatInfo({ title: r.title });
   refreshTitleSoon();

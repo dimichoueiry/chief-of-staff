@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  NoModelError, explainNotReady, formatSpec, parseModelSpec, presets, providerConfigured,
-  readModelSettings, resolveModel, setModel,
+  DEFAULT_IMAGE_MODEL, NoModelError, explainNotReady, formatSpec, parseImageSpec, parseModelSpec, presets, providerConfigured,
+  readModelSettings, resolveImageModel, resolveModel, setImageModel, setModel,
 } from "../src/brain/llm/registry.js";
 import { providerFor } from "../src/brain/loop.js";
 
@@ -88,5 +88,34 @@ describe("models.json", () => {
     setModel(null, undefined, file);
     expect(readModelSettings(file)).toEqual({});
     expect(presets({ presets: ["openrouter:qwen/qwen3-coder"] })).toContain("openrouter:qwen/qwen3-coder");
+  });
+});
+
+describe("the model that draws", () => {
+  const env = { OPENROUTER_API_KEY: "sk-or" } as NodeJS.ProcessEnv;
+
+  it("uses theirs, then COS_IMAGE_MODEL, then the default", () => {
+    expect(formatSpec(resolveImageModel({ env, settings: {} }).spec)).toBe(DEFAULT_IMAGE_MODEL);
+    expect(resolveImageModel({ env, settings: {} })).toMatchObject({ source: "auto", ready: true });
+    expect(resolveImageModel({ env: { ...env, COS_IMAGE_MODEL: "openai/gpt-image-2" }, settings: {} })).toMatchObject({
+      source: "COS_IMAGE_MODEL",
+      spec: { provider: "openrouter", model: "openai/gpt-image-2" },
+    });
+    expect(resolveImageModel({ env, settings: { image: "openrouter:qwen/qwen-image-3" } })).toMatchObject({ source: "settings (images)" });
+    expect(resolveImageModel({ env: {}, settings: {} })).toMatchObject({ ready: false, missing: "OPENROUTER_API_KEY" });
+  });
+
+  it("only takes a model that can draw, and clearing it goes back to the default", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cos-home-"));
+    const file = join(dir, "models.json");
+    try {
+      expect(() => parseImageSpec("anthropic:claude-opus-5")).toThrow(/OpenRouter/);
+      expect(() => setImageModel("openai:gpt-image-2", file)).toThrow(/OpenRouter/);
+      expect(setImageModel("google/gemini-3-pro-image", file).image).toBe("openrouter:google/gemini-3-pro-image");
+      expect(readModelSettings(file)).toEqual({ image: "openrouter:google/gemini-3-pro-image" });
+      expect(setImageModel(null, file).image).toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

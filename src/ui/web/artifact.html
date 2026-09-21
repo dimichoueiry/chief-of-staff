@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Chief of Staff</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body class="page-body">
+  <main class="stage">
+    <section class="panel wide">
+      <header class="panel-head">
+        <div>
+          <h1 id="title">Loading…</h1>
+          <p class="headline" id="meta"></p>
+        </div>
+        <div class="head-actions">
+          <a class="chip chip-accent" id="save" download>save…</a>
+          <button class="chip" id="copy">copy</button>
+          <a class="chip" id="raw" target="_blank" rel="noopener">on its own</a>
+        </div>
+      </header>
+      <div class="viewer" id="viewer"></div>
+      <footer class="panel-foot" id="prompt"></footer>
+    </section>
+  </main>
+  <script src="/dom.js"></script>
+  <script src="/artifact.js"></script>
+</body>
+</html>
