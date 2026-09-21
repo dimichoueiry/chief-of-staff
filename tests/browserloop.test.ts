@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -624,6 +625,9 @@ describe("answering a file chooser", () => {
     expect(out.isError).toBe(false);
     expect(out.result).toMatch(/It is attached, not posted/);
     expect(fake.calls).toContain("browser_file_upload");
+    // Playwright only sends from its own folder, so the picture is copied there and the original stays put.
+    expect(existsSync(join(home, "browser", "output", `${made.id}.png`))).toBe(true);
+    expect(existsSync(join(home, "artifacts", `${made.id}.png`))).toBe(true);
   });
 
   it("refuses a file that is not theirs", async () => {

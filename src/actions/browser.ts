@@ -16,9 +16,9 @@
  * - It only acts on elements from the page as last read, never on selectors it made up.
  * - Page text is told to the model as information, never instructions.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { cosHome } from "../util/home.js";
 
 // ---------- the site list ----------
@@ -540,8 +540,23 @@ export class AssistantBrowser {
    * limited to files the assistant itself made or the user's own; what publishes them still asks.
    */
   async upload(paths: string[]): Promise<string> {
-    await this.call("browser_file_upload", paths.length ? { paths } : {});
+    const staged = paths.map((from) => this.stage(from));
+    await this.call("browser_file_upload", staged.length ? { paths: staged } : {});
     return this.settled();
+  }
+
+  /**
+   * Playwright will only send a file from its own output folder — everywhere else comes back "outside
+   * allowed roots" — so anything from elsewhere is copied in first. The copy is ours and throwaway;
+   * the original is never moved or touched.
+   */
+  private stage(from: string): string {
+    const out = join(browserHome(), "output");
+    if (dirname(from) === out) return from;
+    mkdirSync(out, { recursive: true });
+    const to = join(out, basename(from));
+    copyFileSync(from, to);
+    return to;
   }
 
   /**
