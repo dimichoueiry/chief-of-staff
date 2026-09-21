@@ -411,3 +411,87 @@ describe("running out of steps", () => {
     expect(r.text).toMatch(/Tell me to carry on/);
   });
 });
+
+describe("knowing which one it is about to act on", () => {
+  /** Two listings, each with its own identical "Delete listing". */
+  const LISTINGS = [
+    '- list [ref=e1]:',
+    '  - listitem [ref=e2]:',
+    '    - link "Iphone 12 pro w/ case and screen protector 128 GB like new" [ref=e3]:',
+    '      - button "More options" [ref=e4]',
+    '      - menuitem "Delete listing" [ref=e5]',
+    '  - listitem [ref=e6]:',
+    '    - link "Private room for rent" [ref=e7]:',
+    '      - button "More options" [ref=e8]',
+    '      - menuitem "Delete listing" [ref=e9]',
+  ].join("\n");
+
+  it("says which listing a Delete belongs to, instead of two identical labels", () => {
+    const els = findElements(LISTINGS);
+    const deletes = els.filter((e) => e.name === "Delete listing");
+    expect(deletes.map((e) => e.within)).toEqual([
+      "Iphone 12 pro w/ case and screen protector 128 GB like new",
+      "Private room for rent",
+    ]);
+    expect(describeElement(deletes[0])).toBe('menuitem "Delete listing", in "Iphone 12 pro w/ case and screen protector 128 GB like new"');
+    expect(describeElement(deletes[1])).toBe('menuitem "Delete listing", in "Private room for rent"');
+    // The two labels Jev chooses between are now different from each other.
+    expect(describeElement(deletes[0])).not.toBe(describeElement(deletes[1]));
+  });
+
+  it("a plain box around things is not what a thing belongs to", () => {
+    const els = findElements('- generic [ref=e1]:\n  - region "Main" [ref=e2]:\n    - button "Save" [ref=e3]');
+    expect(els.find((e) => e.name === "Save")?.within).toBeUndefined();
+  });
+
+  it("stops before a delete when it is not sure that is the one named", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cos-one-"));
+    try {
+      const driver: BrowserDriver = {
+        async call(tool) {
+          if (tool === "browser_snapshot") return `### Page\n- Page URL: https://www.facebook.com/x\n- Page Title: F\n### Snapshot\n\`\`\`yaml\n${LISTINGS}\n\`\`\``;
+          if (tool === "browser_evaluate") return "### Result\nfalse";
+          return "";
+        },
+        async close() {},
+      };
+      const browser = new AssistantBrowser(driver, join(dir, "b.json"), { stepMs: 0, maxMs: 0 });
+      browser.allow("https://www.facebook.com/");
+
+      // Jev picks the room's Delete, but says it is not the one the goal names.
+      const jev: Jev = async (req) => {
+        if (req.questions.right_one) return { model: "t", answers: { right_one: { type: "noul", noul: 0.05 } } };
+        return fakeJev({ want: /Delete listing", in "Private room/ })(req);
+      };
+      const out = await runGoal(jev, browser, { goal: "delete the iPhone 12 listing" });
+      expect(out.kind).toBe("handover");
+      expect((out as { why: string }).why).toMatch(/may not be the one .delete the iPhone 12 listing. means \(5%\)/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("goes ahead and asks for an OK when it is the one named", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "cos-one2-"));
+    try {
+      const driver: BrowserDriver = {
+        async call(tool) {
+          if (tool === "browser_snapshot") return `### Page\n- Page URL: https://www.facebook.com/x\n- Page Title: F\n### Snapshot\n\`\`\`yaml\n${LISTINGS}\n\`\`\``;
+          if (tool === "browser_evaluate") return "### Result\nfalse";
+          return "";
+        },
+        async close() {},
+      };
+      const browser = new AssistantBrowser(driver, join(dir, "b.json"), { stepMs: 0, maxMs: 0 });
+      browser.allow("https://www.facebook.com/");
+      const jev: Jev = async (req) => {
+        if (req.questions.right_one) return { model: "t", answers: { right_one: { type: "noul", noul: 0.96 } } };
+        return fakeJev({ want: /Delete listing", in "Iphone 12/ })(req);
+      };
+      const out = await runGoal(jev, browser, { goal: "delete the iPhone 12 listing" });
+      expect(out).toMatchObject({ kind: "confirm", ask: { element: { ref: "e5" } } });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
