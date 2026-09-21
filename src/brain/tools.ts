@@ -9,6 +9,9 @@ import { basename, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { Config } from "../config.js";
 import type { ImageInput, ServerTools, ToolSpec } from "./llm/types.js";
+import { openRouterImages, type ImageMaker } from "./images.js";
+import { formatSpec, resolveImageModel } from "./llm/registry.js";
+import { readArtifact, ref, saveArtifact, type ArtifactRef } from "../core/artifacts.js";
 import { describeShot, helperCapturer, type ScreenCapturer } from "../sensors/screen.js";
 import { Conversations } from "./conversation.js";
 import { searchConversations } from "./recall.js";
@@ -449,6 +452,38 @@ export const TOOLS: Record<string, ToolSpec> = {
     description: "Go back to the previous page in your browser.",
     parameters: { type: "object", properties: {} },
   },
+  make_image: {
+    name: "make_image",
+    description:
+      "Draw a picture and put it on their screen: a post for Instagram, LinkedIn or Facebook, a thumbnail, a logo idea, an illustration, a photo of something that doesn't exist yet. " +
+      "Describe everything that should be in it — subject, style, colours, mood — and write any words that must appear exactly as they should be spelled. " +
+      "To change a picture they are already looking at, call this again with from set to that picture's id, and say only what changes.",
+    parameters: {
+      type: "object",
+      properties: {
+        prompt: s("What the picture is, in detail, including any text that must appear in it"),
+        title: s('A few words to label it, e.g. "launch post"'),
+        aspect_ratio: s("1:1 feed · 4:5 Instagram portrait · 9:16 story or reel · 16:9 banner or thumbnail · 1.91:1 LinkedIn link. Left out means the model's own shape."),
+        from: s("The id of a picture you made earlier, to change that one instead of starting again"),
+      },
+      required: ["prompt"],
+    },
+  },
+  make_page: {
+    name: "make_page",
+    description:
+      "Put a page you write on their screen: a post exactly as it would look in a feed, a landing page, a content calendar, a table of options, a mock-up — anything easier looked at than listened to. " +
+      "You write the whole HTML yourself, as one finished file: styles in a <style> tag, scripts inline. Pictures from the web (https) and Google Fonts load; a picture you made with make_image loads from /artifacts/<its id>. " +
+      "It is a draft they can look at, change and save, not something kept in memory.",
+    parameters: {
+      type: "object",
+      properties: {
+        title: s('A few words naming it, e.g. "LinkedIn post — launch week"'),
+        html: s("The whole page, from <!doctype html> to </html>"),
+      },
+      required: ["title", "html"],
+    },
+  },
   get_git_log: {
     name: "get_git_log",
     description: "Recent commits for a project's folder (by its path field or a folder named like the project).",
@@ -463,7 +498,7 @@ export const TOOLS: Record<string, ToolSpec> = {
 const ALL = Object.keys(TOOLS);
 /** Tools that do something outside memory: the conversation record lists what they did. */
 export const ACTIONS = [
-  "open", "run_command", "start_agent", "message_agent", "browser_click", "browser_type",
+  "open", "run_command", "start_agent", "message_agent", "browser_click", "browser_type", "make_image", "make_page",
   "start_orchestrator", "stop_orchestrator", "message_orchestrator", "respond_orchestrator_approval",
 ];
 
@@ -481,6 +516,7 @@ export function toolsFor(intent: Intent): ToolSpec[] {
       "get_project", "upsert_project", "get_git_log", "get_calendar", "open", "get_conversations", "find_folder", "run_command", "get_agents", "start_agent",
       "get_agent_models", "get_agent_output", "confirm_pending", "look_at_screen", "get_work_areas", "get_tickets", "change_ticket",
       "get_orchestrators", "start_orchestrator", "stop_orchestrator", "message_orchestrator", "respond_orchestrator_approval",
+      "make_image", "make_page",
     ],
     wrap: ["get_project", "append_journal", "touch_project", "upsert_project", "get_git_log", "get_conversations"],
   };
@@ -522,6 +558,8 @@ export class ToolRuntime {
   readonly pending: Pending[] = [];
   /** Actions carried out in this run (confirmed, or allowed to run on their own), so they aren't repeated. */
   readonly done: { kind: string; detail: string }[] = [];
+  /** Pictures and pages made in this run, shown with the reply and kept with the conversation. */
+  readonly artifacts: ArtifactRef[] = [];
   readonly shortcuts: Shortcuts;
 
   constructor(
@@ -543,6 +581,8 @@ export class ToolRuntime {
       bookmarks?: () => Promise<BookmarkRead>;
       screen?: ScreenCapturer;
       browser?: AssistantBrowser;
+      /** How pictures are drawn (tests). */
+      images?: ImageMaker;
     } = {},
   ) {
     this.shortcuts = new Shortcuts(config.selfhubDir);
@@ -763,6 +803,45 @@ export class ToolRuntime {
         const shot = await (this.actions.screen ?? helperCapturer).capture();
         this.images = [{ mediaType: shot.mediaType, data: shot.data }];
         return `${describeShot(shot)} The image follows.`;
+      }
+      case "make_image": {
+        const prompt = this.str(input, "prompt", true);
+        const from = this.str(input, "from");
+        const source = from ? readArtifact(from) : null;
+        if (from && (!source || source.artifact.kind !== "image")) {
+          throw new Error(`There is no picture with the id "${from}". Use the id of one you made, or leave from out to start a new picture.`);
+        }
+        const model = resolveImageModel();
+        if (!model.ready) throw new Error(`Drawing needs an OpenRouter key: ${model.missing} isn't set. They can add it under ✦ › API keys.`);
+        const made = await (this.actions.images ?? openRouterImages)({
+          prompt,
+          model: model.spec.model,
+          aspectRatio: this.str(input, "aspect_ratio") || undefined,
+          references: source ? [{ data: source.data.toString("base64"), mediaType: source.artifact.mediaType }] : undefined,
+        });
+        const artifact = saveArtifact({
+          kind: "image",
+          title: this.str(input, "title") || prompt.slice(0, 60),
+          data: made.data,
+          mediaType: made.mediaType,
+          prompt,
+          model: formatSpec(model.spec),
+          ...(from ? { from } : {}),
+        });
+        this.artifacts.push(ref(artifact));
+        this.done.push({ kind: "image", detail: artifact.title });
+        return `Drawn by ${formatSpec(model.spec)} and already on their screen: id ${artifact.id}, ${Math.round(made.data.length / 1024)} KB. Say in one line what it is and ask what to change — don't describe a picture they can see. To change it, call make_image again with from: "${artifact.id}".`;
+      }
+      case "make_page": {
+        const artifact = saveArtifact({
+          kind: "page",
+          title: this.str(input, "title", true),
+          data: this.str(input, "html", true),
+          mediaType: "text/html",
+        });
+        this.artifacts.push(ref(artifact));
+        this.done.push({ kind: "page", detail: artifact.title });
+        return `The page is on their screen: id ${artifact.id}. Say in one line what it is and ask what to change. To change it, call make_page again with the whole page.`;
       }
       case "find_bookmarks": {
         const query = this.str(input, "query", true);

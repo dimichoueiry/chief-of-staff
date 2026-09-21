@@ -347,6 +347,43 @@ cos browser forget canvas.illinois.edu
 cos access browser auto              # off | ask (default) | auto: auto also sends and submits on its own
 ```
 
+## Making things: pictures and pages
+
+Ask for something to look at and it appears on your screen, instead of a description of itself.
+
+- **Pictures** (`make_image`): "make me an Instagram post for the launch", "a thumbnail for the
+  module 6 video", "a logo idea for drawcal". Say the shape and it uses it — 1:1 feed,
+  4:5 Instagram portrait, 9:16 story, 16:9 thumbnail, 1.91:1 LinkedIn link.
+- **Changing one**: "make the words bigger", "same but at night". The picture you are looking at
+  goes back with the change, so it keeps what was already right.
+- **Pages** (`make_page`): the assistant writes the HTML itself — a post exactly as it would look in
+  a feed, a landing page, a content calendar, a mock-up, a table of options. A page opens full size
+  as soon as it exists; a picture appears in the reply and opens when you click it.
+
+Each one gets a window of its own with **save…** and **copy**, and is kept in `~/.cos/artifacts`.
+They stay with the conversation, so reopening a chat shows them again. They are drafts, not memory:
+nothing reaches selfhub unless you ask for it.
+
+Pictures are drawn through OpenRouter, so any image model there can draw them. The default is
+`google/gemini-3.1-flash-image` (Nano Banana 2): quick, cheap, and the one that gets words inside a
+picture right. Change it in ✦ › Model › **Images: …**, on the instructions page, or with
+`COS_IMAGE_MODEL` in `.env` — the full list is at openrouter.ai/models?output_modalities=image.
+
+- Each picture costs money on your OpenRouter account, and is drawn without asking first, like any
+  other tool it can use. A page costs nothing beyond the reply that wrote it.
+- A page is served with an origin of its own (`Content-Security-Policy: sandbox`), so HTML written
+  from something read on the web can't turn around and call this app's own API.
+
+## Your own instructions
+
+✦ › **My instructions…** opens a box for what you want done differently, in every conversation:
+what to call you, how long replies should be, your voice for posts, the shape your images take.
+
+It is added to what the assistant already knows, and it wins where the two disagree — the default is
+shown underneath, so you can see what you are adding to. Delete the text and the default stands on
+its own again. One file, `~/.cos/instructions.md`, and it applies to your next message. The same
+page picks the model that draws.
+
 ## Terminal and coding agents
 
 The assistant can use your terminal and your Agent Grid agents, so "what are the last commits in
@@ -495,6 +532,9 @@ all local.
 | OpenRouter | `OPENROUTER_API_KEY` | `openrouter:anthropic/claude-sonnet-5`, `openrouter:openai/gpt-5.4`, `openrouter:openrouter/auto` (full list at openrouter.ai/models) |
 | Any OpenAI-compatible server (Ollama, LM Studio, …) | `COS_COMPATIBLE_BASE_URL` | `compatible:llama3.2` |
 
+Pictures are their own choice, and only OpenRouter draws them: see
+[Making things](#making-things-pictures-and-pages).
+
 Pick a model three ways:
 
 ```bash
@@ -521,6 +561,7 @@ Everything is an environment variable (see `.env.example`):
 - one or more provider keys — see Models and providers
 - `COS_SELFHUB` — memory repo path, default `~/selfhub`
 - `COS_MODEL` — fallback model as `provider:model`; `cos models use` overrides it
+- `COS_IMAGE_MODEL` — the OpenRouter model that draws, default `google/gemini-3.1-flash-image`
 - `COS_EFFORT` — `low`, `medium` (default) or `high` reasoning depth, where the model supports it
 - `COS_PROJECT_ROOTS` — folders scanned for git activity, default `~/Desktop`
 - `COS_NAME` — your first name for greetings

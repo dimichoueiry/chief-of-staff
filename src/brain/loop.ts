@@ -14,11 +14,12 @@ import {
   type ModelIntent, type ModelSpec,
 } from "./llm/registry.js";
 import { EFFORTS, type ChatMessage, type Effort, type ImageInput, type LLMProvider } from "./llm/types.js";
-import { PERSONA } from "./persona.js";
+import { persona } from "./persona.js";
 import { DEFAULT_MESSAGES, loadPrompt } from "./prompts.js";
 import { BRIEF_SCHEMA, type Brief } from "./schema.js";
 import { ToolRuntime, serverToolsFor, toolsFor, type ToolCall } from "./tools.js";
 import type { Pending } from "../actions/pending.js";
+import type { ArtifactRef } from "../core/artifacts.js";
 
 export interface RunOptions {
   config: Config;
@@ -62,6 +63,8 @@ export interface RunResult {
   webSearches: number;
   /** Actions carried out in this run, so a later message doesn't repeat them. */
   done: { kind: string; detail: string }[];
+  /** Pictures and pages made in this run, to show with the reply. */
+  artifacts: ArtifactRef[];
   /** The tool calls and results of this run, without provider-specific data, for the conversation record. */
   steps: ChatMessage[];
 }
@@ -98,7 +101,7 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
   const serverTools = serverToolsFor(intent);
   const maxTurns = opts.maxTurns ?? 12;
 
-  const instructions = `${PERSONA}\n\n# Task\n${await loadPrompt(intent)}`;
+  const instructions = `${persona()}\n\n# Task\n${await loadPrompt(intent)}`;
   const recall = intent === "brief" ? "" : (opts.recall ?? "");
   const memory = `# Memory\n${renderContext(context)}${recall ? `\n\n${recall}` : ""}`;
   const userMessage = (opts.message ?? "").trim() || DEFAULT_MESSAGES[intent];
@@ -177,6 +180,7 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
     pending: runtime.pending,
     webSearches,
     done: runtime.done,
+    artifacts: runtime.artifacts,
     steps: messages
       .slice(firstNew)
       .flatMap((m): ChatMessage[] => {

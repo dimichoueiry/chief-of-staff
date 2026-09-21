@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChatRequest, ChatResponse, LLMProvider } from "../src/brain/llm/types.js";
+import type { ImageRequest } from "../src/brain/images.js";
 import type { JevRequest, JevResult } from "../src/brain/jev.js";
 import { loadConfig } from "../src/config.js";
 import { git } from "../src/core/git.js";
@@ -370,8 +371,13 @@ describe("ui server (offline)", () => {
     const post = (path: string, b: unknown) => fetch(`${url}${path}`, { method: "POST", body: JSON.stringify(b) });
     try {
       const menu = await (await fetch(`${url}/api/models`)).json();
-      expect(menu.actions.map((a: { kind: string; title: string }) => `${a.kind}: ${a.title}`)).toEqual(["input: Use any model…", "open: Browse OpenRouter models…"]);
+      expect(menu.actions.map((a: { kind: string; title: string }) => `${a.kind}: ${a.title}`)).toEqual([
+        "input: Use any model…",
+        "open: Browse OpenRouter models…",
+        "input: Images: openrouter:google/gemini-3.1-flash-image…",
+      ]);
       expect(menu.actions[0]).toMatchObject({ path: "api/models/use", button: "Try and use" });
+      expect(menu.actions[2]).toMatchObject({ path: "api/models/image", button: "Use it" });
 
       const used = await (await post("/api/models/use", { value: "~openai/gpt-luna-latest" })).json();
       expect(used).toMatchObject({ ok: true, message: "Now using openrouter:~openai/gpt-luna-latest", detail: "It answered in 1.7 s (served by openai/gpt-5.6-luna)." });
@@ -430,6 +436,10 @@ describe("ui server (scripted model)", () => {
   let requested: number;
   let opened: string[][];
   let jevAsked: JevRequest[];
+  /** What the assistant was asked to draw, and what it got back. */
+  let drawn: ImageRequest[];
+  /** A real OpenRouter key in the shell must survive these tests. */
+  const savedKey = process.env.OPENROUTER_API_KEY;
   /** What Jev answers; by default it's sure nothing should be opened, so everything goes on to the model. */
   let jevAnswer: (req: JevRequest) => JevResult;
 
@@ -456,6 +466,7 @@ describe("ui server (scripted model)", () => {
     },
   });
   const post = (b: unknown, path = "/api/pill") => fetch(`${base}${path}`, { method: "POST", body: JSON.stringify(b) });
+  const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
 
   beforeEach(async () => {
     queue = [];
@@ -466,9 +477,11 @@ describe("ui server (scripted model)", () => {
     opened = [];
     jevAsked = [];
     jevAnswer = jevOther;
+    drawn = [];
     ({ dir, cleanup } = await makeTmpSelfhub());
     await cp(resolve("examples/selfhub-sample"), dir, { recursive: true });
     process.env.COS_CALENDAR = "none";
+    process.env.OPENROUTER_API_KEY = "sk-or-test";
     home = await mkdtemp(join(tmpdir(), "cos-home-"));
     process.env.COS_HOME = home;
     const provider: LLMProvider = {
@@ -491,6 +504,11 @@ describe("ui server (scripted model)", () => {
         return jevAnswer(req);
       },
       backgroundSummaries: false,
+      images: async (r) => {
+        drawn.push(r);
+        return { data: PNG, mediaType: "image/png" };
+      },
+      imageModelList: async () => [{ id: "google/gemini-3.1-flash-image", name: "Nano Banana 2" }, { id: "google/gemini-3-pro-image", name: "Nano Banana Pro" }],
       openRunner: async (args) => {
         opened.push(args);
       },
@@ -522,6 +540,8 @@ describe("ui server (scripted model)", () => {
     await rm(home, { recursive: true, force: true });
     delete process.env.COS_CALENDAR;
     delete process.env.COS_HOME;
+    if (savedKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = savedKey;
   });
 
   it("Live opens once per phrase, stays out of the main model, and stops immediately", async () => {
@@ -796,5 +816,97 @@ describe("ui server (scripted model)", () => {
       "That didn't work: script exhausted",
       "try again",
     ]);
+  });
+
+  it("draws a picture, shows it with the reply, keeps it with the chat, and changes the one they're looking at", async () => {
+    const say = async (text: string) => (await post({ text })).json();
+    queue.push(
+      reply({ stop: "tool_use", toolCalls: [{ id: "i1", name: "make_image", input: { prompt: "a lemon on linen", title: "launch post", aspect_ratio: "4:5" } }] }),
+      reply({ text: "Here it is. Want the words bigger?" }),
+    );
+    const made = await say("make me an instagram post for the launch");
+    expect(drawn).toEqual([{ prompt: "a lemon on linen", model: "google/gemini-3.1-flash-image", aspectRatio: "4:5" }]);
+    expect(made.artifacts).toEqual([{ id: expect.stringMatching(/^\d{4}-\d{2}-\d{2}-[0-9a-f]{6}$/), kind: "image", title: "launch post" }]);
+    const id = made.artifacts[0].id;
+
+    const file = await fetch(`${base}/artifacts/${id}`);
+    expect(file.headers.get("content-type")).toBe("image/png");
+    expect(Buffer.from(await file.arrayBuffer())).toEqual(PNG);
+    expect(await (await fetch(`${base}/api/artifacts?id=${id}`)).json()).toMatchObject({
+      title: "launch post", prompt: "a lemon on linen", model: "openrouter:google/gemini-3.1-flash-image", kind: "image",
+    });
+
+    // It stays with the conversation, so reopening the chat shows it again.
+    const convo = await (await fetch(`${base}/api/conversation`)).json();
+    expect(convo.turns.at(-1).artifacts).toEqual(made.artifacts);
+
+    // A change is drawn from the picture they are looking at, not from nothing.
+    queue.push(
+      reply({ stop: "tool_use", toolCalls: [{ id: "i2", name: "make_image", input: { prompt: "the same, with bigger words", from: id } }] }),
+      reply({ text: "Bigger now." }),
+    );
+    const changed = await say("make the words bigger");
+    expect(drawn[1].references).toEqual([{ data: PNG.toString("base64"), mediaType: "image/png" }]);
+    expect(await (await fetch(`${base}/api/artifacts?id=${changed.artifacts[0].id}`)).json()).toMatchObject({ from: id });
+
+    // An id that isn't a picture here draws nothing at all.
+    queue.push(
+      reply({ stop: "tool_use", toolCalls: [{ id: "i3", name: "make_image", input: { prompt: "x", from: "../../etc/passwd" } }] }),
+      reply({ text: "I can't find that one." }),
+    );
+    expect((await say("change that other one")).artifacts).toBeUndefined();
+    expect(drawn).toHaveLength(2);
+  });
+
+  it("writes a page, serves it with an origin of its own, and links it from the reply", async () => {
+    queue.push(
+      reply({ stop: "tool_use", toolCalls: [{ id: "p1", name: "make_page", input: { title: "LinkedIn post", html: "<!doctype html><h1>Launch week</h1>" } }] }),
+      reply({ text: "Have a look." }),
+    );
+    const r = await (await post({ text: "show me what the post would look like" })).json();
+    expect(r.artifacts).toEqual([{ id: expect.any(String), kind: "page", title: "LinkedIn post" }]);
+    const page = await fetch(`${base}/artifacts/${r.artifacts[0].id}`);
+    expect(page.headers.get("content-type")).toBe("text/html");
+    // Sandboxed, so a page written from something read on the web can't turn around and call this API.
+    expect(page.headers.get("content-security-policy")).toBe("sandbox allow-scripts allow-popups");
+    expect(await page.text()).toContain("<h1>Launch week</h1>");
+    expect((await fetch(`${base}/artifacts/nope`)).status).toBe(404);
+  });
+
+  it("keeps their own instructions and gives them to the model until they delete them", async () => {
+    const say = async (text: string) => (await post({ text })).json();
+    expect(await (await fetch(`${base}/api/instructions`)).json()).toMatchObject({ text: "", max: 8000 });
+
+    expect(await (await post({ text: "Call me Dimitri. Three sentences, never more." }, "/api/instructions")).json()).toMatchObject({ ok: true });
+    queue.push(reply({ text: "Noted." }));
+    await say("hello");
+    expect(requests.at(-1)!.instructions).toContain("Call me Dimitri.");
+    expect(requests.at(-1)!.instructions).toContain("# From them");
+
+    await post({ text: "   " }, "/api/instructions");
+    queue.push(reply({ text: "Noted." }));
+    await say("hello again");
+    expect(requests.at(-1)!.instructions).not.toContain("Call me Dimitri.");
+    expect((await post({ text: "x".repeat(9000) }, "/api/instructions")).status).toBe(400);
+  });
+
+  it("takes an image model OpenRouter has, and refuses one it doesn't", async () => {
+    expect((await (await fetch(`${base}/api/models`)).json()).images).toMatchObject({ spec: "openrouter:google/gemini-3.1-flash-image", source: "auto", ready: true });
+
+    const chosen = await (await post({ value: "google/gemini-3-pro-image" }, "/api/models/image")).json();
+    expect(chosen.images).toMatchObject({ spec: "openrouter:google/gemini-3-pro-image", source: "settings (images)" });
+    expect((await post({ value: "google/no-such-model" }, "/api/models/image")).status).toBe(422);
+    expect((await post({ value: "anthropic:claude-opus-5" }, "/api/models/image")).status).toBe(400);
+    expect((await (await fetch(`${base}/api/models`)).json()).images.spec).toBe("openrouter:google/gemini-3-pro-image");
+
+    queue.push(
+      reply({ stop: "tool_use", toolCalls: [{ id: "i4", name: "make_image", input: { prompt: "a lemon" } }] }),
+      reply({ text: "Done." }),
+    );
+    await post({ text: "draw a lemon" });
+    expect(drawn.at(-1)!.model).toBe("google/gemini-3-pro-image");
+
+    expect((await (await post({ spec: null }, "/api/models/image")).json()).images.spec).toBe("openrouter:google/gemini-3.1-flash-image");
+    expect((await (await fetch(`${base}/api/images/models`)).json()).models).toHaveLength(2);
   });
 });

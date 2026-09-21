@@ -7,9 +7,12 @@ import { readFile } from "node:fs/promises";
 import { dirname, extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  MODEL_INTENTS, PROVIDERS, PROVIDER_ORDER, forgetModel, formatSpec, isProviderId, parseModelSpec, presets, providerConfigured,
-  readModelSettings, rememberModel, resolveModel, setModel, testModel, type ModelIntent,
+  IMAGE_PRESETS, MODEL_INTENTS, PROVIDERS, PROVIDER_ORDER, forgetModel, formatSpec, isProviderId, parseImageSpec, parseModelSpec, presets, providerConfigured,
+  readModelSettings, rememberModel, resolveImageModel, resolveModel, setImageModel, setModel, testModel, type ModelIntent,
 } from "../brain/llm/registry.js";
+import { imageModels, type ImageMaker, type ImageModel } from "../brain/images.js";
+import { MAX_INSTRUCTIONS, PERSONA, instructionsFile, readInstructions, saveInstructions } from "../brain/persona.js";
+import { getArtifact, listArtifacts, readArtifact, type ArtifactRef } from "../core/artifacts.js";
 import { Conversations, conversationsDir, displayTitle, eventsSinceReply, historyMessages, messageCount, visibleTurns, withEvents, type Conversation, type Turn } from "../brain/conversation.js";
 import type { LLMProvider, ChatMessage } from "../brain/llm/types.js";
 import type { ModelSpec } from "../brain/llm/registry.js";
@@ -101,6 +104,9 @@ export interface UiOptions {
   access?: () => Access;
   bookmarks?: () => Promise<BookmarkRead>;
   screen?: ScreenCapturer;
+  /** How pictures are drawn, and which image models the picker offers (tests). */
+  images?: ImageMaker;
+  imageModelList?: () => Promise<ImageModel[]>;
   /** How a model is checked before it's used from the menu (tests). */
   modelTester?: (spec: ModelSpec) => Promise<{ ms: number; servedBy: string }>;
   /** Replace the live MCP check (tests). */
@@ -129,6 +135,8 @@ const DOING: Record<string, string> = {
   get_agent_models: "Checking which models agents can use…",
   get_agent_output: "Reading what the agent did…",
   look_at_screen: "Looking at your screen…",
+  make_image: "Drawing it…",
+  make_page: "Putting the page together…",
   message_agent: "Messaging the agent…",
   get_orchestrators: "Checking your orchestrators…",
   start_orchestrator: "Starting the orchestrator…",
@@ -163,6 +171,8 @@ interface PillReply {
   steps?: ChatMessage[];
   /** A screenshot went with the message. */
   screen?: { app: string; window: string };
+  /** Pictures and pages this reply made, shown under it. */
+  artifacts?: ArtifactRef[];
 }
 
 /** The model can't take images: say which setting fixes it rather than a raw provider error. */
@@ -244,6 +254,16 @@ export function createUiServer(o: UiOptions): Server {
     }
   }
 
+  /** Which model draws, and whether it can. Never throws: a bad saved choice is a thing to say, not a crash. */
+  function imagesState() {
+    try {
+      const r = resolveImageModel();
+      return { spec: formatSpec(r.spec), source: r.source, ready: r.ready, missing: r.missing ?? null, error: null };
+    } catch (err) {
+      return { spec: null, source: null, ready: false, missing: null, error: (err as Error).message };
+    }
+  }
+
   function modelsState() {
     const settings = readModelSettings();
     const intents: Record<string, unknown> = {};
@@ -256,9 +276,11 @@ export function createUiServer(o: UiOptions): Server {
       }
     }
     const current = (intents.ask as { spec?: string } | null)?.spec ?? "";
+    const images = imagesState();
     return {
       default: settings.default ?? null,
       intents,
+      images,
       presets: presets(settings).map((spec) => {
         const provider = parseModelSpec(spec).provider;
         return { spec, provider, ready: providerConfigured(provider), custom: (settings.presets ?? []).includes(spec) };
@@ -271,6 +293,13 @@ export function createUiServer(o: UiOptions): Server {
           placeholder: "~openai/gpt-luna-latest", value: current, button: "Try and use", path: "api/models/use",
         },
         { kind: "open", title: "Browse OpenRouter models…", url: "https://openrouter.ai/models" },
+        {
+          kind: "input", title: `Images: ${images.spec ?? "not set"}…`, prompt: "Which model draws?",
+          message:
+            "An OpenRouter image model. google/gemini-3.1-flash-image is quick, cheap and the one that gets words inside a picture right; " +
+            "google/gemini-3-pro-image is slower and better. Browse them at openrouter.ai/models?output_modalities=image.",
+          placeholder: "google/gemini-3.1-flash-image", value: images.spec ?? "", button: "Use it", path: "api/models/image",
+        },
         ...((settings.presets ?? []).includes(current)
           ? [{ kind: "post", title: `Remove ${current} from this list`, path: "api/models/forget", body: { spec: current } }]
           : []),
@@ -280,6 +309,15 @@ export function createUiServer(o: UiOptions): Server {
   }
 
   const grid = () => o.agentGrid ?? new AgentGrid();
+
+  /** OpenRouter's image models, for the picker. Cached: the list changes by the week, not the minute. */
+  let cachedImageModels: { at: number; models: ImageModel[] } | null = null;
+  async function listImageModels(): Promise<ImageModel[]> {
+    if (cachedImageModels && Date.now() - cachedImageModels.at < 10 * 60_000) return cachedImageModels.models;
+    const models = await (o.imageModelList ?? imageModels)();
+    cachedImageModels = { at: Date.now(), models };
+    return models;
+  }
 
   /**
    * What the Agent Grid menu draws: work areas and the agents in each, then the ticket board in one line
@@ -538,6 +576,7 @@ export function createUiServer(o: UiOptions): Server {
         steps: reply.steps?.length ? reply.steps : undefined,
         confirm: reply.confirm?.length ? reply.confirm : undefined,
         actionsDone: reply.done?.length ? reply.done : undefined,
+        artifacts: reply.artifacts?.length ? reply.artifacts : undefined,
       },
     );
     summarizeSoon();
@@ -659,7 +698,7 @@ export function createUiServer(o: UiOptions): Server {
         images: shot ? [{ mediaType: shot.mediaType, data: shot.data }] : undefined,
         actions: {
           run: openRunner, slate: boards, conversations, shell: o.shell, agentGrid: o.agentGrid, access: o.access, browser: o.browser,
-          awaiting: awaiting(convo), recentlyDone: recentlyDone(convo), bookmarks, screen,
+          awaiting: awaiting(convo), recentlyDone: recentlyDone(convo), bookmarks, screen, images: o.images,
         },
         onTool: (name) => emit({ type: "status", text: DOING[name] ?? "Updating your memory…" }),
         onText: (delta) => emit({ type: "text", delta }),
@@ -670,6 +709,7 @@ export function createUiServer(o: UiOptions): Server {
     };
     const fromModel = (kind: PillReply["kind"], r: Awaited<ReturnType<typeof runIntent>>, extra: Partial<PillReply> = {}): PillReply => ({
       kind, text: r.text, model: r.model, changes: changes(r.toolCalls), confirm: r.pending.map(confirmView), done: r.done, steps: r.steps,
+      ...(r.artifacts.length ? { artifacts: r.artifacts } : {}),
       ...(seen ? { screen: seen } : {}), ...extra,
     });
 
@@ -953,6 +993,62 @@ export function createUiServer(o: UiOptions): Server {
           });
         }
       }
+      case "POST /api/models/image": {
+        // Nothing is drawn to check this: a test image costs real money. The id is checked against
+        // OpenRouter's live list instead, and a list that can't be reached doesn't block the choice.
+        const b = await body(req);
+        const raw = b.spec === null ? "" : String(b.value ?? b.spec ?? "").trim();
+        if (!raw) {
+          setImageModel(null);
+          Log("image model → default");
+          return json(res, 200, { ok: true, message: "Back to the default image model", ...modelsState() });
+        }
+        let spec: ModelSpec;
+        try {
+          spec = parseImageSpec(raw);
+        } catch (err) {
+          return json(res, 400, { error: (err as Error).message });
+        }
+        const known = await listImageModels().catch(() => null);
+        if (known && !known.some((m) => m.id === spec.model)) {
+          return json(res, 422, { error: `OpenRouter has no image model called "${spec.model}", so nothing changed. Check the name at openrouter.ai/models?output_modalities=image.` });
+        }
+        setImageModel(formatSpec(spec));
+        Log(`image model → ${formatSpec(spec)}`);
+        return json(res, 200, { ok: true, message: `Pictures now come from ${spec.model}`, detail: "It draws the next one you ask for.", ...modelsState() });
+      }
+      case "GET /api/images/models": {
+        const current = imagesState();
+        try {
+          return json(res, 200, { current, models: await listImageModels(), error: null });
+        } catch (err) {
+          // The picker still works from the built-in names, and says why the rest are missing.
+          return json(res, 200, { current, models: IMAGE_PRESETS.map((p) => ({ id: parseModelSpec(p).model, name: parseModelSpec(p).model })), error: (err as Error).message });
+        }
+      }
+      case "GET /api/artifacts": {
+        const id = (url.searchParams.get("id") ?? "").trim();
+        if (!id) return json(res, 200, { artifacts: listArtifacts() });
+        const a = getArtifact(id);
+        return a ? json(res, 200, a) : json(res, 404, { error: "That isn't here anymore." });
+      }
+      case "GET /api/instructions":
+        return json(res, 200, { text: readInstructions(), file: instructionsFile(), max: MAX_INSTRUCTIONS, default: PERSONA });
+      case "POST /api/instructions": {
+        const b = await body(req);
+        try {
+          const saved = saveInstructions(String(b.text ?? ""));
+          Log(`instructions: ${saved ? `${saved.length} characters` : "back to the default alone"}`);
+          return json(res, 200, {
+            ok: true,
+            message: saved ? "Saved. It applies to your next message." : "Cleared. The default stands on its own again.",
+            text: saved,
+            file: instructionsFile(),
+          });
+        } catch (err) {
+          return json(res, 400, { error: (err as Error).message });
+        }
+      }
       case "POST /api/models/forget": {
         const b = await body(req);
         forgetModel(String(b.spec ?? ""));
@@ -1104,6 +1200,27 @@ export function createUiServer(o: UiOptions): Server {
     }
   }
 
+  /**
+   * The artifact itself. A page is HTML a model wrote, so it is served sandboxed: the header gives
+   * the document an origin of its own, which is what keeps a page that was written from something
+   * read on the web from turning around and calling this server's own API.
+   */
+  function serveArtifact(res: ServerResponse, id: string): void {
+    const found = readArtifact(id);
+    if (!found) {
+      res.writeHead(404, { "content-type": "text/plain; charset=utf-8" }).end("not found");
+      return;
+    }
+    res.writeHead(200, {
+      "content-type": found.artifact.mediaType,
+      "content-disposition": `inline; filename="${found.artifact.file}"`,
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+      ...(found.artifact.kind === "page" ? { "content-security-policy": "sandbox allow-scripts allow-popups" } : {}),
+    });
+    res.end(found.data);
+  }
+
   async function serveStatic(res: ServerResponse, pathname: string): Promise<void> {
     const rel = pathname === "/" ? "index.html" : normalize(pathname).replace(/^(\.\.[/\\])+/, "").slice(1);
     const file = join(WEB_DIR, rel);
@@ -1129,6 +1246,7 @@ export function createUiServer(o: UiOptions): Server {
     }
     try {
       if (url.pathname.startsWith("/api/")) await api(req, res, url);
+      else if (url.pathname.startsWith("/artifacts/")) serveArtifact(res, decodeURIComponent(url.pathname.slice("/artifacts/".length)));
       else await serveStatic(res, url.pathname);
     } catch (err) {
       await json(res, 500, { error: (err as Error).message });

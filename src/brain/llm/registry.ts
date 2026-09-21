@@ -121,6 +121,8 @@ export interface ModelSettings {
   intents?: Partial<Record<ModelIntent, string>>;
   /** Extra models to offer in the menubar picker. */
   presets?: string[];
+  /** The model that draws pictures (see images.ts). Only OpenRouter draws, so it is always openrouter:…. */
+  image?: string;
 }
 
 export function settingsFile(): string {
@@ -156,9 +158,60 @@ export function setModel(spec: string | null, intent?: ModelIntent, file: string
   return s;
 }
 
+// ---------- the model that draws ----------
+
+/**
+ * Pictures come from OpenRouter, whichever model talks: it is the one place that carries every
+ * image model behind one shape (see images.ts). Nano Banana 2 is the default because it is quick,
+ * cheap, and the one that gets words inside a picture right, which is most of what a post needs.
+ */
+export const DEFAULT_IMAGE_MODEL = "openrouter:google/gemini-3.1-flash-image";
+
+/** Shown when OpenRouter's live list can't be reached. Checked against it in September 2026. */
+export const IMAGE_PRESETS = [
+  "openrouter:google/gemini-3.1-flash-image",
+  "openrouter:google/gemini-3-pro-image",
+  "openrouter:openai/gpt-image-2",
+  "openrouter:bytedance-seed/seedream-5-0-pro",
+  "openrouter:recraft/recraft-v4.1-vector",
+];
+
+/** A model spec for drawing, or the reason it can't be one. */
+export function parseImageSpec(input: string, env: NodeJS.ProcessEnv = process.env): ModelSpec {
+  const spec = parseModelSpec(input, env);
+  if (spec.provider !== "openrouter") {
+    throw new Error(`Pictures are drawn through OpenRouter, so ${formatSpec(spec)} can't draw one. Write it as an OpenRouter model, like google/gemini-3.1-flash-image.`);
+  }
+  return spec;
+}
+
+/** Which model draws: what they chose, then COS_IMAGE_MODEL, then the default. */
+export function resolveImageModel(o: ResolveOptions = {}): ResolvedModel {
+  const env = o.env ?? process.env;
+  const settings = o.settings ?? readModelSettings();
+  const candidates: [string | undefined, ModelSource][] = [
+    [settings.image, "settings (images)"],
+    [env.COS_IMAGE_MODEL, "COS_IMAGE_MODEL"],
+    [DEFAULT_IMAGE_MODEL, "auto"],
+  ];
+  const [value, source] = candidates.find(([v]) => Boolean(v))!;
+  const spec = parseImageSpec(value!, env);
+  const ready = providerConfigured(spec.provider, env);
+  return { spec, source, ready, missing: ready ? undefined : PROVIDERS[spec.provider].keyEnv[0] };
+}
+
+/** Set (or with spec null, go back to the default) the model that draws. Validates first. */
+export function setImageModel(spec: string | null, file: string = settingsFile()): ModelSettings {
+  const s = readModelSettings(file);
+  if (spec === null) delete s.image;
+  else s.image = formatSpec(parseImageSpec(spec));
+  writeModelSettings(s, file);
+  return s;
+}
+
 // ---------- resolution ----------
 
-export type ModelSource = "flag" | "settings (this intent)" | "settings (default)" | "COS_MODEL" | "auto";
+export type ModelSource = "flag" | "settings (this intent)" | "settings (default)" | "COS_MODEL" | "settings (images)" | "COS_IMAGE_MODEL" | "auto";
 
 export interface ResolvedModel {
   spec: ModelSpec;

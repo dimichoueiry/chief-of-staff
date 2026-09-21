@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { todayISO } from "../util/dates.js";
 import { cosHome } from "../util/home.js";
 import type { ConfirmView } from "../actions/pending.js";
+import type { ArtifactRef } from "../core/artifacts.js";
 import type { ChatMessage } from "./llm/types.js";
 
 export interface Turn {
@@ -40,6 +41,8 @@ export interface Turn {
   screen?: { app: string; window: string };
   /** assistant: actions this reply carried out itself (with their OK, or allowed on their own). */
   actionsDone?: { kind: string; detail: string }[];
+  /** assistant: pictures and pages this reply made (see core/artifacts.ts). */
+  artifacts?: ArtifactRef[];
 }
 
 export interface Conversation {

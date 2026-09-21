@@ -114,7 +114,10 @@ describe("ToolRuntime", () => {
       "get_project", "upsert_project", "get_git_log", "get_calendar", "open", "get_conversations", "find_folder", "run_command",
       "get_agents", "start_agent", "get_agent_models", "get_agent_output", "confirm_pending", "look_at_screen", "get_work_areas", "get_tickets", "change_ticket",
       "get_orchestrators", "start_orchestrator", "stop_orchestrator", "message_orchestrator", "respond_orchestrator_approval",
+      "make_image", "make_page",
     ]);
+    // Filing a note never draws: making something is answering, not capturing.
+    expect(toolsFor("capture").map((t) => t.name)).not.toContain("make_image");
     // Tickets are Agent Grid's, not memory: capturing a note never reaches for them.
     expect(toolsFor("capture").map((t) => t.name)).not.toContain("change_ticket");
     expect(toolsFor("ask").map((t) => t.name)).toEqual(expect.arrayContaining(["get_work_areas", "get_tickets", "change_ticket", "get_orchestrators", "respond_orchestrator_approval"]));
