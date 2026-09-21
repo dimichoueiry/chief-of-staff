@@ -371,13 +371,11 @@ describe("ui server (offline)", () => {
     const post = (path: string, b: unknown) => fetch(`${url}${path}`, { method: "POST", body: JSON.stringify(b) });
     try {
       const menu = await (await fetch(`${url}/api/models`)).json();
-      expect(menu.actions.map((a: { kind: string; title: string }) => `${a.kind}: ${a.title}`)).toEqual([
-        "input: Use any model…",
-        "open: Browse OpenRouter models…",
-        "input: Images: openrouter:google/gemini-3.1-flash-image…",
-      ]);
+      expect(menu.actions.map((a: { kind: string; title: string }) => `${a.kind}: ${a.title}`)).toEqual(["input: Use any model…", "open: Browse OpenRouter models…"]);
       expect(menu.actions[0]).toMatchObject({ path: "api/models/use", button: "Try and use" });
-      expect(menu.actions[2]).toMatchObject({ path: "api/models/image", button: "Use it" });
+      // Which model draws is picked from a list of its own, the way the chat models are.
+      expect(menu.images.presets[0]).toMatchObject({ spec: "openrouter:google/gemini-3.1-flash-image", label: "google/gemini-3.1-flash-image", current: true });
+      expect(menu.images.actions.map((a: { title: string }) => a.title)).toEqual(["Use another image model…", "Browse image models…"]);
 
       const used = await (await post("/api/models/use", { value: "~openai/gpt-luna-latest" })).json();
       expect(used).toMatchObject({ ok: true, message: "Now using openrouter:~openai/gpt-luna-latest", detail: "It answered in 1.7 s (served by openai/gpt-5.6-luna)." });
@@ -908,5 +906,23 @@ describe("ui server (scripted model)", () => {
 
     expect((await (await post({ spec: null }, "/api/models/image")).json()).images.spec).toBe("openrouter:google/gemini-3.1-flash-image");
     expect((await (await fetch(`${base}/api/images/models`)).json()).models).toHaveLength(2);
+  });
+
+  it("keeps what it made until you delete it", async () => {
+    queue.push(
+      reply({ stop: "tool_use", toolCalls: [{ id: "p2", name: "make_page", input: { title: "content calendar", html: "<!doctype html><h1>October</h1>" } }] }),
+      reply({ text: "Here's the calendar." }),
+    );
+    const made = await (await post({ text: "make me a content calendar" })).json();
+    const id = made.artifacts[0].id;
+
+    const listed = await (await fetch(`${base}/api/artifacts`)).json();
+    expect(listed.artifacts.map((a: { id: string; title: string }) => [a.id, a.title])).toEqual([[id, "content calendar"]]);
+
+    const deleted = await (await post({ id }, "/api/artifacts/delete")).json();
+    expect(deleted).toMatchObject({ ok: true, message: 'Deleted "content calendar"', artifacts: [] });
+    expect((await fetch(`${base}/artifacts/${id}`)).status).toBe(404);
+    expect((await post({ id }, "/api/artifacts/delete")).status).toBe(404);
+    expect((await post({ id: "../../etc/passwd" }, "/api/artifacts/delete")).status).toBe(404);
   });
 });

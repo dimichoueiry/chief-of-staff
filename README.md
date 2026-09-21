@@ -361,13 +361,15 @@ Ask for something to look at and it appears on your screen, instead of a descrip
   as soon as it exists; a picture appears in the reply and opens when you click it.
 
 Each one gets a window of its own with **save…** and **copy**, and is kept in `~/.cos/artifacts`.
-They stay with the conversation, so reopening a chat shows them again. They are drafts, not memory:
-nothing reaches selfhub unless you ask for it.
+They stay with the conversation, so reopening a chat shows them again, and ✦ › **Artifacts…** is
+all of them at once: newest first, filtered by pages or pictures, each one to open, save or delete.
+They are drafts, not memory: nothing reaches selfhub unless you ask for it.
 
 Pictures are drawn through OpenRouter, so any image model there can draw them. The default is
 `google/gemini-3.1-flash-image` (Nano Banana 2): quick, cheap, and the one that gets words inside a
-picture right. Change it in ✦ › Model › **Images: …**, on the instructions page, or with
-`COS_IMAGE_MODEL` in `.env` — the full list is at openrouter.ai/models?output_modalities=image.
+picture right. Change it in ✦ › Model › **Images**, which lists a few worth having and takes any
+other OpenRouter image model by name, or set `COS_IMAGE_MODEL` in `.env` — the full list is at
+openrouter.ai/models?output_modalities=image.
 
 - Each picture costs money on your OpenRouter account, and is drawn without asking first, like any
   other tool it can use. A page costs nothing beyond the reply that wrote it.
@@ -381,8 +383,7 @@ what to call you, how long replies should be, your voice for posts, the shape yo
 
 It is added to what the assistant already knows, and it wins where the two disagree — the default is
 shown underneath, so you can see what you are adding to. Delete the text and the default stands on
-its own again. One file, `~/.cos/instructions.md`, and it applies to your next message. The same
-page picks the model that draws.
+its own again. One file, `~/.cos/instructions.md`, and it applies to your next message.
 
 ## Terminal and coding agents
 

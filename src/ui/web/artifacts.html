@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Artifacts — Chief of Staff</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body class="page-body">
+  <main class="stage">
+    <section class="panel wide">
+      <header class="panel-head">
+        <div>
+          <h1>Artifacts</h1>
+          <p class="headline" id="count">Loading…</p>
+        </div>
+        <div class="head-actions" id="filters">
+          <button class="chip chip-accent" data-kind="all">all</button>
+          <button class="chip" data-kind="page">pages</button>
+          <button class="chip" data-kind="image">pictures</button>
+        </div>
+      </header>
+      <div class="gallery" id="gallery"></div>
+      <footer class="panel-foot" id="said"></footer>
+    </section>
+  </main>
+  <script src="/dom.js"></script>
+  <script src="/artifact-card.js"></script>
+  <script src="/artifacts.js"></script>
+</body>
+</html>

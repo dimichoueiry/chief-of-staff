@@ -11,7 +11,7 @@ const when = (iso) => {
 function fail(text) {
   $("title").textContent = "Not here";
   $("meta").textContent = text;
-  for (const b of document.querySelectorAll(".head-actions > *")) b.remove();
+  for (const b of document.querySelectorAll('.head-actions > *:not([href="/artifacts.html"])')) b.remove();
 }
 
 /** Copy the picture itself, or the page's HTML. Not every format can go on the clipboard; say so when it can't. */

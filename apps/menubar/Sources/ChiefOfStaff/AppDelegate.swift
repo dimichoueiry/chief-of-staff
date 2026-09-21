@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private var loggedWakeProblem: String?
   private let focusMenu = NSMenu()
   private let modelMenu = NSMenu()
+  private let imageMenu = NSMenu()
   private let memoryMenu = NSMenu()
   private let gridMenu = NSMenu()
   private var keysWindow: KeysWindow!
@@ -155,6 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let focus = NSMenuItem(title: "Focus a project", action: nil, keyEquivalent: "")
     focus.submenu = focusMenu
     menu.addItem(focus)
+    add(menu, "Artifacts…", #selector(showArtifacts))
     let model = NSMenuItem(title: "Model", action: nil, keyEquivalent: "")
     model.submenu = modelMenu
     menu.addItem(model)
@@ -408,6 +410,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.representedObject = action
         self.modelMenu.addItem(item)
       }
+      // Which model draws is a model choice too, so it lives here, in a list of its own.
+      if let images = state["images"] as? [String: Any] {
+        self.imageMenu.removeAllItems()
+        for preset in images["presets"] as? [[String: Any]] ?? [] {
+          guard let spec = preset["spec"] as? String else { continue }
+          let item = NSMenuItem(title: preset["label"] as? String ?? spec, action: #selector(self.selectImageModel(_:)), keyEquivalent: "")
+          item.target = self
+          item.representedObject = spec
+          item.state = (preset["current"] as? Bool ?? false) ? .on : .off
+          self.imageMenu.addItem(item)
+        }
+        self.imageMenu.addItem(.separator())
+        for action in images["actions"] as? [[String: Any]] ?? [] {
+          guard let title = action["title"] as? String else { continue }
+          let item = NSMenuItem(title: title, action: #selector(self.runMenuAction(_:)), keyEquivalent: "")
+          item.target = self
+          item.representedObject = action
+          self.imageMenu.addItem(item)
+        }
+        if images["ready"] as? Bool == false {
+          self.imageMenu.addItem(.separator())
+          let note = NSMenuItem(title: "Needs an OpenRouter key…", action: #selector(self.showKeys), keyEquivalent: "")
+          note.target = self
+          self.imageMenu.addItem(note)
+        }
+        let item = NSMenuItem(title: "Images", action: nil, keyEquivalent: "")
+        item.submenu = self.imageMenu
+        self.modelMenu.addItem(item)
+      }
       if saved != nil {
         let clear = NSMenuItem(title: "Clear saved choice", action: #selector(self.clearModel), keyEquivalent: "")
         clear.target = self
@@ -419,6 +450,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   @objc private func selectModel(_ sender: NSMenuItem) {
     guard let spec = sender.representedObject as? String else { return }
     server.postJSON("api/models", ["spec": spec]) { _ in Log.write("model → \(spec)") }
+  }
+
+  @objc private func selectImageModel(_ sender: NSMenuItem) {
+    guard let spec = sender.representedObject as? String else { return }
+    server.postJSON("api/models/image", ["spec": spec]) { _ in Log.write("image model → \(spec)") }
   }
 
   /// A menu item described by the server: open a link, post to an endpoint, or ask for a value first.
@@ -527,9 +563,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
   @objc private func showConnections() { connectionsWindow.show() }
 
-  /// Instructions and the model that draws: a page the app already serves, opened in their browser,
-  /// because a box you write paragraphs in wants a window, not a menu.
+  /// A box you write paragraphs in wants a window, not a menu: a page the app already serves.
   @objc private func showSettings() { NSWorkspace.shared.open(server.config.baseURL.appendingPathComponent("settings.html")) }
+
+  /// Everything it has made, newest first.
+  @objc private func showArtifacts() { NSWorkspace.shared.open(server.config.baseURL.appendingPathComponent("artifacts.html")) }
 
   /// The grid menu and the per-area submenus under it don't refresh the whole status menu when they open.
   private func isGridMenu(_ menu: NSMenu) -> Bool {

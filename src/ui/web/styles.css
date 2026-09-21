@@ -290,7 +290,19 @@ html[data-pill="compact"] .pill[data-state="speaking"] { background: rgba(30, 33
    (about 1500px) and still fills the card exactly, whatever the card's own width turns out to be. */
 .artifact .page-preview iframe { width: 285.7%; height: 285.7%; border: 0; transform: scale(0.35); transform-origin: top left; pointer-events: none; }
 .artifact figcaption { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
-.artifact figcaption .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.artifact figcaption .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.artifact figcaption .meta { display: block; color: var(--muted); font-size: 11px; font-weight: 400; }
+.artifact figcaption a.chip { text-decoration: none; }
+
+/* ---------- the gallery: everything it has made ---------- */
+.gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-top: 16px; }
+/* A grid wants tiles of one height, so a thumbnail is cropped to fill its card; the whole
+   picture is one click away. In the chat, where a reply has one or two, it is never cut. */
+.gallery .artifact img { width: 100%; height: 190px; object-fit: cover; }
+.gallery .artifact .page-preview { height: 190px; }
+.gallery .artifact figcaption { flex-wrap: wrap; }
+.gallery .artifact figcaption .name { flex-basis: 100%; }
+.gallery .empty { grid-column: 1 / -1; }
 
 /* ---------- the pages of their own: one artifact, and the settings ---------- */
 .page-body .stage { padding-bottom: 40px; }
