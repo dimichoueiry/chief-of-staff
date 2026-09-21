@@ -1312,10 +1312,25 @@ private async pursue(goal: string, rawValues: unknown): Promise<string> {
           if (!existsSync(full)) throw new Error(`There's no file at ${raw}.`);
           paths.push(full);
         }
-        const out = await this.browser().upload(paths);
+        const browser = this.browser();
+        const names = paths.map((f) => basename(f)).join(", ");
+        // Named by the file alone: the address is empty before the first read and set after it, and
+        // what must not happen twice is this picture going in, wherever the page has got to.
+        const detail = `Send ${names} to the page`;
+        // A page that doesn't obviously show what it has taken invites a second go at the photo
+        // button, and a second copy in the post. Once per reply is the most that can be meant.
+        if (paths.length) {
+          const twice = this.repeated("browser-act", detail, true);
+          if (twice) return `${names} is already in the post from a moment ago — adding it again would put a second copy in. ${twice}`;
+        }
+        const out = await browser.upload(paths);
         if (!paths.length) return `Closed the file chooser without sending anything.\n${out}`;
-        this.done.push({ kind: "browser-act", detail: `Send ${paths.map((p) => basename(p)).join(", ")} to ${siteOf(this.browser().address) ?? "the page"}` });
-        return `Sent ${paths.map((p) => basename(p)).join(", ")} to the page. It is attached, not posted: what publishes it still waits for their OK.\n${out}`;
+        this.done.push({ kind: "browser-act", detail });
+        return [
+          `${names} is now in the post. Don't click the photo button again: that opens the chooser once more and adds a second copy.`,
+          "It is attached, not posted; what publishes it still waits for their OK.",
+          out,
+        ].join("\n");
       }
       case "browser_dialog": {
         const mode = this.browserAllowed();
