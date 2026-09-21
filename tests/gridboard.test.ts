@@ -356,7 +356,7 @@ describe("Agent Grid work areas and tickets, end to end", () => {
 
     // The OK arrives: what runs is the resolved plan, project path and all.
     const approved = take(rt.pending[0].id)!;
-    expect(await performPending(approved, { agentGrid: grid() })).toBe("Filed DC-4: Fix Safari export.");
+    expect((await performPending(approved, { agentGrid: grid() })).text).toBe("Filed DC-4: Fix Safari export.");
     expect(writes()).toEqual([
       `POST /api/tickets/create {"title":"Fix Safari export","type":"bug","priority":"urgent","project":"${DRAWCAL}","labels":["safari"],"due":"2026-09-30"}`,
     ]);
@@ -388,7 +388,7 @@ describe("Agent Grid work areas and tickets, end to end", () => {
     expect(writes()).toEqual([]);
     expect(rt.pending[0]).toMatchObject({ verb: "Delete ticket" });
     expect(rt.pending[0].detail).toContain("for good (Backlog, 3 history entries)");
-    expect(await performPending(take(rt.pending[0].id)!, { agentGrid: grid() })).toBe('Deleted GEN-1 ("Export the newsletter list").');
+    expect((await performPending(take(rt.pending[0].id)!, { agentGrid: grid() })).text).toBe('Deleted GEN-1 ("Export the newsletter list").');
     expect(fake.tickets().map((t) => t.id)).not.toContain("GEN-1");
   });
 
@@ -419,7 +419,7 @@ describe("Agent Grid work areas and tickets, end to end", () => {
     const r = await rt.execute("start_agent", { task: "Fix the Safari export", area: "engineering", ticket: "DC-1" });
     expect(r.result).toMatch(/^Not started yet/);
     expect(rt.pending[0].detail).toContain("in Engineering, on DC-1");
-    await performPending(take(rt.pending[0].id)!, { agentGrid: grid() });
+    (await performPending(take(rt.pending[0].id)!, { agentGrid: grid() })).text;
     expect(writes()).toEqual([
       'POST /api/spawn {"prompt":"Fix the Safari export","engine":"claude","name":"","interactive":false,"areaId":"engineering","ticketKey":"DC-1","noProject":true}',
     ]);

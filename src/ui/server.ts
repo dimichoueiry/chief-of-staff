@@ -692,9 +692,12 @@ export function createUiServer(o: UiOptions): Server {
       });
       try {
         const out = await performPending(p, deps);
-        step("confirmed", `they said yes, so: ${p.detail}`, { kind: p.kind });
-        step("result", out.split("\n")[0] ?? "");
-        turns.push({ role: "event", text: `They said yes and it is already done (do not do it again): ${p.label}. Result: ${outcome(out)}`, done: { kind: p.kind, detail: p.detail } });
+        step("confirmed", `they said yes, so: ${p.detail}`, { kind: p.kind, finished: out.finished });
+        step("result", out.text.split("\n")[0] ?? "");
+        // Only what actually finished is recorded as done: what merely started must stay repeatable.
+        turns.push(out.finished
+          ? { role: "event", text: `They said yes and it is already done (do not do it again): ${p.label}. Result: ${outcome(out.text)}`, done: { kind: p.kind, detail: p.detail } }
+          : { role: "event", text: `They said yes, and it has been started but is not finished: ${p.label}. Result: ${outcome(out.text)}` });
       } catch (err) {
         step("confirmed", `they said yes, but it failed: ${p.detail}`, { kind: p.kind, failed: true });
         turns.push({ role: "event", text: `They said yes, but ${p.label} failed: ${(err as Error).message}` });
@@ -1209,8 +1212,10 @@ export function createUiServer(o: UiOptions): Server {
           return json(res, 200, { ok: true, text: "Cancelled." });
         }
         try {
-          const text = await performPending(p, deps);
-          conversations.append(conversations.current(), { role: "event", text: `They tapped ${p.verb} and it is already done (do not do it again): ${p.label}. Result: ${outcome(text)}`, done: { kind: p.kind, detail: p.detail } });
+          const { text, finished } = await performPending(p, deps);
+          conversations.append(conversations.current(), finished
+            ? { role: "event", text: `They tapped ${p.verb} and it is already done (do not do it again): ${p.label}. Result: ${outcome(text)}`, done: { kind: p.kind, detail: p.detail } }
+            : { role: "event", text: `They tapped ${p.verb}, and it has been started but is not finished: ${p.label}. Result: ${outcome(text)}` });
           return json(res, 200, { ok: true, text });
         } catch (err) {
           conversations.append(conversations.current(), { role: "event", text: `They confirmed, but ${p.label} failed: ${(err as Error).message}` });

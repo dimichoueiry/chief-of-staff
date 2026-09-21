@@ -320,25 +320,48 @@ describe("a site that asks before it does the thing", () => {
     browser.allow("https://www.facebook.com/");
     await browser.read();
     const el = browser.element("e1");
-    const out = await performPending(
+    const out = (await performPending(
       { id: "1", kind: "browser-act", createdAt: Date.now(), label: 'click "Delete listing"', detail: "d", verb: "Click",
         payload: { action: "click", element: el, url: "https://www.facebook.com/marketplace/you/selling" } },
       { browser },
-    );
+    )).text;
     expect(out).toMatch(/“Delete listing\?”: it is asking before it does the thing, so click "Delete listing" has NOT happened yet/);
     expect(out).toMatch(/Do not close or dismiss it/);
     expect(browser.dialog()).toMatchObject({ role: "dialog", name: "Delete listing?" });
+  });
+
+  it("does not record a click that only opened a dialog as done, so it can still be finished", async () => {
+    const browser = new AssistantBrowser(facebookish(), join(dir, "browser.json"), { stepMs: 0, maxMs: 0 });
+    browser.allow("https://www.facebook.com/");
+    await browser.read();
+    const pending = {
+      id: "1", kind: "browser-act", createdAt: Date.now(), label: 'click "Delete listing"', detail: "d", verb: "Click",
+      payload: { action: "click", element: browser.element("e1"), url: "https://www.facebook.com/marketplace/you/selling" },
+    } as const;
+    const started = await performPending(pending, { browser });
+    expect(started.finished).toBe(false);
+
+    // A click that simply worked is finished, and only that one is safe to record as done.
+    const plain = new AssistantBrowser(fakeBrowser().driver, join(dir, "b2.json"), { stepMs: 0, maxMs: 0 });
+    plain.allow("https://canvas.illinois.edu/");
+    await plain.read();
+    const worked = await performPending(
+      { id: "2", kind: "browser-act", createdAt: Date.now(), label: "click Assignments", detail: "d", verb: "Click",
+        payload: { action: "click", element: plain.element("e2"), url: "https://canvas.illinois.edu/" } },
+      { browser: plain },
+    );
+    expect(worked.finished).toBe(true);
   });
 
   it("says nothing extra when a click simply worked", async () => {
     const browser = new AssistantBrowser(fakeBrowser().driver, join(dir, "browser.json"), { stepMs: 0, maxMs: 0 });
     browser.allow("https://canvas.illinois.edu/");
     await browser.read();
-    const out = await performPending(
+    const out = (await performPending(
       { id: "1", kind: "browser-act", createdAt: Date.now(), label: "click Assignments", detail: "d", verb: "Click",
         payload: { action: "click", element: browser.element("e2"), url: "https://canvas.illinois.edu/" } },
       { browser },
-    );
+    )).text;
     expect(out).not.toMatch(/NOT happened yet/);
     expect(browser.dialog()).toBeNull();
   });
