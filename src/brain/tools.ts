@@ -665,7 +665,7 @@ private async pursue(goal: string, rawValues: unknown): Promise<string> {
     const { action, element: el, url, text } = out.ask;
     const what = el.name ? `\u201c${el.name}\u201d` : `the unlabeled ${el.role}`;
     const detail = action === "click" ? `Click ${what} on ${url}` : `Type into ${what} on ${url} and press Enter:\n${text}`;
-    const twice = this.repeated("browser-act", detail);
+    const twice = this.repeated("browser-act", detail, true);
     if (twice) return twice;
     if (mode === "ask") {
       const label = action === "click" ? `click ${what} on ${siteOf(url) ?? "the page"}` : `search ${what} on ${siteOf(url) ?? "the page"}`;
@@ -1197,7 +1197,7 @@ private async pursue(goal: string, rawValues: unknown): Promise<string> {
         const what = el.name ? `“${el.name}”` : `the unlabeled ${el.role}`;
         const detail = `Click ${what} on ${browser.address}`;
         if (consequentialClick(el)) {
-          const twice = this.repeated("browser-act", detail);
+          const twice = this.repeated("browser-act", detail, true);
           if (twice) return twice;
           if (mode === "ask") {
             this.pending.push(queue("browser-act", { action: "click", element: el, url: browser.address }, { label: `click ${what} on ${siteOf(browser.address) ?? "the page"}`, detail, verb: "Click" }));
@@ -1217,7 +1217,7 @@ private async pursue(goal: string, rawValues: unknown): Promise<string> {
         if (await browser.isPassword(el)) throw new Error("Refused: that's a password or code field. Tell them to sign in themselves, in your browser's window; it remembers.");
         if (submit) {
           const detail = `Type into “${el.name || el.role}” on ${browser.address} and press Enter:\n${text}`;
-          const twice = this.repeated("browser-act", detail);
+          const twice = this.repeated("browser-act", detail, true);
           if (twice) return twice;
           if (mode === "ask") {
             this.pending.push(queue("browser-act", { action: "type", element: el, url: browser.address, text, submit }, { label: `send “${text.length > 40 ? `${text.slice(0, 37)}…` : text}” on ${siteOf(browser.address) ?? "the page"}`, detail, verb: "Send" }));
@@ -1263,12 +1263,20 @@ private async pursue(goal: string, rawValues: unknown): Promise<string> {
   }
 
   /** Why not to queue this again, if it is already waiting or was just done; null when it's new. */
-  private repeated(kind: string, detail: string): string | null {
+  /**
+   * Whether this is being asked for twice. `forgets` is for work on a live page: a listing page has
+   * a Delete for every listing and a dialog says only "Delete", so the same words come round again
+   * and again for different things. Blocking those for minutes stopped a confirmed deletion from
+   * ever being finished, so a page only guards against a repeat inside one reply, where the model
+   * can't have learned anything in between. Commands and agents still remember for longer.
+   */
+  private repeated(kind: string, detail: string, forgets = false): string | null {
     const same = (v: { kind: string; detail: string }) => v.kind === kind && v.detail === detail;
     if (this.pending.some(same) || (this.actions.awaiting ?? []).some((v) => same(v) && isPending(v.id))) {
       return "This exact thing is already waiting for their OK. Don't queue it again: if their latest message agrees, call confirm_pending; otherwise ask them once more.";
     }
-    if ((this.actions.recentlyDone ?? []).some(same) || this.done.some(same)) {
+    const earlier = forgets ? [] : (this.actions.recentlyDone ?? []);
+    if (earlier.some(same) || this.done.some(same)) {
       return "This exact thing was already done a moment ago. Don't do it again unless they clearly ask for it to be repeated.";
     }
     return null;
