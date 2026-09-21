@@ -385,11 +385,20 @@ export const TOOLS: Record<string, ToolSpec> = {
   browser_open: {
     name: "browser_open",
     description:
-      "Open a web page in your own browser (a separate Chrome window with its own sign-ins, not theirs; they may call it Playwright) to read it or do something on it for them: " +
+      "Open a web page in your own browser (a separate Chrome window with its own sign-ins, not theirs; they may call it Playwright) and get what they asked for done on it: " +
       "search a site and open a result (a YouTube video, an article), what's due on a course site, an order's status, a form to fill in. " +
-      "Returns the page as an outline once it has loaded: its text, links, buttons and fields, each with a [ref=…] for browser_click and browser_type. " +
+      "Say in goal what you want from the page and it works towards it on its own, a step at a time, far faster and cheaper than you clicking. " +
+      "You get the page back the moment it isn't sure, and then you click and type yourself. " +
       "A site not on your browser's list waits for their OK once. To just show them a page in their own browser, use open instead.",
-    parameters: { type: "object", properties: { url: s("The full address, e.g. https://canvas.illinois.edu/courses") }, required: ["url"] },
+    parameters: {
+      type: "object",
+      properties: {
+        url: s("The full address, e.g. https://canvas.illinois.edu/courses"),
+        goal: s("What you want done on the page, in one line, e.g. \"open the assignment called MP3\" or \"read what is due this week\""),
+        values: { type: "array", items: { type: "string" }, description: "Text it may type, e.g. a search term or a message to put in a box" },
+      },
+      required: ["url", "goal"],
+    },
   },
   browser_read: {
     name: "browser_read",
@@ -457,10 +466,9 @@ export const TOOLS: Record<string, ToolSpec> = {
   browser_do: {
     name: "browser_do",
     description:
-      "Carry out a small goal on the page already open in your browser, in as many steps as it takes, without returning to you between them: " +
-      "\"open the first result\", \"find what's due this week\", \"put this in the message box\". " +
-      "Each step costs a fraction of a browser_click, so prefer it once the right page is open. " +
-      "It hands the page straight back to you whenever it isn't sure what to do next, and anything that sends or submits still waits for their OK. " +
+      "The same as browser_open's goal, for a page that is already open: give it the next thing to get done and it works towards it a step at a time. " +
+      "Use it after it has handed the page back and you have sorted out whatever stopped it, and for each further thing they asked for. " +
+      "Always prefer this to a run of browser_click: it is far faster and cheaper, and it stops by itself when it is unsure. " +
       "Pass values for any text it should type: it chooses which field, but it cannot make text up.",
     parameters: {
       type: "object",
@@ -632,6 +640,37 @@ export class ToolRuntime {
     this.images = [];
     this.calls.push(call);
     return call;
+  }
+
+  /**
+   * Jev works towards the goal on the page that is open, and what comes back is what the model sees.
+   * The model never chooses whether to use Jev: it says what it wants, and only takes the clicking
+   * back when Jev hands it over. With no key there is nothing to hand over to, so it gets the page.
+   */
+private async pursue(goal: string, rawValues: unknown): Promise<string> {
+    const mode = this.browserAllowed();
+    const jev = this.actions.jev ?? jevFromEnv();
+    const browser = this.browser();
+    if (!jev) return `${await browser.read()}\n(No TypeSafe API key, so nothing can work towards “${goal}” on its own: click and type it yourself.)`;
+    const values = Array.isArray(rawValues) ? rawValues.map(String).filter(Boolean) : undefined;
+    const out = await runGoal(jev, browser, { goal, values });
+    const did = out.steps.length ? `Did this, in order: ${out.steps.join("; ")}.` : "Did nothing on the page.";
+    if (out.kind === "done") return `${did}\n${out.page}`;
+    if (out.kind === "handover") return `Stopped after ${out.steps.length}: ${out.why}. Carry on yourself from the page below.\n${did}\n${out.page}`;
+
+    const { action, element: el, url, text } = out.ask;
+    const what = el.name ? `\u201c${el.name}\u201d` : `the unlabeled ${el.role}`;
+    const detail = action === "click" ? `Click ${what} on ${url}` : `Type into ${what} on ${url} and press Enter:\n${text}`;
+    const twice = this.repeated("browser-act", detail);
+    if (twice) return twice;
+    if (mode === "ask") {
+      const label = action === "click" ? `click ${what} on ${siteOf(url) ?? "the page"}` : `search ${what} on ${siteOf(url) ?? "the page"}`;
+      this.pending.push(queue("browser-act", { action, element: el, url, text, submit: action === "type" }, { label, detail, verb: action === "click" ? "Click" : "Send" }));
+      return `${did}\nThen it stopped: ${detail.split("\n")[0]} may send or change something. Ask them in one short sentence whether to do it. They can just say yes, and you can call browser_do again with the same goal afterwards.`;
+    }
+    this.done.push({ kind: "browser-act", detail });
+    const after = action === "click" ? await browser.click(el) : await browser.type(el, text ?? "", true);
+    return `${did}\n${after}`;
   }
 
   private str(input: Record<string, unknown>, key: string, required = false): string {
@@ -1132,7 +1171,8 @@ export class ToolRuntime {
           this.pending.push(queue("browser-site", { url }, { label: `${site} in the assistant's browser`, detail, verb: "Allow" }));
           return `Not opened: ${site} isn't on your browser's site list yet. Ask them in one short sentence whether to allow it in your browser. They can just say yes.`;
         }
-        return browser.open(url);
+        await browser.open(url);
+        return this.pursue(this.str(input, "goal", true), input.values);
       }
       case "browser_read":
         this.browserAllowed();
@@ -1191,31 +1231,9 @@ export class ToolRuntime {
       case "browser_back":
         this.browserAllowed();
         return this.browser().back();
-      case "browser_do": {
-        const mode = this.browserAllowed();
-        const jev = this.actions.jev ?? jevFromEnv();
-        if (!jev) throw new Error("browser_do needs a TypeSafe API key; use browser_read and browser_click instead.");
-        const browser = this.browser();
-        const values = Array.isArray(input.values) ? input.values.map(String).filter(Boolean) : undefined;
-        const out = await runGoal(jev, browser, { goal: this.str(input, "goal", true), values });
-        const did = out.steps.length ? `Did this, in order: ${out.steps.join("; ")}.` : "Did nothing on the page.";
-        if (out.kind === "done") return `${did}\n${out.page}`;
-        if (out.kind === "handover") return `Stopped after ${out.steps.length}: ${out.why}. Carry on yourself from the page below.\n${did}\n${out.page}`;
-
-        const { action, element: el, url, text } = out.ask;
-        const what = el.name ? `\u201c${el.name}\u201d` : `the unlabeled ${el.role}`;
-        const detail = action === "click" ? `Click ${what} on ${url}` : `Type into ${what} on ${url} and press Enter:\n${text}`;
-        const twice = this.repeated("browser-act", detail);
-        if (twice) return twice;
-        if (mode === "ask") {
-          const label = action === "click" ? `click ${what} on ${siteOf(url) ?? "the page"}` : `search ${what} on ${siteOf(url) ?? "the page"}`;
-          this.pending.push(queue("browser-act", { action, element: el, url, text, submit: action === "type" }, { label, detail, verb: action === "click" ? "Click" : "Send" }));
-          return `${did}\nThen it stopped: ${detail.split("\n")[0]} may send or change something. Ask them in one short sentence whether to do it. They can just say yes, and you can call browser_do again with the same goal afterwards.`;
-        }
-        this.done.push({ kind: "browser-act", detail });
-        const after = action === "click" ? await browser.click(el) : await browser.type(el, text ?? "", true);
-        return `${did}\n${after}`;
-      }
+      case "browser_do":
+        this.browserAllowed();
+        return this.pursue(this.str(input, "goal", true), input.values);
       case "get_git_log": {
         const projectName = this.str(input, "project", true);
         const limit = Math.min(Math.max(Number(input.limit) || 15, 1), 100);

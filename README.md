@@ -340,10 +340,13 @@ It can scroll what's shown, too: "scroll down", "go to the chorus", or "scroll s
 - The window closes after 30 quiet minutes and opens again when needed. Sign-ins stay.
 - Chrome is used if installed, otherwise Edge (`COS_BROWSER=msedge` to choose).
 
-With `TYPESAFE_API_KEY` set, the model can hand a small goal to Jev instead of clicking through it
-itself: "open the first result", "find what's due this week". Jev picks the next element from what
-the page offers, a step at a time, for a fraction of the cost of asking the language model each
-time; the page is read fresh at every step, so it is never working from a stale picture of it.
+With `TYPESAFE_API_KEY` set, Jev does the clicking, not the language model. A page cannot be opened
+without saying what it is for, and saying it starts Jev working towards that goal: it picks the next
+element from what the page offers, a step at a time, for a fraction of the cost of asking the model
+each time. The page is read fresh at every step, so it never works from a stale picture of it.
+
+The model does not choose whether to use it. It says what it wants done and gets the result; the
+clicking only comes back to it when Jev hands the page over.
 
 It only picks, so any text to type comes from the model with the goal. It hands the page straight
 back the moment it isn't sure what to do next, when nothing on the page fits, when it would need to

@@ -230,11 +230,33 @@ describe("browser_do as a tool", () => {
     expect(fake.calls.some((c) => c.startsWith("browser_click"))).toBe(false);
   });
 
-  it("says what to use instead when there is no key for it", async () => {
+  it("hands the model the page to click itself when there is no key", async () => {
     const browser = new AssistantBrowser(fakeBrowser().driver, join(dir, "browser.json"), { stepMs: 0, maxMs: 0 });
-    const out = await runtime(browser, null).execute("browser_do", { goal: "anything" });
+    browser.allow("https://canvas.illinois.edu/");
+    const out = await runtime(browser, null).execute("browser_do", { goal: "delete the listing" });
+    expect(out.isError).toBe(false);
+    expect(out.result).toMatch(/click and type it yourself/);
+    expect(out.result).toMatch(/\[ref=e1\]/);
+  });
+
+  it("opening a page runs the loop, so the model never chooses whether Jev drives", async () => {
+    const fake = fakeBrowser();
+    const browser = new AssistantBrowser(fake.driver, join(dir, "browser.json"), { stepMs: 0, maxMs: 0 });
+    browser.allow("https://canvas.illinois.edu/");
+    const jev = fakeJev({ want: /Assignments/ });
+    const out = await runtime(browser, jev).execute("browser_open", { url: "https://canvas.illinois.edu/", goal: "open the assignments page" });
+    expect(out.isError).toBe(false);
+    expect(out.result).toMatch(/Did this, in order: clicked link "Assignments"/);
+    expect(jev.asked.length).toBeGreaterThan(0);
+    expect(fake.calls.some((c) => c.startsWith("browser_click"))).toBe(true);
+  });
+
+  it("will not open a page without saying what it is for", async () => {
+    const browser = new AssistantBrowser(fakeBrowser().driver, join(dir, "browser.json"), { stepMs: 0, maxMs: 0 });
+    browser.allow("https://canvas.illinois.edu/");
+    const out = await runtime(browser, fakeJev()).execute("browser_open", { url: "https://canvas.illinois.edu/" });
     expect(out.isError).toBe(true);
-    expect(out.result).toMatch(/needs a TypeSafe API key; use browser_read and browser_click instead/);
+    expect(out.result).toMatch(/"goal" is required/);
   });
 });
 
