@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Access } from "../src/actions/access.js";
 import { AssistantBrowser, findElement, findElements, type BrowserDriver } from "../src/actions/browser.js";
 import { confirmView } from "../src/actions/pending.js";
+import { performPending } from "../src/actions/perform.js";
 import { describeElement, runGoal } from "../src/brain/browserloop.js";
 import type { Jev, JevRequest, JevResult } from "../src/brain/jev.js";
 import { withoutOldPages } from "../src/brain/loop.js";
@@ -262,5 +263,61 @@ describe("keeping only the newest page in the record", () => {
   it("changes nothing when only one page was read", () => {
     const one = messages.slice(0, 2);
     expect(withoutOldPages(one)).toBe(one);
+  });
+});
+
+describe("a site that asks before it does the thing", () => {
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), "cos-dialog-"));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  /** A listing page where "Delete listing" opens a confirmation instead of deleting. */
+  const LISTINGS = '- button "Delete listing" [ref=e1]\n- link "Home" [ref=e2]';
+  const ASKING = '- dialog "Delete listing?" [ref=e5]\n- button "Delete" [ref=e6]\n- button "Cancel" [ref=e7]';
+
+  function facebookish() {
+    let page = LISTINGS;
+    const driver: BrowserDriver = {
+      async call(tool, args) {
+        if (tool === "browser_snapshot") return `### Page\n- Page URL: https://www.facebook.com/marketplace/you/selling\n- Page Title: Facebook\n### Snapshot\n\`\`\`yaml\n${page}\n\`\`\``;
+        if (tool === "browser_click" && args.target === "e1") page = ASKING;
+        if (tool === "browser_evaluate") return "### Result\nfalse";
+        return "";
+      },
+      async close() {},
+    };
+    return driver;
+  }
+
+  it("says the deletion has not happened when the click only opened a dialog", async () => {
+    const browser = new AssistantBrowser(facebookish(), join(dir, "browser.json"), { stepMs: 0, maxMs: 0 });
+    browser.allow("https://www.facebook.com/");
+    await browser.read();
+    const el = browser.element("e1");
+    const out = await performPending(
+      { id: "1", kind: "browser-act", createdAt: Date.now(), label: 'click "Delete listing"', detail: "d", verb: "Click",
+        payload: { action: "click", element: el, url: "https://www.facebook.com/marketplace/you/selling" } },
+      { browser },
+    );
+    expect(out).toMatch(/“Delete listing\?”: it is asking before it does the thing, so click "Delete listing" has NOT happened yet/);
+    expect(out).toMatch(/Do not close or dismiss it/);
+    expect(browser.dialog()).toMatchObject({ role: "dialog", name: "Delete listing?" });
+  });
+
+  it("says nothing extra when a click simply worked", async () => {
+    const browser = new AssistantBrowser(fakeBrowser().driver, join(dir, "browser.json"), { stepMs: 0, maxMs: 0 });
+    browser.allow("https://canvas.illinois.edu/");
+    await browser.read();
+    const out = await performPending(
+      { id: "1", kind: "browser-act", createdAt: Date.now(), label: "click Assignments", detail: "d", verb: "Click",
+        payload: { action: "click", element: browser.element("e2"), url: "https://canvas.illinois.edu/" } },
+      { browser },
+    );
+    expect(out).not.toMatch(/NOT happened yet/);
+    expect(browser.dialog()).toBeNull();
   });
 });
