@@ -90,6 +90,9 @@ model call unless something changed.
 - **Activity** (the chip in the chat's header, or ✦ › Activity…) shows what it's running for you: the
   heartbeat and its mode, your reminders (tick one off there), your projects' rhythm, and every action
   that waited for your OK, how you answered, and what your settings let it do on its own.
+- **The dashboard** (✦ › Open Chief of Staff, ⌘O in the menu) is a full window: **Chat** (the same
+  conversation as the pill, with your chats down the side, dictation, and everything a reply carries:
+  offers, answer buttons, documents, approvals), Activity, Goals, Memory, Artifacts and Soul.
 - **Goals & memory** (✦ › Goals & memory…, or the link on the Activity page): your projects as goals
   (tick one done, park it, change its next action in place), and your memory as files to open and
   edit: **Soul** (your instructions for how it behaves), the heartbeat's rules, who you are, the

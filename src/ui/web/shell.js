@@ -6,6 +6,7 @@
 
   const PATHS = {
     pulse: "M3 12h4l3-8 4 16 3-8h4",
+    bubble: "M4 12a8 7 0 1 1 3.2 5.6L4 19l.9-3.4A6.6 6.6 0 0 1 4 12z",
     target: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
     book: "M5 4.5A1.5 1.5 0 0 1 6.5 3H19v15H6.5A1.5 1.5 0 0 0 5 19.5zM5 19.5A1.5 1.5 0 0 0 6.5 21H19",
     grid: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z",
@@ -40,10 +41,11 @@
   }
 
   const NAV = [
+    { id: "chat", title: "Chat", href: "/chat.html", icon: "bubble", color: "blue" },
     { id: "activity", title: "Activity", href: "/activity.html", icon: "pulse", color: "orange" },
     { id: "goals", title: "Goals", href: "/you.html#goals", icon: "target", color: "green" },
     { id: "memory", title: "Memory", href: "/you.html#memory", icon: "book", color: "indigo" },
-    { id: "artifacts", title: "Artifacts", href: "/artifacts.html", icon: "grid", color: "blue" },
+    { id: "artifacts", title: "Artifacts", href: "/artifacts.html", icon: "grid", color: "teal" },
     { id: "soul", title: "Soul", href: "/settings.html", icon: "spark", color: "pink" },
   ];
 

@@ -151,6 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     let menu = NSMenu()
     menu.delegate = self
+    add(menu, "Open Chief of Staff", #selector(showDashboard), key: "o")
     add(menu, "Today's brief", #selector(showBrief), key: "b")
     add(menu, "Talk   (⌃ ⌃)", #selector(talk))
     add(menu, "Ask or capture…   (⌥Space)", #selector(type))
@@ -579,6 +580,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   @objc private func showSettings() { NSWorkspace.shared.open(server.config.baseURL.appendingPathComponent("settings.html")) }
 
   /// Everything it has made, newest first.
+  /// The dashboard, on its chat: the same conversation as the pill, in a full window.
+  @objc private func showDashboard() { NSWorkspace.shared.open(server.config.baseURL.appendingPathComponent("chat.html")) }
+
   /// What it's running for you and what you've approved.
   @objc private func showActivity() { NSWorkspace.shared.open(server.config.baseURL.appendingPathComponent("activity.html")) }
 

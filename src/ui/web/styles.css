@@ -448,3 +448,9 @@ html[data-pill="compact"] .pill[data-state="speaking"] { background: rgba(30, 33
 .activity-head .head-link { margin-left: auto; text-decoration: none; }
 .editor-panel[hidden], .md-editor[hidden], .md-preview[hidden] { display: none; }
 .md-preview { padding: 22px 26px; font-size: 14.5px; line-height: 1.6; background: var(--surface); }
+
+/* Checklists in documents and replies. */
+ul.tasks { list-style: none; padding-left: 2px !important; }
+li.task { display: flex; gap: 8px; align-items: baseline; }
+li.task .box { flex: none; width: 1em; height: 1em; border: 1.5px solid currentColor; border-radius: 4px; opacity: 0.55; display: inline-grid; place-items: center; font-size: 0.8em; transform: translateY(0.12em); }
+li.task.done { opacity: 0.6; text-decoration: line-through; }
