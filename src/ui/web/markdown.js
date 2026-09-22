@@ -79,7 +79,14 @@
           if (num && num[1] !== "1") list.setAttribute("start", num[1]);
           frag.append(list);
         }
-        list.append(el("li", {}, ...line1(bullet ? bullet[1] : num[2])));
+        // "- [ ] thing" and "- [x] thing" are a checklist: a box, not brackets.
+        const text = bullet ? bullet[1] : num[2];
+        const task = /^\[( |x|X)\]\s+(.*)$/.exec(text);
+        if (task) {
+          const done = task[1] !== " ";
+          list.classList.add("tasks");
+          list.append(el("li", { class: done ? "task done" : "task" }, el("span", { class: "box", "aria-hidden": "true" }, done ? "✓" : ""), ...line1(task[2])));
+        } else list.append(el("li", {}, ...line1(text)));
         continue;
       }
       if (!line.trim()) {

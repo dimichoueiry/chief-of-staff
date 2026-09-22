@@ -708,6 +708,9 @@ export function createUiServer(o: UiOptions): Server {
       said = `What are the top 3 moves on ${p.name} right now?`;
     }
 
+    // Sent from a window showing a particular chat (the dashboard): it goes to that chat, which becomes the one in progress.
+    const asked = typeof b.conversation === "string" ? b.conversation : "";
+    if (asked && asked !== conversations.current().id && conversations.get(asked)) conversations.open(asked);
     const convo = conversations.current();
     // Yes (or not now) to what the heartbeat offered: the yes carries what it promised to do.
     const answered = mode === "focus" ? null : offerAnswered(convo, b.offer, said);

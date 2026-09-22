@@ -146,6 +146,23 @@ describe("choices and the activity page", () => {
     expect(kinds).toEqual([]);
   });
 
+  it("sends a message to the chat the dashboard is showing, not whichever the pill is on", async () => {
+    responses.push(reply({ text: "First." }));
+    const a = await post("/api/pill", { text: "one" });
+    await post("/api/conversation/new", {});
+    responses.push(reply({ text: "Second." }));
+    const b = await post("/api/pill", { text: "two" });
+    expect(b.conversation).not.toBe(a.conversation);
+    responses.push(reply({ text: "Back in the first." }));
+    const again = await post("/api/pill", { text: "three", conversation: a.conversation });
+    expect(again.conversation).toBe(a.conversation);
+    expect((await get("/api/conversation")).turns.map((t: { text: string }) => t.text)).toEqual(["one", "First.", "three", "Back in the first."]);
+    // An id that isn't a chat is ignored: it goes to the one in progress.
+    responses.push(reply({ text: "Still here." }));
+    expect((await post("/api/pill", { text: "four", conversation: "nope" })).conversation).toBe(a.conversation);
+    expect(await (await fetch(`${base}/chat.html`)).text()).toContain('src="/chat.js"');
+  });
+
   it("serves the page", async () => {
     const html = await (await fetch(`${base}/activity.html`)).text();
     expect(html).toContain('src="/activity.js"');
