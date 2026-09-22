@@ -1,150 +1,149 @@
-/* What it's running for you and what you've allowed, in one place: the heartbeat and how
- * proactive it is, your reminders, the rhythm of your projects, and every action that waited
- * for your OK (or didn't need one). Plain script over GET /api/activity. */
+/* What it's running for you and what you've allowed, in one place: how proactive it is and when
+ * it next looks, your reminders, the rhythm of your projects, and every action that waited for
+ * your OK (or didn't need one). Plain script over GET /api/activity. */
 const { $, el, get, post, when } = window.cosDom;
-
-const say = (text, tone = "") => {
-  $("said").textContent = text;
-  $("said").dataset.tone = tone;
-};
-
-// ---------- small line icons, drawn once ----------
-const ICONS = {
-  heart: "M12 20s-7-4.35-7-10a4 4 0 0 1 7-2.65A4 4 0 0 1 19 10c0 5.65-7 10-7 10z",
-  bell: "M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15zM10 20a2 2 0 0 0 4 0",
-  repeat: "M4 12a8 8 0 0 1 14-5.3M20 12a8 8 0 0 1-14 5.3M18 3v4h-4M6 21v-4h4",
-  globe: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18",
-  terminal: "M4 5h16v14H4zM7 9l3 3-3 3M12 15h5",
-  agent: "M8 8h8v8H8zM12 4v4M12 16v4M4 12h4M16 12h4",
-  spark: "M12 3l2 7 7 2-7 2-2 7-2-7-7-2 7-2z",
-  check: "M5 12l4 4 10-10",
-  cursor: "M5 3l14 8-6 2-2 6z",
-};
-const KIND_ICON = { open: "globe", command: "terminal", "browser-act": "cursor", offer: "spark" };
-const iconFor = (kind) => KIND_ICON[kind] || (/agent|orchestrator|ticket/.test(kind) ? "agent" : /browser/.test(kind) ? "cursor" : "check");
-
-function icon(name) {
-  const NS = "http://www.w3.org/2000/svg";
-  const svg = document.createElementNS(NS, "svg");
-  svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("aria-hidden", "true");
-  const path = document.createElementNS(NS, "path");
-  path.setAttribute("d", ICONS[name] || ICONS.check);
-  svg.append(path);
-  return el("span", { class: `row-icon icon-${name}` }, svg);
-}
+const { glyph, toast, item, group } = window.cosPage;
 
 const clock = (iso) => new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 const dayLabel = (date, today) => {
   if (date === today) return "Today";
-  const d = new Date(`${date}T12:00:00`);
-  const t = new Date(`${today}T12:00:00`);
-  const days = Math.round((d - t) / 86_400_000);
+  const days = Math.round((new Date(`${date}T12:00:00`) - new Date(`${today}T12:00:00`)) / 86_400_000);
   if (days === 1) return "Tomorrow";
   if (days === -1) return "Yesterday";
-  return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+  return new Date(`${date}T12:00:00`).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
 };
 const timeLabel = (hhmm) => {
   const [h, m] = hhmm.split(":").map(Number);
   return new Date(2000, 0, 1, h, m).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 };
 
-function row(iconName, title, sub, ...extra) {
-  return el("div", { class: "row" }, icon(iconName), el("div", { class: "row-main" }, el("div", { class: "row-title" }, title), ...(sub ? [el("div", { class: "row-sub" }, sub)] : [])), ...extra);
-}
-
-function section(title, ...rows) {
-  return el("section", { class: "act-section" }, el("h2", {}, title), ...rows);
-}
-
 // ---------- Scheduled ----------
-function heartbeatSection(hb) {
-  const modes = el("div", { class: "segmented", role: "radiogroup", "aria-label": "How proactive" });
-  const hints = { off: "Never writes first.", proactive: "Offers, and waits for your yes.", plus: "Prepares drafts on its own, then shows you. Anything that would send or post still waits." };
+const HINTS = {
+  off: "It never writes to you first.",
+  proactive: "When it can do something before you ask, it offers, and waits for your yes.",
+  plus: "It prepares drafts on its own and shows you. Anything that would send, post or change your memory still waits for your yes.",
+};
+
+function proactiveSection(hb) {
+  const control = el("div", { class: "segmented full", role: "radiogroup", "aria-label": "How proactive" });
   for (const m of hb.modes) {
-    modes.append(el("button", {
-      class: m.id === hb.mode ? "seg on" : "seg",
+    control.append(el("button", {
+      class: "seg",
       role: "radio",
       "aria-checked": String(m.id === hb.mode),
-      title: hints[m.id] || "",
       onclick: async () => {
         const r = await post("/api/heartbeat", { mode: m.id });
-        if (r.error) return say(r.error, "error");
-        say(`${m.name}. ${hints[m.id] || ""}`);
+        if (r.error) return toast(r.error, "error");
+        toast(m.id === "off" ? "Off" : `${m.name} is on`);
         load();
       },
     }, m.name));
   }
   const s = hb.schedule;
-  const sub = hb.mode === "off"
-    ? "Off: it won't write to you first."
-    : [s ? `Every ${Math.round(s.everyMs / 60000)} minutes · next ${clock(s.nextAt)}` : "Runs while the app is open", hb.last ? `last look ${when(hb.last.at)}: ${hb.last.outcome}` : ""].filter(Boolean).join(" · ");
   const look = el("button", {
-    class: "chip",
+    class: "btn small",
     onclick: async () => {
       look.disabled = true;
-      look.textContent = "looking…";
+      look.textContent = "Looking…";
       const r = await post("/api/heartbeat/tick", {});
       look.disabled = false;
-      look.textContent = "look now";
-      say(r.outcome === "offered" || r.outcome === "done" ? `It wrote to you: ${r.offer.title}` : r.outcome === "off" ? "It's off." : `Nothing to say${r.why ? `: ${r.why}` : "."}`);
+      look.textContent = "Look Now";
+      toast(r.outcome === "offered" || r.outcome === "done" ? `It wrote to you: ${r.offer.title}` : r.outcome === "off" ? "It's off." : `Nothing worth saying${r.why ? `: ${r.why}` : "."}`);
       load();
     },
-  }, "look now");
+  }, "Look Now");
   if (hb.mode === "off") look.disabled = true;
-  const offers = hb.offers.slice(0, 5).map((o) =>
-    row("spark", o.title, `${{ open: "waiting on you", accepted: "you said yes", declined: "you said not now", done: "did it on its own" }[o.status] || o.status} · ${when(o.createdAt)}`));
-  return section("Proactive",
-    el("div", { class: "row" }, icon("heart"), el("div", { class: "row-main" }, el("div", { class: "row-title" }, "Heartbeat"), el("div", { class: "row-sub" }, sub)), look),
-    modes,
-    ...(offers.length ? [el("div", { class: "sub-list" }, el("div", { class: "sub-head" }, "What it offered lately"), ...offers)] : []));
+
+  const heartbeatSub = hb.mode === "off"
+    ? "Off"
+    : s ? `Every ${Math.round(s.everyMs / 60000)} minutes · next at ${clock(s.nextAt)}` : "While the app is open";
+  const rows = [
+    el("div", { class: "item plain" }, el("div", { class: "item-main" }, control, el("div", { class: "item-sub", style: "margin-top:8px" }, HINTS[hb.mode] || ""))),
+    item({ icon: glyph("heart", "red"), title: "Heartbeat", sub: heartbeatSub, trail: [look] }),
+  ];
+  if (hb.last && hb.mode !== "off") rows.push(item({ icon: glyph("clock", "gray"), title: "Last look", sub: `${when(hb.last.at)} · ${hb.last.outcome.replace(/^quiet: /, "said nothing: ")}` }));
+
+  const offered = hb.offers.slice(0, 5).map((o) =>
+    item({
+      icon: glyph("spark", "orange"),
+      title: o.title,
+      sub: `${{ open: "Waiting on you", accepted: "You said yes", declined: "You said not now", done: "Done on its own" }[o.status] || o.status} · ${when(o.createdAt)}`,
+    }));
+  return [
+    ...group("Proactive", rows),
+    ...(offered.length ? group("What it offered", offered) : []),
+  ];
 }
 
 function remindersSection(reminders, today) {
-  if (!reminders.length) return section("Reminders", el("p", { class: "empty" }, "Nothing set. Say “remind me Friday to …”, or tell it what's happening when."));
-  return section("Reminders", ...reminders.map((r) => {
-    const done = el("button", {
-      class: "chip icon",
-      title: "Mark it done",
+  if (!reminders.length) {
+    return group("Reminders", [el("p", { class: "empty-note" }, "Nothing set. Tell it “remind me Friday to …”, or just say when something is happening.")]);
+  }
+  return group("Reminders", reminders.map((r) => {
+    const check = el("button", {
+      class: "check",
+      role: "checkbox",
+      "aria-checked": "false",
       "aria-label": `Mark “${r.text}” done`,
       onclick: async () => {
-        done.disabled = true;
+        check.setAttribute("aria-checked", "true");
         const res = await post("/api/reminders/done", { text: r.text });
-        if (res.error) return say(res.error, "error");
-        say(res.text);
-        load();
+        if (res.error) {
+          check.setAttribute("aria-checked", "false");
+          return toast(res.error, "error");
+        }
+        toast("Done");
+        setTimeout(load, 350);
       },
-    }, "✓");
+    });
     const overdue = r.date < today;
-    const node = row("bell", r.text, `${dayLabel(r.date, today)}${r.time ? `, ${timeLabel(r.time)}` : ""}${overdue ? " · overdue" : ""}`, done);
-    if (overdue) node.classList.add("overdue");
-    return node;
-  }));
+    return item({ icon: check, title: r.text, sub: `${dayLabel(r.date, today)}${r.time ? `, ${timeLabel(r.time)}` : ""}${overdue ? " · Overdue" : ""}`, cls: overdue ? "warn" : "" });
+  }), { aside: `${reminders.length} open` });
 }
 
 function rhythmSection(rhythm) {
-  if (!rhythm.length) return null;
-  return section("Rhythm", ...rhythm.map((p) =>
-    row("repeat", p.name, [p.cadence, p.next ? `next: ${p.next}` : "", p.idle === null ? "" : `touched ${p.idle === 0 ? "today" : `${p.idle} day${p.idle === 1 ? "" : "s"} ago`}`].filter(Boolean).join(" · "))));
+  if (!rhythm.length) return [];
+  return group("Rhythm", rhythm.map((p) =>
+    item({
+      icon: glyph("repeat", "teal"),
+      title: p.name,
+      sub: [p.cadence, p.idle === null ? "" : p.idle === 0 ? "Touched today" : `Touched ${p.idle} day${p.idle === 1 ? "" : "s"} ago`].filter(Boolean).join(" · "),
+      detail: p.next ? `Next: ${p.next}` : "",
+    })), { foot: "Projects with a day of their own. Set one by telling it “MLGuerrilla on Thursdays”." });
 }
 
 // ---------- Approvals ----------
+const KIND = { open: ["globe", "blue"], command: ["terminal", "gray"], "browser-act": ["cursor", "indigo"], offer: ["spark", "orange"] };
+const iconFor = (kind) => KIND[kind] || (/agent|orchestrator|ticket/.test(kind) ? ["agent", "teal"] : /browser/.test(kind) ? ["cursor", "indigo"] : ["check", "green"]);
 const OUTCOMES = {
-  allowed: (a) => `Allowed · ${a.how === "said" ? "you said yes" : "you tapped"}`,
-  declined: (a) => `Declined · ${a.how === "said" ? "you said no" : "you tapped"}`,
+  allowed: (a) => (a.how === "said" ? "Allowed — you said yes" : "Allowed"),
+  declined: (a) => (a.how === "said" ? "Declined — you said no" : "Declined"),
   failed: () => "Allowed, but it failed",
   auto: () => "Allowed by your settings",
   done: () => "Done on its own (Proactive+)",
 };
 
 function approvalsPanel(list) {
-  if (!list.length) return [el("p", { class: "empty" }, "Nothing yet. When it asks before doing something, or does something your settings allow, it's listed here.")];
-  return [section("Approvals history", ...list.map((a) => {
-    const n = row(iconFor(a.kind), a.label, `${(OUTCOMES[a.outcome] || (() => a.outcome))(a)} · ${when(a.at)}`);
-    if (a.detail) n.querySelector(".row-main").append(el("div", { class: "row-detail" }, a.detail));
-    n.dataset.outcome = a.outcome;
-    return n;
-  }))];
+  if (!list.length) return group("", [el("p", { class: "empty-note" }, "Nothing yet. When it asks before doing something, or does something your settings allow, it's listed here.")]);
+  // One group per day, newest first, like a history should read.
+  const days = new Map();
+  const today = new Date().toDateString();
+  const yesterday = new Date(Date.now() - 86_400_000).toDateString();
+  for (const a of list) {
+    const d = new Date(a.at);
+    const key = d.toDateString();
+    const label = key === today ? "Today" : key === yesterday ? "Yesterday" : d.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+    if (!days.has(key)) days.set(key, { label, rows: [] });
+    const [icon, color] = iconFor(a.kind);
+    days.get(key).rows.push(item({
+      icon: glyph(icon, color),
+      title: a.label,
+      sub: `${(OUTCOMES[a.outcome] || (() => a.outcome))(a)} · ${clock(a.at)}`,
+      detail: a.detail || "",
+      cls: a.outcome === "failed" ? "warn" : "",
+    }));
+  }
+  return [...days.values()].flatMap((d) => group(d.label, d.rows));
 }
 
 // ---------- the page ----------
@@ -163,23 +162,23 @@ function showTab(name) {
   } catch {
     /* fine */
   }
-  for (const b of document.querySelectorAll(".tab")) b.setAttribute("aria-selected", String(b.dataset.tab === name));
+  for (const b of document.querySelectorAll("[data-tab]")) b.setAttribute("aria-selected", String(b.dataset.tab === name));
   $("scheduled").hidden = name !== "scheduled";
   $("approvals").hidden = name !== "approvals";
 }
-
-for (const b of document.querySelectorAll(".tab")) b.addEventListener("click", () => showTab(b.dataset.tab));
+for (const b of document.querySelectorAll("[data-tab]")) b.addEventListener("click", () => showTab(b.dataset.tab));
 
 async function load() {
   let a;
   try {
     a = await get("/api/activity");
   } catch {
-    return say("The app isn't answering.", "error");
+    return toast("The app isn't answering.", "error");
   }
   const names = Object.fromEntries(a.heartbeat.modes.map((m) => [m.id, m.name]));
-  $("state").textContent = a.heartbeat.mode === "off" ? "Not writing first" : `${names[a.heartbeat.mode]} · ${a.reminders.length} reminder${a.reminders.length === 1 ? "" : "s"} open`;
-  $("scheduled").replaceChildren(...[heartbeatSection(a.heartbeat), remindersSection(a.reminders, a.today), rhythmSection(a.rhythm)].filter(Boolean));
+  const open = a.reminders.length;
+  $("state").textContent = `${a.heartbeat.mode === "off" ? "Not writing to you first" : names[a.heartbeat.mode]} · ${open} reminder${open === 1 ? "" : "s"} open`;
+  $("scheduled").replaceChildren(...proactiveSection(a.heartbeat), ...remindersSection(a.reminders, a.today), ...rhythmSection(a.rhythm));
   $("approvals").replaceChildren(...approvalsPanel(a.approvals));
   showTab(tab);
 }

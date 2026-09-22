@@ -4,30 +4,32 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Artifacts — Chief of Staff</title>
-  <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/page.css" />
 </head>
-<body class="page-body">
-  <main class="stage">
-    <section class="panel wide">
-      <header class="panel-head">
-        <div>
-          <h1>Artifacts</h1>
-          <p class="headline" id="count">Loading…</p>
+<body>
+  <div class="window" data-page="artifacts">
+    <main class="content">
+      <div class="toolbar">
+        <span class="toolbar-title">Artifacts</span>
+        <span class="spacer"></span>
+        <div class="segmented" id="filters" role="tablist" aria-label="Show">
+          <button class="seg" role="tab" data-kind="all" aria-selected="true">All</button>
+          <button class="seg" role="tab" data-kind="doc" aria-selected="false">Documents</button>
+          <button class="seg" role="tab" data-kind="page" aria-selected="false">Pages</button>
+          <button class="seg" role="tab" data-kind="image" aria-selected="false">Images</button>
         </div>
-        <div class="head-actions" id="filters">
-          <button class="chip chip-accent" data-kind="all">all</button>
-          <button class="chip" data-kind="page">pages</button>
-          <button class="chip" data-kind="image">pictures</button>
-          <button class="chip" data-kind="doc">documents</button>
-        </div>
-      </header>
-      <div class="gallery" id="gallery"></div>
-      <footer class="panel-foot" id="said"></footer>
-    </section>
-  </main>
+      </div>
+      <div class="page wide">
+        <h1 class="large-title">Artifacts</h1>
+        <p class="subtitle" id="count">Loading…</p>
+        <div class="gallery" id="gallery"></div>
+      </div>
+    </main>
+  </div>
   <script src="/dom.js"></script>
   <script src="/markdown.js"></script>
   <script src="/artifact-card.js"></script>
+  <script src="/shell.js"></script>
   <script src="/artifacts.js"></script>
 </body>
 </html>

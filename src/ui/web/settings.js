@@ -1,14 +1,10 @@
-/* The one setting that has no home in a menu: what you want the assistant to do differently.
+/* Soul: what you want the assistant to do differently, in your own words.
  * Everything it already knows is shown below the box, so you can see what you are adding to. */
 const { $, get, post } = window.cosDom;
 
 let max = 8000;
 
-const say = (text, tone = "") => {
-  const said = $("said");
-  said.textContent = text;
-  said.dataset.tone = tone;
-};
+const say = (text, tone = "") => window.cosPage.toast(text, tone);
 
 function count() {
   const n = $("instructions").value.trim().length;

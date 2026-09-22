@@ -3,36 +3,36 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Settings — Chief of Staff</title>
-  <link rel="stylesheet" href="/styles.css" />
+  <title>Soul — Chief of Staff</title>
+  <link rel="stylesheet" href="/page.css" />
 </head>
-<body class="page-body">
-  <main class="stage">
-    <section class="panel">
-      <header class="panel-head">
-        <div>
-          <h1>My instructions</h1>
-          <p class="headline">What you want done differently, in every conversation.</p>
-        </div>
-        <div class="head-actions">
-          <button class="chip chip-accent" id="save">save</button>
-          <button class="chip" id="clear" title="Go back to the default on its own">use the default</button>
-          <a class="chip" href="/artifacts.html">artifacts</a>
-        </div>
-      </header>
-      <textarea id="instructions" class="editor" spellcheck="false" placeholder="Call me Dimitri. Keep replies to three sentences unless I ask for more.
+<body>
+  <div class="window" data-page="soul">
+    <main class="content">
+      <div class="toolbar">
+        <span class="toolbar-title">Soul</span>
+        <span class="spacer"></span>
+        <button class="btn" id="clear" type="button" title="Go back to the defaults on their own">Use Defaults Only</button>
+        <button class="btn primary" id="save" type="button" title="Save (⌘S)">Save</button>
+      </div>
+      <div class="page">
+        <h1 class="large-title">Soul</h1>
+        <p class="subtitle">How it behaves, in your words. Added to what it already knows about how to work, and it wins where the two disagree.</p>
+        <div class="sheet">
+          <textarea id="instructions" spellcheck="true" aria-label="Your instructions" placeholder="Call me Dimitri. Keep replies to three sentences unless I ask for more.
 Write my LinkedIn posts in my voice: plain, concrete, no hype, no emoji.
 Instagram posts are 4:5. Always show me the post as a page before we settle on it."></textarea>
-      <p class="note"><span id="count"></span> · added to what it already knows, and it wins where the two disagree. Empty means the default alone. <span id="file" class="mono"></span></p>
-      <details class="fold">
-        <summary>What it already knows</summary>
-        <pre id="default" class="detail"></pre>
-      </details>
-
-      <footer class="panel-foot" id="said"></footer>
-    </section>
-  </main>
+        </div>
+        <p class="group-foot"><span id="count"></span> · <span id="file" class="mono"></span></p>
+        <details class="disclosure">
+          <summary>What it already knows</summary>
+          <pre id="default"></pre>
+        </details>
+      </div>
+    </main>
+  </div>
   <script src="/dom.js"></script>
+  <script src="/shell.js"></script>
   <script src="/settings.js"></script>
 </body>
 </html>
