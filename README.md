@@ -10,6 +10,9 @@ the memory plus the initiative: it knows, and it speaks first.
 > in 12 days. Last time you said the next step was recording the intro video. You
 > have a free block 2 to 4 pm. Want to do it then?"
 
+**Got the app as a `.dmg`?** Follow [`docs/INSTALL.md`](docs/INSTALL.md): install, first launch,
+permissions, your API key, and removal. No Terminal needed. The rest of this README is the developer setup.
+
 ## How it works
 
 Three memory stores, all plain markdown in a local git repo you own (`~/selfhub`, made for you
