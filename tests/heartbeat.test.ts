@@ -260,7 +260,7 @@ describe("the heartbeat in the app", () => {
   let notified: string[];
 
   const reply = (o: Partial<ChatResponse>): ChatResponse => ({ text: "", toolCalls: [], stop: "end", model: "scripted", ...o });
-  const post = async (path: string, b: unknown = {}) => (await fetch(`${base}${path}`, { method: "POST", body: JSON.stringify(b) })).json();
+  const post = async (path: string, b: unknown = {}) => (await fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) })).json();
   const get = async (path: string) => (await fetch(`${base}${path}`)).json();
 
   beforeEach(async () => {

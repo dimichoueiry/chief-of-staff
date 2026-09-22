@@ -141,7 +141,7 @@ describe("the keys endpoint the window talks to", () => {
     await rm(selfhub, { recursive: true, force: true });
   });
 
-  const post = (b: unknown) => fetch(`${url}/api/keys`, { method: "POST", body: JSON.stringify(b) });
+  const post = (b: unknown) => fetch(`${url}/api/keys`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) });
 
   it("lists every key someone can paste, with somewhere to get one", async () => {
     const state = await (await fetch(`${url}/api/keys`)).json();

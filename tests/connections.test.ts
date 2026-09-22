@@ -257,7 +257,7 @@ describe("the connections endpoint the window talks to", () => {
     await rm(selfhub, { recursive: true, force: true });
   });
 
-  const post = (path: string, b: unknown) => fetch(`${url}${path}`, { method: "POST", body: JSON.stringify(b) });
+  const post = (path: string, b: unknown) => fetch(`${url}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) });
 
   it("starts empty, naming services to add and where to find them", async () => {
     const state = await (await fetch(`${url}/api/connections`)).json();

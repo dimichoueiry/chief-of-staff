@@ -441,9 +441,9 @@ describe("Agent Grid work areas and tickets, end to end", () => {
       expect(view.actions.map((a: { title: string }) => a.title)).toEqual(["New ticket…", "Open Agent Grid"]);
       expect(view.actions[1].url).toBe(`${base}/?t=tok`);
 
-      const filed = await (await fetch(`${url}/api/grid/tickets/new`, { method: "POST", body: JSON.stringify({ value: "Rename the export menu" }) })).json();
+      const filed = await (await fetch(`${url}/api/grid/tickets/new`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ value: "Rename the export menu" }) })).json();
       expect(filed).toMatchObject({ ok: true, message: "Filed GEN-2", ticket: "GEN-2" });
-      expect((await fetch(`${url}/api/grid/tickets/new`, { method: "POST", body: JSON.stringify({ value: "  " }) })).status).toBe(400);
+      expect((await fetch(`${url}/api/grid/tickets/new`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ value: "  " }) })).status).toBe(400);
     } finally {
       await new Promise((r) => server.close(r));
     }

@@ -71,6 +71,7 @@ import type { Shell } from "../actions/terminal.js";
 import { findFolders, formatFolderSearch } from "../actions/folders.js";
 import { Shortcuts } from "../actions/shortcuts.js";
 import { slateBoards, type SlateBoard } from "../actions/slate.js";
+import { refuse } from "./guard.js";
 import { readVoiceSettings, speak, stopSpeaking, type SpeakOptions, type SpeakResult } from "../voice/tts.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -1547,6 +1548,12 @@ export function createUiServer(o: UiOptions): Server {
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", "http://localhost");
+    const refused = refuse(req, url.pathname);
+    if (refused) {
+      Log(`refused ${req.method} ${url.pathname}: ${refused.error} (host ${req.headers.host ?? "-"}, origin ${req.headers.origin ?? "-"})`);
+      req.resume();
+      return json(res, refused.status, { error: refused.error });
+    }
     // Keys added to ~/.cos/.env apply to the next request; no restart.
     if (url.pathname.startsWith("/api/")) {
       reloadHomeEnv();

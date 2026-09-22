@@ -62,7 +62,7 @@ describe("goals and memory in the app", () => {
   let base: string;
   let close: () => Promise<void>;
   const post = async (path: string, b: unknown = {}) => {
-    const r = await fetch(`${base}${path}`, { method: "POST", body: JSON.stringify(b) });
+    const r = await fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) });
     return { status: r.status, ...(await r.json()) };
   };
   const get = async (path: string) => (await fetch(`${base}${path}`)).json();

@@ -151,36 +151,36 @@ describe("ui server (offline)", () => {
     expect(r.speech).toContain("Good");
     expect(r.brief.decisions.map((d: { project: string }) => d.project)).toEqual(["nuonc_rag"]);
 
-    const d = await (await fetch(`${base}/api/decide`, { method: "POST", body: JSON.stringify({ project: "nuonc_rag", choice: "park" }) })).json();
+    const d = await (await fetch(`${base}/api/decide`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ project: "nuonc_rag", choice: "park" }) })).json();
     expect(d.status).toBe("parked");
-    const bad = await fetch(`${base}/api/decide`, { method: "POST", body: JSON.stringify({ project: "x", choice: "maybe" }) });
+    const bad = await fetch(`${base}/api/decide`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ project: "x", choice: "maybe" }) });
     expect(bad.status).toBe(400);
   });
 
   it("files captures offline through the pill and explains that questions need a key", async () => {
-    const filed = await (await fetch(`${base}/api/pill`, { method: "POST", body: JSON.stringify({ text: "remind me friday to call the bank" }) })).json();
+    const filed = await (await fetch(`${base}/api/pill`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "remind me friday to call the bank" }) })).json();
     expect(filed).toMatchObject({ kind: "capture", where: "reminder" });
-    const q = await (await fetch(`${base}/api/pill`, { method: "POST", body: JSON.stringify({ text: "what should I do today?" }) })).json();
+    const q = await (await fetch(`${base}/api/pill`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "what should I do today?" }) })).json();
     expect(q.kind).toBe("answer");
     expect(q.text).toContain("needs a model");
     const projects = await (await fetch(`${base}/api/projects`)).json();
     expect(projects.map((p: { name: string }) => p.name)).toContain("drawcal");
-    const spoke = await (await fetch(`${base}/api/speak`, { method: "POST", body: JSON.stringify({ text: "hi" }) })).json();
+    const spoke = await (await fetch(`${base}/api/speak`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "hi" }) })).json();
     expect(spoke.muted).toBe(true);
   });
 
   it("answers focus for a known project offline and stops speech on request", async () => {
-    const f = await (await fetch(`${base}/api/pill`, { method: "POST", body: JSON.stringify({ text: "drawcal", mode: "focus" }) })).json();
+    const f = await (await fetch(`${base}/api/pill`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "drawcal", mode: "focus" }) })).json();
     expect(f).toMatchObject({ kind: "focus", project: "drawcal" });
     expect(f.text).toContain("Recorded next action: cut the export feature from v1.");
-    const missing = await fetch(`${base}/api/pill`, { method: "POST", body: JSON.stringify({ text: "nope", mode: "focus" }) });
+    const missing = await fetch(`${base}/api/pill`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "nope", mode: "focus" }) });
     expect(missing.status).toBe(404);
-    const stop = await (await fetch(`${base}/api/speak/stop`, { method: "POST", body: "{}" })).json();
+    const stop = await (await fetch(`${base}/api/speak/stop`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })).json();
     expect(stop).toEqual({ ok: true, stopped: false });
   });
 
   it("opens Slate boards, favorites and web pages instantly from the pill, and asks first only when links are set to ask", async () => {
-    const post = (b: unknown, path = "/api/pill") => fetch(`${base}${path}`, { method: "POST", body: JSON.stringify(b) });
+    const post = (b: unknown, path = "/api/pill") => fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) });
     const slate = await (await post({ text: "open slate board chief of staff ui" })).json();
     expect(slate).toMatchObject({ kind: "action", text: "Opened Slate board “Chief of Staff — UI/UX”." });
     expect(opened).toEqual([["https://slate-iota-lac.vercel.app/board/a1"]]);
@@ -220,7 +220,7 @@ describe("ui server (offline)", () => {
   });
 
   it("remembers the conversation across offline messages and starts over on request", async () => {
-    const post = (b: unknown, path = "/api/pill") => fetch(`${base}${path}`, { method: "POST", body: JSON.stringify(b) });
+    const post = (b: unknown, path = "/api/pill") => fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) });
     const first = await (await post({ text: "open slate" })).json();
     const second = await (await post({ text: "remind me friday to call the bank" })).json();
     expect(second.conversation).toBe(first.conversation);
@@ -289,7 +289,7 @@ describe("ui server (offline)", () => {
   });
 
   it("steps out for an aside and back on topic: the main chat waits untouched and the aside is thrown away", async () => {
-    const post = (b: unknown, path = "/api/pill") => fetch(`${base}${path}`, { method: "POST", body: JSON.stringify(b) });
+    const post = (b: unknown, path = "/api/pill") => fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) });
     const current = async () => (await fetch(`${base}/api/conversation`)).json();
     const main = await (await post({ text: "remind me friday to call the bank" })).json();
     expect((await current()).aside).toBe(false);
@@ -341,7 +341,7 @@ describe("ui server (offline)", () => {
     });
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const speakIt = async (b: unknown) => (await fetch(`${url}/api/speak`, { method: "POST", body: JSON.stringify(b) })).json();
+    const speakIt = async (b: unknown) => (await fetch(`${url}/api/speak`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) })).json();
     try {
       expect(await speakIt({ text: "**Done.** Next?", cues: { start: true, turn: true } })).toMatchObject({ ok: true, stopped: false, cued: ["start", "turn"] });
       expect(await speakIt({ text: "Read aloud." })).toMatchObject({ cued: [] });
@@ -368,7 +368,7 @@ describe("ui server (offline)", () => {
     });
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-    const post = (path: string, b: unknown) => fetch(`${url}${path}`, { method: "POST", body: JSON.stringify(b) });
+    const post = (path: string, b: unknown) => fetch(`${url}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) });
     try {
       const menu = await (await fetch(`${url}/api/models`)).json();
       expect(menu.actions.map((a: { kind: string; title: string }) => `${a.kind}: ${a.title}`)).toEqual(["input: Use any model…", "open: Browse OpenRouter models…"]);
@@ -406,7 +406,7 @@ describe("ui server (offline)", () => {
     expect(before.providers.map((p: { id: string }) => p.id)).toEqual(["anthropic", "openai", "openrouter", "compatible"]);
     expect(before.presets.map((p: { spec: string }) => p.spec)).toContain("openai:gpt-5.4");
 
-    const post = (b: unknown) => fetch(`${base}/api/models`, { method: "POST", body: JSON.stringify(b) });
+    const post = (b: unknown) => fetch(`${base}/api/models`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) });
     const after = await (await post({ spec: "openrouter:openai/gpt-5.2" })).json();
     expect(after.default).toBe("openrouter:openai/gpt-5.2");
     expect(after.intents.ask.spec).toBe("openrouter:openai/gpt-5.2");
@@ -463,7 +463,7 @@ describe("ui server (scripted model)", () => {
       more: { type: "noul", noul: 0.01 },
     },
   });
-  const post = (b: unknown, path = "/api/pill") => fetch(`${base}${path}`, { method: "POST", body: JSON.stringify(b) });
+  const post = (b: unknown, path = "/api/pill") => fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) });
   const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
 
   beforeEach(async () => {
