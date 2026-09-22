@@ -50,6 +50,7 @@ import { findBoards, slateBaseUrl, slateBoardUrl, slateBoards } from "../actions
 import { buildMenubar, installLoginItem, openMenubar, restartMenubar, uninstallMenubar } from "./menubar.js";
 import { formatTurn, readTraces, tracesDir } from "../util/trace.js";
 import { packageApp } from "./package.js";
+import { exitCode, formatReport, gatherChecks } from "./doctor.js";
 import { ask, confirm } from "./prompt.js";
 
 loadDotenv();
@@ -138,6 +139,17 @@ program
     if (!(await confirm(state.history.on ? "Create these files and commit?" : "Create these files?", o.yes))) return console.log("Nothing written.");
     const r = await ensureStores(cfg.selfhubDir);
     console.log(`Initialised${r.commit ? ` (commit ${r.commit})` : ""}. Next: cos capture "starting a project: <name>, it's for <why>"`);
+  });
+
+// ---------- doctor ----------
+
+program
+  .command("doctor")
+  .description("check this machine is ready: Node, install, ~/.cos, keys (names only), memory, scheduler, calendar, browser")
+  .action(async () => {
+    const checks = await gatherChecks(config(), resolve(new URL("../..", import.meta.url).pathname));
+    console.log(formatReport(checks));
+    process.exitCode = exitCode(checks);
   });
 
 // ---------- brief ----------

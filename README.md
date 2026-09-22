@@ -42,12 +42,20 @@ Interface design: [`docs/DESIGN.md`](docs/DESIGN.md).
 
 ## Quick start
 
+Needs Node 22.12 or newer (commander and vitest require it) and macOS for the
+scheduler, calendar and menubar app.
+
 ```bash
 npm install
 cp .env.example .env        # add a key: Anthropic, OpenAI or OpenRouter
+npm run cos -- doctor       # what's ready and what to fix; keys shown by name only
 npm run cos -- init         # scaffold the ledger + journal in ~/selfhub (asks first)
 npm run cos -- brief        # the morning brief
 ```
+
+`cos doctor` checks Node, the install and build, `~/.cos`, model keys, the
+memory repo, the launchd jobs, the calendar reader and the browser. It exits 1
+when something must be fixed; warnings alone exit 0.
 
 Everyday commands:
 
