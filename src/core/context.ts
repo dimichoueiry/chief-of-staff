@@ -13,7 +13,7 @@ import { STOP } from "../util/words.js";
 import { Journal, type JournalEntry } from "./journal.js";
 import { Ledger, findProject, normalizeStatus, type Project } from "./ledger.js";
 import { Notes, type Note } from "./notes.js";
-import { Reminders, type Reminder } from "./reminders.js";
+import { Reminders, reminderWhen, type Reminder } from "./reminders.js";
 
 export type Intent = "brief" | "ask" | "focus" | "capture" | "wrap" | "silence-check";
 
@@ -264,8 +264,8 @@ export function renderContext(ctx: ContextBundle): string {
   }
 
   const rem: string[] = [];
-  if (ctx.remindersDue.length) rem.push("Due now:\n" + ctx.remindersDue.map((r) => `- ${r.date} · ${r.text}`).join("\n"));
-  if (ctx.remindersUpcoming.length) rem.push("Next 7 days:\n" + ctx.remindersUpcoming.map((r) => `- ${r.date} · ${r.text}`).join("\n"));
+  if (ctx.remindersDue.length) rem.push("Due now:\n" + ctx.remindersDue.map((r) => `- ${reminderWhen(r)} · ${r.text}`).join("\n"));
+  if (ctx.remindersUpcoming.length) rem.push("Next 7 days:\n" + ctx.remindersUpcoming.map((r) => `- ${reminderWhen(r)} · ${r.text}`).join("\n"));
   out.push(`# Reminders\n${rem.length ? rem.join("\n") : "None."}`);
 
   out.push(

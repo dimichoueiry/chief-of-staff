@@ -20,7 +20,7 @@ import type { Intent } from "../core/context.js";
 import { Journal } from "../core/journal.js";
 import { Ledger, PROJECT_STATUSES, findProject, type Project, type ProjectPatch } from "../core/ledger.js";
 import { Notes } from "../core/notes.js";
-import { Reminders } from "../core/reminders.js";
+import { Reminders, cleanTime } from "../core/reminders.js";
 import { readAccess, type Access, type AccessMode } from "../actions/access.js";
 import {
   AGENT_ENGINES, AgentGrid, findOrchestrator, findSession, formatModels, formatOrchestrator, formatOrchestrators, formatSessions, formatTranscript, resolveModel,
@@ -93,10 +93,12 @@ export const TOOLS: Record<string, ToolSpec> = {
   },
   add_reminder: {
     name: "add_reminder",
-    description: "Add a one-off reminder for a specific date.",
+    description:
+      "Add a one-off reminder, or anything they said they will do on a date: a post going out Wednesday at 9, a call on Friday, a deadline. " +
+      "Record those even when they didn't say \"remind me\": dated commitments are what the heartbeat gets ready ahead of time. Give the time when there is one.",
     parameters: {
       type: "object",
-      properties: { date: s("YYYY-MM-DD"), text: s("What to remind about") },
+      properties: { date: s("YYYY-MM-DD"), time: s("HH:MM, 24-hour, when it happens at a set time"), text: s("What to remind about") },
       required: ["date", "text"],
     },
   },
@@ -568,6 +570,23 @@ export const TOOLS: Record<string, ToolSpec> = {
       required: ["title", "html"],
     },
   },
+  make_document: {
+    name: "make_document",
+    description:
+      "Write a document and show it in the chat: drafted captions for each platform, a plan, a brief, notes to approve, anything they will read, edit or paste somewhere. " +
+      "Write it in markdown, finished and specific: their project, their dates, their words, one section per part (## headings), no placeholders. " +
+      "Keep the reply beside it short: what is in it and anything they must decide. The document carries the detail; the reply doesn't repeat it. " +
+      "To change it, call this again with the whole document and from set to its id.",
+    parameters: {
+      type: "object",
+      properties: {
+        title: s('A few words naming it, e.g. "Module 2 captions, ready for approval"'),
+        markdown: s("The whole document"),
+        from: s("The id of a document you wrote earlier that this one replaces"),
+      },
+      required: ["title", "markdown"],
+    },
+  },
   get_git_log: {
     name: "get_git_log",
     description: "Recent commits for a project's folder (by its path field or a folder named like the project).",
@@ -582,9 +601,15 @@ export const TOOLS: Record<string, ToolSpec> = {
 const ALL = Object.keys(TOOLS);
 /** Tools that do something outside memory: the conversation record lists what they did. */
 export const ACTIONS = [
-  "open", "run_command", "start_agent", "message_agent", "browser_click", "browser_type", "browser_do", "make_image", "make_page",
+  "open", "run_command", "start_agent", "message_agent", "browser_click", "browser_type", "browser_do", "make_image", "make_page", "make_document",
   "start_orchestrator", "stop_orchestrator", "message_orchestrator", "respond_orchestrator_approval",
 ];
+
+/**
+ * What the heartbeat may use when it works without being asked (Proactive+): reading, and writing
+ * a document or page for them to look at. Nothing that opens, sends, runs, spends or remembers.
+ */
+export const PREPARE_TOOLS = ["get_project", "get_calendar", "get_conversations", "get_git_log", "make_document", "make_page"];
 
 /** Tools that change memory. Everything else only reads or opens. */
 export const WRITES = ["upsert_project", "skip_cadence", "touch_project", "add_reminder", "complete_reminder", "add_note", "append_journal", "add_shortcut"];
@@ -600,7 +625,7 @@ export function toolsFor(intent: Intent): ToolSpec[] {
       "get_project", "upsert_project", "get_git_log", "get_calendar", "open", "get_conversations", "find_folder", "run_command", "get_agents", "start_agent",
       "get_agent_models", "get_agent_output", "confirm_pending", "look_at_screen", "get_work_areas", "get_tickets", "change_ticket",
       "get_orchestrators", "start_orchestrator", "stop_orchestrator", "message_orchestrator", "respond_orchestrator_approval",
-      "make_image", "make_page",
+      "make_image", "make_page", "make_document",
     ],
     wrap: ["get_project", "append_journal", "touch_project", "upsert_project", "get_git_log", "get_conversations"],
   };
@@ -789,8 +814,9 @@ private async pursue(goal: string, rawValues: unknown): Promise<string> {
       case "add_reminder": {
         const date = this.date(input, "date");
         const text = this.str(input, "text", true);
-        await this.reminders.add(date, text);
-        return `Reminder set for ${date}: ${text}`;
+        const time = cleanTime(this.str(input, "time"));
+        await this.reminders.add(date, text, time);
+        return `Reminder set for ${time ? `${date} ${time}` : date}: ${text}`;
       }
       case "complete_reminder": {
         const hit = await this.reminders.complete(this.str(input, "match", true));
@@ -971,6 +997,19 @@ private async pursue(goal: string, rawValues: unknown): Promise<string> {
         this.artifacts.push(ref(artifact));
         this.done.push({ kind: "page", detail: artifact.title });
         return `The page is on their screen: id ${artifact.id}. Say in one line what it is and ask what to change. To change it, call make_page again with the whole page.`;
+      }
+      case "make_document": {
+        const from = this.str(input, "from");
+        const artifact = saveArtifact({
+          kind: "doc",
+          title: this.str(input, "title", true),
+          data: this.str(input, "markdown", true),
+          mediaType: "text/markdown",
+          ...(from && getArtifact(from)?.kind === "doc" ? { from } : {}),
+        });
+        this.artifacts.push(ref(artifact));
+        this.done.push({ kind: "doc", detail: artifact.title });
+        return `The document is in the chat: id ${artifact.id}. Say in a line or two what is in it and anything they must decide; don't repeat what it says. To change it, call make_document again with the whole document and from: "${artifact.id}".`;
       }
       case "find_bookmarks": {
         const query = this.str(input, "query", true);

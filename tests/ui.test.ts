@@ -864,7 +864,7 @@ describe("ui server (scripted model)", () => {
     const r = await (await post({ text: "show me what the post would look like" })).json();
     expect(r.artifacts).toEqual([{ id: expect.any(String), kind: "page", title: "LinkedIn post" }]);
     const page = await fetch(`${base}/artifacts/${r.artifacts[0].id}`);
-    expect(page.headers.get("content-type")).toBe("text/html");
+    expect(page.headers.get("content-type")).toBe("text/html; charset=utf-8");
     // Sandboxed, so a page written from something read on the web can't turn around and call this API.
     expect(page.headers.get("content-security-policy")).toBe("sandbox allow-scripts allow-popups");
     expect(await page.text()).toContain("<h1>Launch week</h1>");

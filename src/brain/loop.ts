@@ -48,6 +48,8 @@ export interface RunOptions {
   context?: ContextBundle;
   /** Replace how things are opened and where Slate boards come from (tests). */
   actions?: ToolRuntime["actions"];
+  /** Only these of the intent's tools (the heartbeat working on its own may only prepare things). */
+  onlyTools?: string[];
 }
 
 export interface RunResult {
@@ -126,7 +128,7 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
     opts.context ??
     (await buildContext({ config, intent, project: opts.project, today: opts.today, calendarProvider: opts.calendarProvider, query: opts.message }));
   const runtime = new ToolRuntime(config, context.today, opts.calendarProvider, opts.actions);
-  const tools = toolsFor(intent);
+  const tools = toolsFor(intent).filter((t) => !opts.onlyTools || opts.onlyTools.includes(t.name));
   const serverTools = serverToolsFor(intent);
   const maxTurns = opts.maxTurns ?? 12;
 

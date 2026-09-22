@@ -11,9 +11,15 @@ import {
   readModelSettings, rememberModel, resolveImageModel, resolveModel, setImageModel, setModel, testModel, type ModelIntent,
 } from "../brain/llm/registry.js";
 import { imageModels, type ImageMaker, type ImageModel } from "../brain/images.js";
-import { MAX_INSTRUCTIONS, PERSONA, instructionsFile, readInstructions, saveInstructions } from "../brain/persona.js";
+import { MAX_INSTRUCTIONS, PERSONA, instructionsFile, persona, readInstructions, saveInstructions } from "../brain/persona.js";
 import { deleteArtifact, getArtifact, listArtifacts, readArtifact, type ArtifactRef } from "../core/artifacts.js";
 import { Conversations, conversationsDir, displayTitle, eventsSinceReply, historyMessages, messageCount, visibleTurns, withEvents, type Conversation, type Turn } from "../brain/conversation.js";
+import {
+  DECISION_SCHEMA, Heartbeat, MODES, MODE_NAMES, acceptMessage, answer as answerOffer, gatherSignals, isMode, logFile, readRules, readState, setMode, workMessage,
+  type Notice, type Offer, type ProactiveMode,
+} from "../logic/heartbeat.js";
+import { extractJson } from "../brain/llm/json.js";
+import { Reminders } from "../core/reminders.js";
 import type { LLMProvider, ChatMessage } from "../brain/llm/types.js";
 import type { ModelSpec } from "../brain/llm/registry.js";
 import { providerFor, runIntent } from "../brain/loop.js";
@@ -21,11 +27,11 @@ import { LiveCommands } from "../brain/live.js";
 import { decideOpen, openTargets } from "../brain/fastlane.js";
 import { jevFromEnv, type Jev } from "../brain/jev.js";
 import { step, traced } from "../util/trace.js";
-import { WRITES } from "../brain/tools.js";
+import { PREPARE_TOOLS, WRITES } from "../brain/tools.js";
 import { findConversation, nameConversations, renderRecall, summarizeEnded } from "../brain/recall.js";
 import type { Brief } from "../brain/schema.js";
 import type { Config } from "../config.js";
-import { buildContext } from "../core/context.js";
+import { buildContext, renderContext } from "../core/context.js";
 import { Journal } from "../core/journal.js";
 import { catchUpHistory, ensureStores, ensureStoresOnFirstRun, memoryState } from "../core/memory.js";
 import { installDeveloperTools, resetGit } from "../core/git.js";
@@ -118,6 +124,12 @@ export interface UiOptions {
    * turns this on. Tests pass a fake Agent Grid and notifier, or leave it out.
    */
   agentWatch?: { notifier?: (title: string, body: string) => Promise<boolean>; retryMs?: number };
+  /**
+   * The heartbeat (logic/heartbeat.ts): look every so often at what's coming up and write first when
+   * there's something worth doing. `cos ui` turns it on. Tests leave it out and call POST /api/heartbeat/tick,
+   * or pass a notifier and a clock.
+   */
+  heartbeat?: { everyMs?: number; firstAfterMs?: number; notifier?: (title: string, body: string) => Promise<boolean>; now?: () => Date };
 }
 
 /** How long a finished action counts as "just done", so the same one isn't queued again. */
@@ -138,6 +150,7 @@ const DOING: Record<string, string> = {
   look_at_screen: "Looking at your screen…",
   make_image: "Drawing it…",
   make_page: "Putting the page together…",
+  make_document: "Writing it up…",
   message_agent: "Messaging the agent…",
   get_orchestrators: "Checking your orchestrators…",
   start_orchestrator: "Starting the orchestrator…",
@@ -547,6 +560,113 @@ export function createUiServer(o: UiOptions): Server {
       });
   }
 
+  // ---------- the heartbeat: it writes first ----------
+  /** Replies being written now: the heartbeat waits for the next tick rather than talk over one. */
+  let replying = 0;
+  /** What the menubar app shows as notifications, numbered so it asks only for new ones. */
+  const notices: (Notice & { seq: number })[] = [];
+  let noticeSeq = 0;
+  /** When the app last asked for them, and whether it can show them (it said so when it asked). */
+  let shellPolled = { at: 0, shows: false };
+
+  async function tellThem(n: Notice): Promise<void> {
+    notices.push({ ...n, seq: ++noticeSeq });
+    if (notices.length > 50) notices.shift();
+    // The app shows it as its own notification when it's running and allowed to; otherwise macOS's generic one.
+    if (Date.now() - shellPolled.at < 90_000 && shellPolled.shows) return;
+    await (o.heartbeat?.notifier ?? notify)(n.title, n.body);
+  }
+
+  /** The heartbeat's offer, as a message in the chat in progress (a new one after a quiet spell). */
+  async function deliverOffer(offer: Offer, mode: ProactiveMode): Promise<{ conversation: string; artifacts?: ArtifactRef[]; text?: string }> {
+    const view = { id: offer.id, title: offer.title, work: offer.work };
+    // Proactive+: do it first, outside the queue so a message they send meanwhile isn't held up; the message is what it did.
+    let done: Awaited<ReturnType<typeof runIntent>> | null = null;
+    if (mode === "plus") {
+      const convo = conversations.current();
+      done = await runIntent({
+        config, intent: "ask", message: workMessage(offer), today: today(), modelFlag: o.modelFlag, llm: o.llm,
+        history: historyMessages(convo),
+        recall: renderRecall(conversations, { today: today(), excludeId: convo.id }),
+        onlyTools: PREPARE_TOOLS,
+        actions: { run: openRunner, slate: boards, conversations, shell: o.shell, agentGrid: o.agentGrid, access: o.access, browser: o.browser, bookmarks, screen, images: o.images },
+      });
+    }
+    const job = pillQueue.then(() => {
+      const convo = conversations.current();
+      if (!convo.turns.length) {
+        convo.autoTitle = offer.title.replace(/\?$/, "");
+        convo.autoTitleMessages = 1;
+      }
+      conversations.append(convo, done
+        ? {
+            role: "assistant", kind: "offer", text: done.text, model: done.model,
+            steps: done.steps.length ? done.steps : undefined,
+            artifacts: done.artifacts.length ? done.artifacts : undefined,
+            offer: { ...view, mode: "done" },
+          }
+        : { role: "assistant", kind: "offer", text: offer.body, offer: { ...view, mode: "offer" } });
+      return { conversation: convo.id, ...(done ? { artifacts: done.artifacts, text: done.text } : {}) };
+    });
+    pillQueue = job.catch(() => undefined);
+    return job;
+  }
+
+  const heartbeat = new Heartbeat({
+    now: o.heartbeat?.now,
+    ready: () => ready("ask"),
+    decide: async (instructions, message) => {
+      const { provider, spec } = o.llm ?? providerFor("ask", o.modelFlag);
+      const ctx = await buildContext({ config, intent: "ask", today: today() });
+      const recall = renderRecall(conversations, { today: today(), days: 3 });
+      const res = await provider.chat({
+        model: spec.model,
+        instructions: `${persona()}\n\n# Task\n${instructions}`,
+        context: `# Memory\n${renderContext(ctx)}${recall ? `\n\n${recall}` : ""}`,
+        messages: [{ role: "user", content: message }],
+        tools: [],
+        json: { name: "heartbeat", schema: DECISION_SCHEMA as unknown as Record<string, unknown> },
+        effort: "low",
+        maxTokens: 4000,
+      });
+      return extractJson(res.text);
+    },
+    signals: async () => {
+      const now = o.heartbeat?.now?.() ?? new Date();
+      const from = todayISO(now);
+      const [reminders, projects, cal] = await Promise.all([
+        new Reminders(config.selfhubDir).list(),
+        new Ledger(config.selfhubDir).read(),
+        eventsInRange(from, addDays(from, 2)).catch(() => ({ events: [] })),
+      ]);
+      return gatherSignals({ reminders, projects, events: cal.events, now });
+    },
+    recall: () => renderRecall(conversations, { today: today(), days: 3 }),
+    rules: () => readRules(config.selfhubDir),
+    deliver: deliverOffer,
+    notify: tellThem,
+    busy: () => replying > 0,
+    log: Log,
+  });
+
+  /** A yes or a no to the heartbeat's offer: tapped (its id comes with the message), or said straight after it. */
+  function offerAnswered(convo: Conversation, tapped: unknown, said: string): { offer: Offer; yes: boolean } | null {
+    let id = typeof tapped === "string" ? tapped : "";
+    let yes = Boolean(id);
+    if (!id) {
+      const last = [...convo.turns].reverse().find((t) => t.role !== "event");
+      if (!last?.offer || last.offer.mode !== "offer" || last.offer.answered) return null;
+      const consent = readConsent(said);
+      if (consent === "unclear") return null;
+      id = last.offer.id;
+      yes = consent === "yes";
+    }
+    const offer = answerOffer(id, yes ? "accepted" : "declined");
+    if (!offer) return null;
+    for (const t of convo.turns) if (t.offer?.id === id) t.offer.answered = yes ? "yes" : "no";
+    return { offer, yes };
+  }
+
   /**
    * A conversation as the page shows it: its turns, its name once something was said, whether there are
    * others to go back to, and whether it's an aside (a side exchange that "back on topic" throws away).
@@ -575,14 +695,18 @@ export function createUiServer(o: UiOptions): Server {
     }
 
     const convo = conversations.current();
-    emit({ type: "start", conversation: convo.id, user: said });
+    // Yes (or not now) to what the heartbeat offered: the yes carries what it promised to do.
+    const answered = mode === "focus" ? null : offerAnswered(convo, b.offer, said);
+    const reply = answered ? { replyTo: answered.offer.title, preface: answered.yes ? acceptMessage(answered.offer) : `(They said not now to your offer "${answered.offer.title}". Don't do it and don't offer it again; answer in a few words.)` } : {};
+    emit({ type: "start", conversation: convo.id, user: said, ...(reply.replyTo ? { replyTo: reply.replyTo } : {}) });
     await syncActivity().catch(() => undefined);
-    return traced(said, mode, () => answer(said, command, mode, focusOn, convo, emit));
+    return traced(said, mode, () => answer(said, command, mode, focusOn, convo, emit, reply));
   }
 
   /** The turn itself, so everything it reaches can note what it did (see util/trace.ts). */
   async function answer(
     said: string, command: string, mode: string, focusOn: string | undefined, convo: Conversation, emit: Emit,
+    offer: { replyTo?: string; preface?: string } = {},
   ): Promise<{ status: number; body: Record<string, unknown> }> {
     let reply: PillReply;
     try {
@@ -590,14 +714,14 @@ export function createUiServer(o: UiOptions): Server {
       const settled = mode === "focus" ? [] : await settlePending(convo, said, emit);
       if (settled.length && !ready("ask")) reply = { kind: "action", text: settled.join("\n"), model: "rules" };
       // Anything that happened since the last reply (this yes, a tapped button) travels with the message.
-      else reply = await respond(command || said, mode, focusOn, convo, emit, withEvents(eventsSinceReply(convo), said), settled);
+      else reply = await respond(command || said, mode, focusOn, convo, emit, withEvents(eventsSinceReply(convo), offer.preface ? `${offer.preface}\n\n${said}` : said), settled);
     } catch (err) {
       reply = { kind: "error", text: `That didn't work: ${String((err as Error).message).split("\n")[0]}` };
     }
     step("reply", reply.text, { kind: reply.kind, ...(reply.model ? { model: reply.model } : {}), ...(reply.confirm?.length ? { waiting: reply.confirm.length } : {}) });
     conversations.append(
       convo,
-      { role: "user", text: said, ...(reply.screen ? { screen: reply.screen } : {}) },
+      { role: "user", text: said, ...(reply.screen ? { screen: reply.screen } : {}), ...(offer.replyTo ? { replyTo: offer.replyTo } : {}) },
       {
         role: "assistant", text: reply.text, model: reply.model, kind: reply.kind,
         steps: reply.steps?.length ? reply.steps : undefined,
@@ -608,7 +732,7 @@ export function createUiServer(o: UiOptions): Server {
     );
     summarizeSoon();
     const { steps: _steps, done: _done, ...shown } = reply;
-    return { status: 200, body: { ...shown, conversation: convo.id, title: convo.asideOf ? "Aside" : displayTitle(convo), user: said } };
+    return { status: 200, body: { ...shown, conversation: convo.id, title: convo.asideOf ? "Aside" : displayTitle(convo), user: said, ...(offer.replyTo ? { replyTo: offer.replyTo } : {}) } };
   }
 
   /**
@@ -1129,7 +1253,8 @@ export function createUiServer(o: UiOptions): Server {
         };
         const stream = b.stream === true;
         // One message at a time, so each reply is saved before the next message reads the conversation.
-        const turn = pillQueue.then(() => pill(b, stream ? line : () => {}));
+        replying++;
+        const turn = pillQueue.then(() => pill(b, stream ? line : () => {})).finally(() => replying--);
         pillQueue = turn.catch(() => undefined);
         try {
           const r = await turn;
@@ -1222,6 +1347,46 @@ export function createUiServer(o: UiOptions): Server {
           return json(res, 422, { error: (err as Error).message });
         }
       }
+      case "GET /api/heartbeat": {
+        const st = readState();
+        return json(res, 200, {
+          mode: st.mode, modes: MODES.map((m) => ({ id: m, name: MODE_NAMES[m] })),
+          last: st.last ?? null, offers: st.offers.slice(-10).reverse(), log: logFile(), rules: `${config.selfhubDir}/goals/heartbeat.md`,
+        });
+      }
+      case "POST /api/heartbeat": {
+        const b = await body(req);
+        if (!isMode(b.mode)) return json(res, 400, { error: `mode must be one of ${MODES.join(", ")}` });
+        const st = setMode(b.mode);
+        Log(`heartbeat → ${st.mode}`);
+        return json(res, 200, { mode: st.mode });
+      }
+      case "POST /api/heartbeat/tick": {
+        // Look now, whatever the clock says (the mode still applies).
+        return json(res, 200, await heartbeat.tick({ force: true }));
+      }
+      case "POST /api/offers/decline": {
+        const b = await body(req);
+        const id = String(b.id ?? "");
+        const offer = answerOffer(id, "declined");
+        if (!offer) return json(res, 410, { error: "That was already answered." });
+        const job = pillQueue.then(() => {
+          const c = conversations.patch(offer.conversation, (c) => {
+            for (const t of c.turns) if (t.offer?.id === id) t.offer.answered = "no";
+          });
+          if (c) conversations.append(c, { role: "event", text: `They tapped Not now on your offer "${offer.title}", so it wasn't done. Don't offer it again.` });
+        });
+        pillQueue = job.catch(() => undefined);
+        await job;
+        return json(res, 200, { ok: true, text: "Not now. I won't bring it up again." });
+      }
+      case "GET /api/notices": {
+        // The menubar app asks every few seconds and shows new ones as its own notifications.
+        shellPolled = { at: Date.now(), shows: url.searchParams.get("shows") !== "0" };
+        const after = Number(url.searchParams.get("after"));
+        if (!url.searchParams.has("after") || !Number.isFinite(after)) return json(res, 200, { seq: noticeSeq, notices: [] });
+        return json(res, 200, { seq: noticeSeq, notices: notices.filter((n) => n.seq > after) });
+      }
       case "POST /api/wrap": {
         const b = await body(req);
         const text = String(b.text ?? "").trim();
@@ -1259,7 +1424,7 @@ export function createUiServer(o: UiOptions): Server {
       return;
     }
     res.writeHead(200, {
-      "content-type": found.artifact.mediaType,
+      "content-type": found.artifact.mediaType.startsWith("text/") ? `${found.artifact.mediaType}; charset=utf-8` : found.artifact.mediaType,
       "content-disposition": `inline; filename="${found.artifact.file}"`,
       "cache-control": "no-store",
       "x-content-type-options": "nosniff",
@@ -1299,6 +1464,13 @@ export function createUiServer(o: UiOptions): Server {
       await json(res, 500, { error: (err as Error).message });
     }
   });
+
+  if (o.heartbeat) {
+    const every = o.heartbeat.everyMs;
+    const first = o.heartbeat.firstAfterMs;
+    server.on("listening", () => heartbeat.start(every, first));
+    server.on("close", () => heartbeat.stop());
+  }
 
   if (o.agentWatch) {
     const w = o.agentWatch;

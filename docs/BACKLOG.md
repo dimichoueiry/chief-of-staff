@@ -242,9 +242,14 @@ Tasks — the product promise
   access denied" outside the app, because macOS grants calendar access to the bundle, not to
   a launchd job. A scheduled CLI brief would report an empty calendar every morning. The
   existing `scheduler/launchd.ts` stays for developer installs.  [M]
+  The heartbeat (logic/heartbeat.ts) is the in-app timer this needs: moving the brief, wrap and
+  silence check onto it is what's left.
 - T7.10 Post notifications from the app (UNUserNotificationCenter) instead of
   `osascript display notification`, which is attributed to Script Editor and can be
   suppressed. Needs a server-to-app channel; the agent-finished path wants the same thing.  [M]
+  Done for the heartbeat: the app polls GET /api/notices and posts its own (Notices.swift), and
+  osascript stays the fallback when the app isn't running or wasn't allowed. Agent-finished
+  still uses osascript.
 - [x] T7.11 An uninstall menu item: quit, remove the login item, offer to delete `~/.cos`, leave
   `~/selfhub` unless they say otherwise, and name the Privacy entries it can't remove.  [S]
 - T7.12 An app icon. Currently the generic one in Finder, the Dock and Notification Centre.  [S]

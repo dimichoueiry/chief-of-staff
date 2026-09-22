@@ -41,8 +41,33 @@ export interface Turn {
   screen?: { app: string; window: string };
   /** assistant: actions this reply carried out itself (with their OK, or allowed on their own). */
   actionsDone?: { kind: string; detail: string }[];
-  /** assistant: pictures and pages this reply made (see core/artifacts.ts). */
+  /** assistant: pictures, pages and documents this reply made (see core/artifacts.ts). */
   artifacts?: ArtifactRef[];
+  /** assistant, kind "offer": the heartbeat wrote first (see logic/heartbeat.ts). */
+  offer?: OfferView;
+  /** user: the offer this message answers, by its title, shown above it like a quoted reply. */
+  replyTo?: string;
+}
+
+/** What an offer turn carries: enough to draw it, and to tell the model what yes means. */
+export interface OfferView {
+  id: string;
+  title: string;
+  /** What it will do on a yes, or (Proactive+) what it already did. */
+  work: string;
+  /** "offer": waits for a yes. "done": it went ahead (Proactive+) and this is the result. */
+  mode: "offer" | "done";
+  /** How they answered an offer, once they did. */
+  answered?: "yes" | "no";
+}
+
+/** How an offer turn reads to the model: it spoke first, and here is what a yes would mean. */
+export function offerLine(t: Turn): string {
+  const o = t.offer;
+  if (!o) return t.text;
+  return o.mode === "done"
+    ? `(You wrote to them first, without being asked, having already done this: ${o.title}. You said: "${t.text}")`
+    : `(You wrote to them first, without being asked: "${o.title}. ${t.text}" If they say yes, this is what you do: ${o.work})`;
 }
 
 export interface Conversation {
@@ -69,14 +94,14 @@ export interface Conversation {
 export function displayTitle(c: Conversation): string {
   if (c.title) return c.title;
   if (c.autoTitle) return c.autoTitle;
-  const first = c.turns.find((t) => t.role === "user")?.text.replace(/\s+/g, " ").trim();
+  const first = (c.turns.find((t) => t.role === "user")?.text ?? c.turns.find((t) => t.offer)?.offer?.title)?.replace(/\s+/g, " ").trim();
   if (!first) return "New chat";
   return first.length > 60 ? `${first.slice(0, 60).trimEnd()}…` : first;
 }
 
-/** Their messages in a conversation. */
+/** Their messages in a conversation, and the heartbeat's: a chat it started is a chat worth listing. */
 export function messageCount(c: Conversation): number {
-  return c.turns.filter((t) => t.role === "user").length;
+  return c.turns.filter((t) => t.role === "user" || t.offer).length;
 }
 
 export interface ConversationSummary {
@@ -528,8 +553,9 @@ export function localStamp(iso: string): { date: string; time: string } {
 /** Events since the last reply (a confirmed link, a command that ran): told to the model with the next message. */
 export function eventsSinceReply(c: Conversation): string[] {
   const out: string[] = [];
-  for (let i = c.turns.length - 1; i >= 0 && c.turns[i].role !== "assistant"; i--) {
-    if (c.turns[i].role === "event") out.unshift(c.turns[i].text);
+  for (let i = c.turns.length - 1; i >= 0 && (c.turns[i].role !== "assistant" || c.turns[i].offer); i--) {
+    if (c.turns[i].offer) out.unshift(offerLine(c.turns[i]));
+    else if (c.turns[i].role === "event") out.unshift(c.turns[i].text);
   }
   return out;
 }
@@ -567,7 +593,10 @@ export function historyMessages(c: Conversation, o: HistoryOptions = {}): ChatMe
   let events: string[] = [];
   let open: ChatMessage[] | null = null;
   for (const t of c.turns) {
-    if (t.role === "event") {
+    if (t.offer) {
+      // It spoke first: that is something that happened before their next message, not a reply to one.
+      events.push(offerLine(t));
+    } else if (t.role === "event") {
       events.push(t.text);
     } else if (t.role === "user") {
       // Events stay pending until a reply lands, so a message that never got one doesn't swallow them.

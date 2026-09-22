@@ -199,86 +199,14 @@ async function stopSpeaking() {
   setState("idle");
 }
 
-// ---------- replies: a little markdown, built as DOM nodes (never innerHTML) ----------
+// ---------- replies: markdown as DOM nodes (markdown.js) ----------
 function openLink(url) {
   if (!/^https?:\/\//i.test(url)) return;
   if (SHELL) toShell({ type: "open", url });
   else window.open(url, "_blank", "noopener");
 }
 
-function inline(text) {
-  const out = [];
-  const re = /\*\*(.+?)\*\*|`([^`]+)`|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^\s<>()]*[^\s<>().,;:!?'"])|(^|[\s(])\*([^*\n]+)\*(?=[\s).,!?:;]|$)/g;
-  let last = 0;
-  let m;
-  const link = (label, url) => el("a", { href: url, onclick: (e) => { e.preventDefault(); openLink(url); } }, label);
-  while ((m = re.exec(text))) {
-    if (m.index > last) out.push(text.slice(last, m.index));
-    if (m[1] !== undefined) out.push(el("strong", {}, ...inline(m[1])));
-    else if (m[2] !== undefined) out.push(el("code", {}, m[2]));
-    else if (m[3] !== undefined) out.push(link(m[3], m[4]));
-    else if (m[5] !== undefined) out.push(link(m[5], m[5]));
-    else out.push(m[6], el("em", {}, m[7]));
-    last = re.lastIndex;
-  }
-  if (last < text.length) out.push(text.slice(last));
-  return out;
-}
-
-function renderMarkdown(text) {
-  const frag = document.createDocumentFragment();
-  const lines = String(text || "").replace(/\r/g, "").split("\n");
-  let list = null;
-  let para = [];
-  const flush = () => {
-    if (!para.length) return;
-    const p = el("p");
-    para.forEach((l, i) => (i ? p.append(el("br"), ...inline(l)) : p.append(...inline(l))));
-    frag.append(p);
-    para = [];
-  };
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (/^\s*```/.test(line)) {
-      flush();
-      list = null;
-      const code = [];
-      while (++i < lines.length && !/^\s*```/.test(lines[i])) code.push(lines[i]);
-      frag.append(el("pre", {}, code.join("\n")));
-      continue;
-    }
-    const bullet = /^\s*[-*•]\s+(.*)$/.exec(line);
-    const num = /^\s*(\d+)[.)]\s+(.*)$/.exec(line);
-    if (bullet || num) {
-      flush();
-      const tag = bullet ? "UL" : "OL";
-      if (!list || list.tagName !== tag) {
-        list = el(tag.toLowerCase());
-        if (num && num[1] !== "1") list.setAttribute("start", num[1]);
-        frag.append(list);
-      }
-      list.append(el("li", {}, ...inline(bullet ? bullet[1] : num[2])));
-      continue;
-    }
-    if (!line.trim()) {
-      flush();
-      list = null;
-      continue;
-    }
-    if (list && /^\s{2,}\S/.test(line)) {
-      list.lastElementChild.append(el("br"), ...inline(line.trim()));
-      continue;
-    }
-    list = null;
-    const heading = /^\s*#{1,6}\s+(.*)$/.exec(line);
-    if (heading) {
-      flush();
-      frag.append(el("p", {}, el("strong", {}, ...inline(heading[1]))));
-    } else para.push(line);
-  }
-  flush();
-  return frag;
-}
+const renderMarkdown = (text, rich = false) => cosMarkdown.render(text, { openLink, rich });
 
 // ---------- the conversation ----------
 const thread = $("thread");
@@ -409,12 +337,56 @@ function fillTurn(node, turn) {
   if (turn.artifacts && turn.artifacts.length) node.append(artifactCards(turn.artifacts));
 }
 
+/**
+ * The heartbeat wrote first: its question and what it would do, with Yes / Not now. In Proactive+
+ * it already did it, and this is the result with what it made. Yes is sent like any message, so
+ * the work streams in as a reply; Not now is recorded and it never offers that again.
+ */
+function offerTurn(turn) {
+  const o = turn.offer;
+  const main = el("div", { class: "offer-main" },
+    el("div", { class: "offer-title" }, o.title),
+    el("div", { class: "body" }, renderMarkdown(turn.text)));
+  const node = el("div", { class: "turn offer" }, el("span", { class: "spark", "aria-hidden": "true" }, "✦"), main);
+  if (turn.artifacts && turn.artifacts.length) main.append(artifactCards(turn.artifacts));
+  if (o.mode !== "offer") return node;
+  const said = (text) => main.append(el("div", { class: "offer-said" }, text));
+  if (o.answered) {
+    said(o.answered === "yes" ? "You said yes." : "Not now.");
+    return node;
+  }
+  const box = el("div", { class: "answer-actions" });
+  const yes = async () => {
+    for (const b of box.querySelectorAll("button")) b.disabled = true;
+    box.remove();
+    said("You said yes.");
+    if (chatHidden) setChatHidden(false);
+    await send({ text: "Yes, do it.", offer: o.id }, "On it…");
+  };
+  const no = async () => {
+    for (const b of box.querySelectorAll("button")) b.disabled = true;
+    const r = await post("/api/offers/decline", { id: o.id });
+    box.remove();
+    said(r.text || r.error || "Not now.");
+    scrollThread();
+  };
+  box.append(
+    el("button", { class: "chip chip-keep", onclick: yes }, "Yes, do it"),
+    el("button", { class: "chip", onclick: no }, "Not now"),
+  );
+  main.append(box);
+  return node;
+}
+
 function addTurn(turn) {
   let node;
   if (turn.role === "user") {
-    node = el("div", { class: "turn user" }, turn.text);
+    node = el("div", { class: "turn user" });
+    if (turn.replyTo) node.append(el("span", { class: "replied" }, `↩ ${turn.replyTo}`));
+    node.append(turn.text);
     if (turn.screen) markLooked(node, turn.screen);
   }
+  else if (turn.offer) node = offerTurn(turn);
   else if (turn.role === "event") node = el("div", { class: "turn event" }, turn.text);
   else {
     node = el("div", { class: "turn assistant" });
@@ -735,15 +707,15 @@ async function send(body, thinking, fromVoice = false) {
   setState("thinking", thinking);
   let pending = null;
   let live = "";
-  const begin = (conversation, user) => {
+  const begin = (conversation, user, replyTo) => {
     if (conversation && conversation !== conversationId) renderThread({ id: conversation, turns: [] });
-    if (user) addTurn({ role: "user", text: user });
+    if (user) addTurn({ role: "user", text: user, replyTo });
     pending = addTurn({ role: "assistant", text: "", pending: true });
   };
   let r;
   try {
     r = await postStream("/api/pill", body, (ev) => {
-      if (ev.type === "start") begin(ev.conversation, ev.user);
+      if (ev.type === "start") begin(ev.conversation, ev.user, ev.replyTo);
       else if (ev.type === "status") {
         live = "";
         status.textContent = ev.text;
@@ -758,7 +730,7 @@ async function send(body, thinking, fromVoice = false) {
     r = { kind: "error", text: String(err) };
   }
   if (r.error && !r.text) r = { kind: "error", text: r.error };
-  if (!pending) begin(r.conversation, r.user);
+  if (!pending) begin(r.conversation, r.user, r.replyTo);
   fillTurn(pending, r);
   if (r.screen) {
     const users = thread.querySelectorAll(".turn.user");
@@ -997,6 +969,13 @@ window.cosShell = {
   },
   focus() {
     input.focus();
+    syncConversation();
+  },
+  /** A notification was clicked: the chat it's about is now the current one, so show it. */
+  openChat() {
+    if (listOpen) closeChats();
+    setView("pill");
+    setChatHidden(false);
     syncConversation();
   },
   setMode(view) {

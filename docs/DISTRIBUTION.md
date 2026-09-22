@@ -101,9 +101,9 @@ Limits of the current build:
   from an Intel Mac, or a universal one (see below).
 - **macOS 14 or newer.** The screen helper uses macOS 14 APIs, so that is the real floor; the
   packager checks every binary with `vtool` and refuses to sign a bundle that wants more.
-- **It does not speak first yet.** Opening at login works (✦ › Open at login), but the morning
-  brief still has to be asked for. See E7.9 in the backlog: a scheduled job outside the app
-  cannot read the calendar, so the timing has to live inside the app.
+- **The morning brief is still asked for.** The app writes first through the heartbeat (offers in
+  the chat, as notifications), which runs inside the app for the calendar's sake. The brief, the
+  wrap nudge and the silence check are not on it yet (E7.9).
 - **Memory history needs git.** The memory itself is written either way; the commit history is
   what waits for Apple's developer tools. ✦ › Memory says so and offers to install them.
 - **Its own browser needs Chrome or Edge** installed; the browser feature is off without one.
