@@ -1,9 +1,9 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Access } from "../src/actions/access.js";
+import { readAccess, saveAccess, type Access } from "../src/actions/access.js";
 import { AssistantBrowser, findElement, findElements, type BrowserDriver } from "../src/actions/browser.js";
 import { confirmView } from "../src/actions/pending.js";
 import { saveArtifact } from "../src/core/artifacts.js";
@@ -655,7 +655,7 @@ describe("answering a file chooser", () => {
     const browser = new AssistantBrowser(chooserOpen().driver, join(home, "browser.json"), { stepMs: 0, maxMs: 0 });
     browser.allow("https://www.facebook.com/");
     const out = await runtime(browser).execute("browser_read", {});
-    expect(out.result).toMatch(/A file chooser is open .* Use browser_upload with the picture's id, or with nothing to close it\./);
+    expect(out.result).toMatch(/A file chooser is open .* Use browser_upload with the file, or with nothing to close it\./);
   });
 });
 
@@ -736,5 +736,118 @@ describe("getting a stuck page moving again", () => {
     expect(bad.result).toMatch(/"index" is required/);
     await tools.execute("browser_tabs", { action: "select", index: 2 });
     expect(fake.calls.some((c) => c.tool === "browser_tabs" && c.args.action === "select" && c.args.index === 2)).toBe(true);
+  });
+});
+
+describe("more than one file chooser waiting", () => {
+  let home: string;
+  beforeEach(async () => { home = await mkdtemp(join(tmpdir(), "cos-many-")); process.env.COS_HOME = home; });
+  afterEach(async () => { delete process.env.COS_HOME; await rm(home, { recursive: true, force: true }); });
+
+  /** Three choosers queued, as when a button was clicked twice and once more by hand in the window. */
+  function stacked(n = 3) {
+    let open = n;
+    const answers: unknown[] = [];
+    const driver: BrowserDriver = {
+      async call(tool, args) {
+        if (tool === "browser_file_upload") {
+          if (!open) throw new Error('The tool "browser_file_upload" can only be used when there is related modal state present.');
+          open--;
+          answers.push(args.paths ?? null);
+          return "";
+        }
+        if (open) throw new Error('Tool "browser_snapshot" does not handle the modal state.');
+        if (tool === "browser_snapshot") return "### Page\n- Page URL: https://x.test/\n- Page Title: X\n### Snapshot\n```yaml\n- button \"Next\" [ref=e1]\n```";
+        return "";
+      },
+      async close() {},
+    };
+    return { driver, answers, left: () => open };
+  }
+
+  it("answers the first and closes the rest, so the page can be read again", async () => {
+    const fake = stacked(3);
+    const browser = new AssistantBrowser(fake.driver, join(home, "b.json"), { stepMs: 0, maxMs: 0 });
+    browser.allow("https://x.test/");
+    const file = join(home, "clip.mp4");
+    await writeFile(file, "video");
+    const page = await browser.upload([file]);
+    expect(fake.left()).toBe(0);
+    expect(fake.answers).toHaveLength(3);
+    expect(fake.answers[0]).toEqual([join(home, "browser", "output", "clip.mp4")]);
+    expect(fake.answers.slice(1)).toEqual([null, null]);
+    expect(page).toMatch(/button "Next"/);
+  });
+
+  it("closing with nothing clears every chooser waiting", async () => {
+    const fake = stacked(2);
+    const browser = new AssistantBrowser(fake.driver, join(home, "b.json"), { stepMs: 0, maxMs: 0 });
+    await browser.upload([]);
+    expect(fake.left()).toBe(0);
+  });
+
+  it("says plainly when there is no chooser to answer", async () => {
+    const fake = stacked(0);
+    const browser = new AssistantBrowser(fake.driver, join(home, "b.json"), { stepMs: 0, maxMs: 0 });
+    await expect(browser.upload([])).rejects.toThrow(/No file chooser is open\. Click the page's upload/);
+  });
+});
+
+describe("a page loop that runs into a file chooser", () => {
+  let dir: string;
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "cos-hit-")); });
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  it("hands back what it did and why it stopped, instead of an error that loses both", async () => {
+    let clicked = false;
+    const driver: BrowserDriver = {
+      async call(tool) {
+        if (clicked) throw new Error('Tool "browser_snapshot" does not handle the modal state.');
+        if (tool === "browser_click") { clicked = true; return ""; }
+        if (tool === "browser_snapshot") return "### Page\n- Page URL: https://x.test/\n- Page Title: X\n### Snapshot\n```yaml\n- button \"Select file\" [ref=e1]\n```";
+        if (tool === "browser_evaluate") return "### Result\nfalse";
+        return "";
+      },
+      async close() {},
+    };
+    const browser = new AssistantBrowser(driver, join(dir, "b.json"), { stepMs: 0, maxMs: 0 });
+    browser.allow("https://x.test/");
+    const out = await runGoal(fakeJev({ want: /Select file/ }), browser, { goal: "go to the next step" });
+    expect(out.kind).toBe("handover");
+    expect(out.steps).toEqual(['clicked button "Select file"']);
+    expect((out as { why: string }).why).toMatch(/A file chooser is open/);
+  });
+});
+
+describe("asking by voice", () => {
+  let selfhub: string;
+  let cleanup: () => Promise<void>;
+  let home: string;
+  beforeEach(async () => {
+    ({ dir: selfhub, cleanup } = await makeTmpSelfhub());
+    home = await mkdtemp(join(tmpdir(), "cos-ask-"));
+    process.env.COS_HOME = home;
+  });
+  afterEach(async () => { delete process.env.COS_HOME; await cleanup(); await rm(home, { recursive: true, force: true }); });
+
+  const tools = () => new ToolRuntime(loadConfig({ COS_SELFHUB: selfhub, COS_PROJECT_ROOTS: "/nonexistent" }), "2026-09-15", undefined, {});
+
+  it("never stops asking on its own say-so: turning it off waits for their tap", async () => {
+    const t = tools();
+    const out = await t.execute("set_asking", { ask: false, what: ["browser"] });
+    expect(out.result).toMatch(/Not changed yet: turning asking off needs their OK once/);
+    expect(readAccess().browser).toBe("ask");
+    const [p] = t.pending;
+    expect(p).toMatchObject({ kind: "access", verb: "Stop Asking" });
+    const done = await performPending(p, {});
+    expect(done.text).toMatch(/no longer asks first for browser/);
+    expect(readAccess().browser).toBe("auto");
+  });
+
+  it("starts asking again at once, since that only ever makes it safer", async () => {
+    saveAccess({ browser: "auto", terminal: "auto" });
+    const out = await tools().execute("set_asking", { ask: true });
+    expect(out.result).toMatch(/asks first again for browser, terminal, agents, links/);
+    expect(readAccess()).toMatchObject({ browser: "ask", terminal: "ask", agents: "ask", links: "ask" });
   });
 });

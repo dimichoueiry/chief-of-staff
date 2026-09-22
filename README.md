@@ -386,6 +386,12 @@ It can scroll what's shown, too: "scroll down", "go to the chorus", or "scroll s
 - **When a page stops answering** something is in front of it: it answers the browser's own "Are you
   sure?" box, presses Escape on an overlay with no close, and looks in the other windows for what a
   click opened somewhere else. Enter waits for your OK, because Enter sends.
+- **Uploading a file yourself in its window doesn't work.** Playwright holds back every file chooser
+  in the window it drives, so the Mac's picker never opens. Tell it instead: "attach
+  ~/Downloads/clip.mp4". A chooser you opened by hand is closed the next time it uploads.
+- **Asking first** is set per kind on the Activity page (Approvals → Asking first): Off, Ask or
+  Don't Ask, for its browser, commands, agents and web pages. "Stop asking me" works by voice and
+  needs one tap; "ask me again" applies at once.
 - The window closes after 30 quiet minutes and opens again when needed. Sign-ins stay.
 - Chrome is used if installed, otherwise Edge (`COS_BROWSER=msedge` to choose).
 
