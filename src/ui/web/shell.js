@@ -105,13 +105,71 @@
     return out;
   }
 
+  // ---------- hiding what's on the left, so what you're reading sits in front of you ----------
+  const SIDEBAR_KEY = "cos.sidebarHidden";
+  const stored = () => {
+    try {
+      return localStorage.getItem(SIDEBAR_KEY) === "1";
+    } catch {
+      return false;
+    }
+  };
+
+  function sidebarButton() {
+    const NS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    for (const d of ["M3.5 5.5h17v13h-17z", "M9.5 5.5v13", "M5.5 8.5h2M5.5 11h2"]) {
+      const path = document.createElementNS(NS, "path");
+      path.setAttribute("d", d);
+      svg.append(path);
+    }
+    const b = el("button", { class: "sidebar-toggle", type: "button" }, svg);
+    b.addEventListener("click", () => setSidebar(!document.querySelector(".window").classList.contains("collapsed")));
+    return b;
+  }
+
+  /** Show or hide the sidebar (and, on Chat, the list of chats with it). Remembered across pages. */
+  function setSidebar(hidden, remember = true) {
+    const w = document.querySelector(".window");
+    if (!w) return;
+    w.classList.toggle("collapsed", hidden);
+    for (const b of document.querySelectorAll(".sidebar-toggle")) {
+      b.title = hidden ? "Show Sidebar (⌘\\)" : "Hide Sidebar (⌘\\)";
+      b.setAttribute("aria-label", hidden ? "Show sidebar" : "Hide sidebar");
+      b.setAttribute("aria-expanded", String(!hidden));
+    }
+    if (remember) {
+      try {
+        localStorage.setItem(SIDEBAR_KEY, hidden ? "1" : "0");
+      } catch {
+        /* fine */
+      }
+    }
+  }
+
   // Put the page's own content inside the window, next to the sidebar.
   const win = document.querySelector(".window");
   if (win) {
     win.prepend(sidebar(win.dataset.page));
-    const content = win.querySelector(".content");
-    content?.addEventListener("scroll", () => content.classList.toggle("scrolled", content.scrollTop > 8), { passive: true });
+    // The button sits where the eye starts: first in each toolbar, or in the chat's header.
+    for (const bar of win.querySelectorAll(".toolbar, .thread-head")) bar.prepend(sidebarButton());
+    // Set before the first paint, without the slide, so a hidden sidebar doesn't flash open.
+    win.classList.add("no-anim");
+    setSidebar(stored(), false);
+    requestAnimationFrame(() => requestAnimationFrame(() => win.classList.remove("no-anim")));
+    for (const content of win.querySelectorAll(".content")) {
+      content.addEventListener("scroll", () => content.classList.toggle("scrolled", content.scrollTop > 8), { passive: true });
+    }
+    // ⌘\ as in Mail and Notes, and ⌃⌘S, the Mac's own "Show/Hide Sidebar".
+    document.addEventListener("keydown", (e) => {
+      const toggle = (e.metaKey && e.key === "\\") || (e.metaKey && e.ctrlKey && e.key.toLowerCase() === "s");
+      if (!toggle) return;
+      e.preventDefault();
+      setSidebar(!win.classList.contains("collapsed"));
+    });
   }
 
-  window.cosPage = { glyph, toast, item, group, setCurrent };
+  window.cosPage = { glyph, toast, item, group, setCurrent, setSidebar };
 })();

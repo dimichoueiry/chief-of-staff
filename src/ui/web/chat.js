@@ -60,6 +60,7 @@ async function newChat() {
   $("input").focus();
 }
 $("new-chat").addEventListener("click", newChat);
+$("head-new").addEventListener("click", newChat);
 
 // ---------- the thread ----------
 const inner = () => $("thread-inner");
