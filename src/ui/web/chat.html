@@ -20,8 +20,13 @@
 
     <main class="thread-pane">
       <header class="thread-head">
-        <div class="thread-title" id="thread-title">New chat</div>
-        <div class="thread-sub" id="thread-sub"></div>
+        <div class="thread-name">
+          <div class="thread-title" id="thread-title">New chat</div>
+          <div class="thread-sub" id="thread-sub"></div>
+        </div>
+        <button class="sidebar-toggle head-new" id="head-new" type="button" title="New chat (⌘N)" aria-label="New chat">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+        </button>
       </header>
       <div class="thread" id="thread" aria-live="polite">
         <div class="thread-inner" id="thread-inner"></div>

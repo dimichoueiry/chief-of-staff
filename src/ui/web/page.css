@@ -344,7 +344,7 @@ details.disclosure pre { margin-top: 10px; max-height: 360px; overflow: auto; wh
 .chat-empty { padding: 20px 10px; color: var(--label-2); font-size: 13px; text-align: center; }
 
 .thread-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--window); }
-.thread-head { flex: none; padding: 14px 24px 12px; text-align: center; border-bottom: 0.5px solid var(--sep);
+.thread-head { flex: none; display: grid; grid-template-columns: 32px 1fr 32px; align-items: center; gap: 8px; padding: 10px 14px; text-align: center; border-bottom: 0.5px solid var(--sep);
   background: color-mix(in srgb, var(--window) 80%, transparent); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); }
 .thread-title { font: 600 14px var(--font-display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .thread-sub { font-size: 11.5px; color: var(--label-2); min-height: 0; }
@@ -426,3 +426,33 @@ ul.tasks { list-style: none; padding-left: 2px !important; }
 li.task { display: flex; gap: 8px; align-items: baseline; }
 li.task .box { flex: none; width: 1em; height: 1em; border: 1.5px solid currentColor; border-radius: 4px; opacity: 0.55; display: inline-grid; place-items: center; font-size: 0.8em; transform: translateY(0.12em); }
 li.task.done { opacity: 0.6; text-decoration: line-through; }
+
+/* ---------- the sidebar button: hide what's on the left, so the page sits in front of you ---------- */
+.sidebar-toggle {
+  flex: none; width: 32px; height: 28px; border: 0; border-radius: 7px; background: none; color: var(--label-2);
+  display: grid; place-items: center; cursor: default;
+}
+.sidebar-toggle:hover { background: var(--fill); color: var(--label); }
+.sidebar-toggle:focus-visible { outline: 3px solid color-mix(in srgb, var(--blue) 50%, transparent); }
+.sidebar-toggle svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.toolbar .sidebar-toggle { margin-left: -12px; }
+.thread-name { min-width: 0; }
+/* New Chat in the header only while the list (and its + button) is hidden. */
+.head-new { visibility: hidden; }
+.window.collapsed .head-new { visibility: visible; }
+
+.window { transition: grid-template-columns 0.28s cubic-bezier(0.32, 0.72, 0, 1); }
+.window.no-anim, .window.no-anim * { transition: none !important; }
+.sidebar, .chats-pane { min-width: 0; overflow: hidden; transition: opacity 0.2s; }
+.window.collapsed { grid-template-columns: 0 1fr; }
+.chat-window.collapsed { grid-template-columns: 0 0 1fr; }
+.window.collapsed .sidebar, .window.collapsed .chats-pane { opacity: 0; pointer-events: none; border-right-width: 0; }
+.window.collapsed .sidebar, .window.collapsed .chats-pane { visibility: hidden; transition: opacity 0.15s, visibility 0s 0.28s; }
+/* With nothing on the left, the conversation reads at a comfortable width, centred. */
+.window.collapsed .thread-inner, .window.collapsed .composer-box, .window.collapsed .composer-hint { max-width: 720px; }
+
+@media (max-width: 980px) { .chat-window.collapsed { grid-template-columns: 0 1fr; } }
+@media (max-width: 760px) {
+  .window.collapsed { grid-template-rows: 0 1fr; }
+  .window.collapsed .content, .window.collapsed .thread-pane { height: 100vh; }
+}
