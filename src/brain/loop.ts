@@ -69,6 +69,10 @@ export interface RunResult {
   done: { kind: string; detail: string }[];
   /** Pictures and pages made in this run, to show with the reply. */
   artifacts: ArtifactRef[];
+  /** Answers offered as buttons under the reply (offer_choices). */
+  choices: string[];
+  /** What they OK'd in words during this run (see confirm_pending). */
+  confirmed: string[];
   /** The tool calls and results of this run, without provider-specific data, for the conversation record. */
   steps: ChatMessage[];
 }
@@ -229,6 +233,8 @@ export async function runIntent(opts: RunOptions): Promise<RunResult> {
     webSearches,
     done: runtime.done,
     artifacts: runtime.artifacts,
+    choices: runtime.choices,
+    confirmed: runtime.confirmed,
     steps: messages
       .slice(firstNew)
       .flatMap((m): ChatMessage[] => {

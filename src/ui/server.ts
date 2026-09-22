@@ -20,6 +20,7 @@ import {
 } from "../logic/heartbeat.js";
 import { extractJson } from "../brain/llm/json.js";
 import { Reminders } from "../core/reminders.js";
+import { listApprovals, recordApproval } from "../core/approvals.js";
 import type { LLMProvider, ChatMessage } from "../brain/llm/types.js";
 import type { ModelSpec } from "../brain/llm/registry.js";
 import { providerFor, runIntent } from "../brain/loop.js";
@@ -36,6 +37,7 @@ import { Journal } from "../core/journal.js";
 import { catchUpHistory, ensureStores, ensureStoresOnFirstRun, memoryState } from "../core/memory.js";
 import { installDeveloperTools, resetGit } from "../core/git.js";
 import { Ledger, normalizeStatus } from "../core/ledger.js";
+import { describeCadence } from "../logic/cadence.js";
 import { buildBrief } from "../logic/brief.js";
 import { daysIdle } from "../logic/cadence.js";
 import { decide, isChoice } from "../logic/decide.js";
@@ -132,6 +134,9 @@ export interface UiOptions {
   heartbeat?: { everyMs?: number; firstAfterMs?: number; notifier?: (title: string, body: string) => Promise<boolean>; now?: () => Date };
 }
 
+/** Things it makes to show you: not actions anyone needs to have allowed. */
+const MADE = new Set(["image", "page", "doc"]);
+
 /** How long a finished action counts as "just done", so the same one isn't queued again. */
 const RECENT_MS = 15 * 60_000;
 
@@ -151,6 +156,7 @@ const DOING: Record<string, string> = {
   make_image: "Drawing it…",
   make_page: "Putting the page together…",
   make_document: "Writing it up…",
+  offer_choices: "Writing it up…",
   message_agent: "Messaging the agent…",
   get_orchestrators: "Checking your orchestrators…",
   start_orchestrator: "Starting the orchestrator…",
@@ -187,6 +193,10 @@ interface PillReply {
   screen?: { app: string; window: string };
   /** Pictures and pages this reply made, shown under it. */
   artifacts?: ArtifactRef[];
+  /** Answers offered as buttons under it. */
+  choices?: string[];
+  /** What they OK'd in words while it was written, so it isn't counted as done on its own. */
+  confirmed?: string[];
 }
 
 /** The model can't take images: say which setting fixes it rather than a raw provider error. */
@@ -603,9 +613,11 @@ export function createUiServer(o: UiOptions): Server {
             role: "assistant", kind: "offer", text: done.text, model: done.model,
             steps: done.steps.length ? done.steps : undefined,
             artifacts: done.artifacts.length ? done.artifacts : undefined,
+            choices: done.choices.length ? done.choices : undefined,
             offer: { ...view, mode: "done" },
           }
         : { role: "assistant", kind: "offer", text: offer.body, offer: { ...view, mode: "offer" } });
+      if (done) recordApproval({ kind: "offer", label: offer.title, detail: done.text, outcome: "done", how: "auto" });
       return { conversation: convo.id, ...(done ? { artifacts: done.artifacts, text: done.text } : {}) };
     });
     pillQueue = job.catch(() => undefined);
@@ -663,6 +675,7 @@ export function createUiServer(o: UiOptions): Server {
     }
     const offer = answerOffer(id, yes ? "accepted" : "declined");
     if (!offer) return null;
+    recordApproval({ kind: "offer", label: offer.title, outcome: yes ? "allowed" : "declined", how: typeof tapped === "string" ? "tapped" : "said" });
     for (const t of convo.turns) if (t.offer?.id === id) t.offer.answered = yes ? "yes" : "no";
     return { offer, yes };
   }
@@ -728,10 +741,16 @@ export function createUiServer(o: UiOptions): Server {
         confirm: reply.confirm?.length ? reply.confirm : undefined,
         actionsDone: reply.done?.length ? reply.done : undefined,
         artifacts: reply.artifacts?.length ? reply.artifacts : undefined,
+        choices: reply.choices?.length ? reply.choices : undefined,
       },
     );
+    // What it did without a button (their settings allow it), for the activity page. What they OK'd in words is already there.
+    for (const d of reply.done ?? []) {
+      if (MADE.has(d.kind) || reply.confirmed?.includes(d.detail)) continue;
+      recordApproval({ kind: d.kind, label: d.detail, outcome: "auto", how: "auto" });
+    }
     summarizeSoon();
-    const { steps: _steps, done: _done, ...shown } = reply;
+    const { steps: _steps, done: _done, confirmed: _confirmed, ...shown } = reply;
     return { status: 200, body: { ...shown, conversation: convo.id, title: convo.asideOf ? "Aside" : displayTitle(convo), user: said, ...(offer.replyTo ? { replyTo: offer.replyTo } : {}) } };
   }
 
@@ -798,6 +817,7 @@ export function createUiServer(o: UiOptions): Server {
       const p = take(c.id);
       if (!p) continue;
       if (consent === "no") {
+        recordApproval({ kind: p.kind, label: p.label, detail: p.detail, outcome: "declined", how: "said" });
         step("confirmed", `they said no, so this was dropped: ${p.detail}`, { kind: p.kind });
         turns.push({ role: "event", text: `They said no, so this was not done: ${p.label}.` });
         continue;
@@ -816,6 +836,7 @@ export function createUiServer(o: UiOptions): Server {
       });
       try {
         const out = await performPending(p, deps);
+        recordApproval({ kind: p.kind, label: p.label, detail: p.detail, outcome: "allowed", how: "said" });
         step("confirmed", `they said yes, so: ${p.detail}`, { kind: p.kind, finished: out.finished });
         step("result", out.text.split("\n")[0] ?? "");
         // Only what actually finished is recorded as done: what merely started must stay repeatable.
@@ -823,6 +844,7 @@ export function createUiServer(o: UiOptions): Server {
           ? { role: "event", text: `They said yes and it is already done (do not do it again): ${p.label}. Result: ${outcome(out.text)}`, done: { kind: p.kind, detail: p.detail } }
           : { role: "event", text: `They said yes, and it has been started but is not finished: ${p.label}. Result: ${outcome(out.text)}` });
       } catch (err) {
+        recordApproval({ kind: p.kind, label: p.label, detail: p.detail, outcome: "failed", how: "said" });
         step("confirmed", `they said yes, but it failed: ${p.detail}`, { kind: p.kind, failed: true });
         turns.push({ role: "event", text: `They said yes, but ${p.label} failed: ${(err as Error).message}` });
       }
@@ -871,6 +893,8 @@ export function createUiServer(o: UiOptions): Server {
     const fromModel = (kind: PillReply["kind"], r: Awaited<ReturnType<typeof runIntent>>, extra: Partial<PillReply> = {}): PillReply => ({
       kind, text: r.text, model: r.model, changes: changes(r.toolCalls), confirm: r.pending.map(confirmView), done: r.done, steps: r.steps,
       ...(r.artifacts.length ? { artifacts: r.artifacts } : {}),
+      ...(r.choices.length ? { choices: r.choices } : {}),
+      ...(r.confirmed.length ? { confirmed: r.confirmed } : {}),
       ...(seen ? { screen: seen } : {}), ...extra,
     });
 
@@ -1333,16 +1357,19 @@ export function createUiServer(o: UiOptions): Server {
         const p = take(String(b.id ?? ""));
         if (!p) return json(res, 410, { error: "That request expired. Ask again." });
         if (b.cancel === true) {
+          recordApproval({ kind: p.kind, label: p.label, detail: p.detail, outcome: "declined", how: "tapped" });
           conversations.append(conversations.current(), { role: "event", text: `They tapped Cancel, so this was not done: ${p.label}.` });
           return json(res, 200, { ok: true, text: "Cancelled." });
         }
         try {
           const { text, finished } = await performPending(p, deps);
+          recordApproval({ kind: p.kind, label: p.label, detail: p.detail, outcome: "allowed", how: "tapped" });
           conversations.append(conversations.current(), finished
             ? { role: "event", text: `They tapped ${p.verb} and it is already done (do not do it again): ${p.label}. Result: ${outcome(text)}`, done: { kind: p.kind, detail: p.detail } }
             : { role: "event", text: `They tapped ${p.verb}, and it has been started but is not finished: ${p.label}. Result: ${outcome(text)}` });
           return json(res, 200, { ok: true, text });
         } catch (err) {
+          recordApproval({ kind: p.kind, label: p.label, detail: p.detail, outcome: "failed", how: "tapped" });
           conversations.append(conversations.current(), { role: "event", text: `They confirmed, but ${p.label} failed: ${(err as Error).message}` });
           return json(res, 422, { error: (err as Error).message });
         }
@@ -1370,6 +1397,7 @@ export function createUiServer(o: UiOptions): Server {
         const id = String(b.id ?? "");
         const offer = answerOffer(id, "declined");
         if (!offer) return json(res, 410, { error: "That was already answered." });
+        recordApproval({ kind: "offer", label: offer.title, outcome: "declined", how: "tapped" });
         const job = pillQueue.then(() => {
           const c = conversations.patch(offer.conversation, (c) => {
             for (const t of c.turns) if (t.offer?.id === id) t.offer.answered = "no";
@@ -1379,6 +1407,31 @@ export function createUiServer(o: UiOptions): Server {
         pillQueue = job.catch(() => undefined);
         await job;
         return json(res, 200, { ok: true, text: "Not now. I won't bring it up again." });
+      }
+      case "GET /api/activity": {
+        // What it's running for you and what you've allowed: the activity page.
+        const st = readState();
+        const [reminders, projects] = await Promise.all([new Reminders(config.selfhubDir).list(), new Ledger(config.selfhubDir).read()]);
+        return json(res, 200, {
+          today: today(),
+          heartbeat: {
+            mode: st.mode, modes: MODES.map((m) => ({ id: m, name: MODE_NAMES[m] })), schedule: heartbeat.schedule(), last: st.last ?? null,
+            offers: st.offers.slice(-10).reverse().map(({ work: _work, ...x }) => x),
+          },
+          reminders: reminders.filter((r) => !r.done),
+          rhythm: projects
+            .filter((p) => normalizeStatus(p.status) === "active" && describeCadence(p))
+            .map((p) => ({ name: p.name, cadence: describeCadence(p), next: p.next ?? "", idle: daysIdle(p, today()) })),
+          approvals: listApprovals(80),
+        });
+      }
+      case "POST /api/reminders/done": {
+        const b = await body(req);
+        const text = String(b.text ?? "").trim();
+        if (!text) return json(res, 400, { error: "empty" });
+        const hit = await new Reminders(config.selfhubDir).complete(text);
+        if (!hit) return json(res, 404, { error: "That reminder isn't open anymore." });
+        return json(res, 200, { ok: true, text: `Done: ${hit.text}` });
       }
       case "GET /api/notices": {
         // The menubar app asks every few seconds and shows new ones as its own notifications.

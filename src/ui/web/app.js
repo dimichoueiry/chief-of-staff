@@ -313,6 +313,9 @@ function markLooked(node, screen) {
   node.append(el("span", { class: "looked" }, `looked at your screen${screen.app ? ` · ${screen.app}` : ""}`));
 }
 
+/** What it's running for you and what you've approved, on a page of its own. */
+$("activity-btn").addEventListener("click", () => openLink(new URL("/activity.html", location.href).href));
+
 /** The window that shows one picture or page full size, with the buttons to save it. */
 function openArtifact(id) {
   openLink(new URL(`/artifact.html?id=${encodeURIComponent(id)}`, location.href).href);
@@ -322,6 +325,27 @@ function openArtifact(id) {
 function artifactCards(items) {
   const box = el("div", { class: "artifacts" });
   for (const a of items) box.append(cosArtifacts.card(a, { open: () => openArtifact(a.id) }));
+  return box;
+}
+
+/**
+ * Answers the reply offered as buttons (offer_choices). Tapping one sends it as their message, the
+ * same as typing it. Only the latest reply keeps them: once they've said anything, they're gone.
+ */
+function choiceButtons(options) {
+  const box = el("div", { class: "choices" });
+  for (const text of options) {
+    box.append(el("button", {
+      class: "choice",
+      onclick: async (e) => {
+        if (busy) return;
+        for (const b of box.querySelectorAll("button")) b.disabled = true;
+        e.currentTarget.classList.add("picked");
+        if (chatHidden) setChatHidden(false);
+        await send({ text, mode: inputMode }, "Thinking…");
+      },
+    }, text));
+  }
   return box;
 }
 
@@ -335,6 +359,7 @@ function fillTurn(node, turn) {
   node.replaceChildren(body);
   if (turn.confirm && turn.confirm.length) node.append(confirmButtons(turn.confirm, turn.text));
   if (turn.artifacts && turn.artifacts.length) node.append(artifactCards(turn.artifacts));
+  if (turn.choices && turn.choices.length) node.append(choiceButtons(turn.choices));
 }
 
 /**
@@ -349,6 +374,7 @@ function offerTurn(turn) {
     el("div", { class: "body" }, renderMarkdown(turn.text)));
   const node = el("div", { class: "turn offer" }, el("span", { class: "spark", "aria-hidden": "true" }, "✦"), main);
   if (turn.artifacts && turn.artifacts.length) main.append(artifactCards(turn.artifacts));
+  if (turn.choices && turn.choices.length) main.append(choiceButtons(turn.choices));
   if (o.mode !== "offer") return node;
   const said = (text) => main.append(el("div", { class: "offer-said" }, text));
   if (o.answered) {
@@ -380,6 +406,8 @@ function offerTurn(turn) {
 
 function addTurn(turn) {
   let node;
+  // They said something: the buttons under earlier replies have been answered, or passed over.
+  if (turn.role === "user") for (const c of thread.querySelectorAll(".choices")) c.remove();
   if (turn.role === "user") {
     node = el("div", { class: "turn user" });
     if (turn.replyTo) node.append(el("span", { class: "replied" }, `↩ ${turn.replyTo}`));
