@@ -10,7 +10,7 @@ If you want to build it from the source code instead, see [Developer install](#d
 |---|---|
 | A Mac with **Apple silicon** (M1 or newer) | The current download is built for Apple silicon only. The file name says so: `Chief-of-Staff-<version>-arm64.dmg`. It will not open on an Intel Mac. |
 | **macOS 14 Sonoma or newer** | The app will not open on older versions. |
-| About **200 MB** of free space | The download itself is about 120 MB. |
+| About **350 MB** of free space | The app takes about 200 MB, and the download is about 120 MB until you delete it. |
 | **An API key** from an AI provider | Anthropic, OpenAI or OpenRouter. You create it and you pay for it. See [Step 4](#4-add-your-api-key). |
 | **Google Chrome** or **Microsoft Edge** (optional) | Only for the assistant's own browser. Everything else works without one. |
 
@@ -134,7 +134,7 @@ If the app is already gone, delete these by hand: `/Applications/Chief of Staff.
 
 Everything above is for the `.dmg`. Building from source is a different install, for people working on the code:
 
-- It needs Node 20+, Xcode command line tools, and a clone of the repository.
+- It needs Node 22.12 or newer, Xcode command line tools, and a clone of the repository.
 - `npm run cos -- menubar install` builds `~/Applications/Chief of Staff.app`. That app is a thin shell that runs the code from your Mac's Node. You can't hand it to someone else.
 - `npm run package` makes the self-contained `.app` and `.dmg` described in this guide.
 

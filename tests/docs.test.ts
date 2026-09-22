@@ -35,6 +35,11 @@ describe("docs/INSTALL.md", () => {
     expect(install).toContain(`macOS ${MIN_MACOS.replace(/\.0$/, "")}`);
   });
 
+  it("names the real Node floor for the developer install", () => {
+    const floor = JSON.parse(read("package.json")).engines.node.replace(/^>=/, "").replace(/\.0$/, "");
+    expect(install).toContain(`Node ${floor}`);
+  });
+
   it("never claims the build is notarized", () => {
     // Every mention of notarization must be a negation until there is a Developer ID (docs/DISTRIBUTION.md).
     for (const line of install.split("\n").filter((l) => /notari/i.test(l))) {
