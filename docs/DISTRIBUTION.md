@@ -11,7 +11,7 @@ It needs, on that Mac:
 
 | Needs | Why |
 |---|---|
-| Node 20+ at the path in `menubar.json` | the server is Node |
+| Node 22.12+ at the path in `menubar.json` | the server is Node |
 | `~/.cos/app` | the runtime `cos menubar build` copied there |
 | Xcode command line tools (`swiftc`) | the calendar, screen and player helpers are compiled on first use |
 | the repo, `npm install`, `npm run build` | to make all of the above |

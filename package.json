@@ -8,7 +8,7 @@
     "cos": "./dist/cli/cos.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12.0"
   },
   "scripts": {
     "cos": "tsx src/cli/cos.ts",
