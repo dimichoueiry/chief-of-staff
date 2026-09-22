@@ -10,7 +10,8 @@ const say = (text, tone = "") => {
   $("said").dataset.tone = tone;
 };
 
-const label = (a) => `${a.kind === "image" ? "Picture" : "Page"} · ${when(a.createdAt)}`;
+const KINDS = { image: "Picture", page: "Page", doc: "Document" };
+const label = (a) => `${KINDS[a.kind] || "Page"} · ${when(a.createdAt)}`;
 
 /** Delete asks first, in place: the second tap is the answer. */
 function deleteButton(a) {
@@ -52,7 +53,7 @@ function draw() {
             extra: [el("a", { class: "chip", href: cosArtifacts.fileUrl(a.id), download: a.file }, "save"), deleteButton(a)],
           }),
         )
-      : [el("p", { class: "empty" }, artifacts.length ? "Nothing of that kind yet." : "Nothing yet. Ask for a post, a picture, or a content calendar.")]),
+      : [el("p", { class: "empty" }, artifacts.length ? "Nothing of that kind yet." : "Nothing yet. Ask for a post, a picture, a content calendar or a write-up.")]),
   );
 }
 

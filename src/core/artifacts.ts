@@ -1,9 +1,9 @@
 /**
- * Things the assistant made for you: an image, a post, a page. They are files in
+ * Things the assistant made for you: an image, a post, a page, a document. They are files in
  * ~/.cos/artifacts, not memory, because they are drafts — you look at one, ask for a
  * change, save the one you want and forget the rest.
  *
- * Each artifact is two files: the thing itself (<id>.png, <id>.html) and <id>.json beside
+ * Each artifact is two files: the thing itself (<id>.png, <id>.html, <id>.md) and <id>.json beside
  * it saying what it is and what it was made from. Ids arrive from the page's address bar,
  * so they are checked against a strict shape before anything is read.
  */
@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { todayISO } from "../util/dates.js";
 import { cosHome } from "../util/home.js";
 
-export type ArtifactKind = "image" | "page";
+export type ArtifactKind = "image" | "page" | "doc";
 
 export interface Artifact {
   id: string;
@@ -44,7 +44,10 @@ const EXTENSIONS: Record<string, string> = {
   "image/jpeg": "jpg",
   "image/webp": "webp",
   "text/html": "html",
+  "text/markdown": "md",
 };
+
+const DEFAULT_TITLES: Record<ArtifactKind, string> = { image: "Image", page: "Page", doc: "Document" };
 
 /** Ids are used as file names and come back from URLs: only these characters, ever. */
 const ID = /^[0-9a-z-]{10,40}$/;
@@ -82,7 +85,7 @@ export function saveArtifact(o: SaveArtifact, dir = artifactsDir()): Artifact {
   const artifact: Artifact = {
     id,
     kind: o.kind,
-    title: o.title.trim() || (o.kind === "image" ? "Image" : "Page"),
+    title: o.title.trim() || DEFAULT_TITLES[o.kind],
     file: `${id}.${ext}`,
     mediaType: o.mediaType,
     createdAt: new Date().toISOString(),

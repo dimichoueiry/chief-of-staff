@@ -22,6 +22,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private let imageMenu = NSMenu()
   private let memoryMenu = NSMenu()
   private let gridMenu = NSMenu()
+  private let proactiveMenu = NSMenu()
+  private var proactiveItem: NSMenuItem!
+  private var notices: Notices!
   private var keysWindow: KeysWindow!
   private var connectionsWindow: ConnectionsWindow!
   private let permissionsMenu = NSMenu()
@@ -44,6 +47,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     server = ServerManager(config: config)
     keysWindow = KeysWindow(server: server)
     connectionsWindow = ConnectionsWindow(server: server)
+    notices = Notices(server: server)
+    notices.onOpen = { [weak self] id in self?.openChat(id) }
     installEditMenu()
     buildStatusItem()
 
@@ -99,6 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return
       }
       self.ready = true
+      self.notices.start()
       self.resumeWake()
       self.panel.load(URL(string: "\(self.server.config.baseURL)/?shell=1&mode=pill")!)
       Log.write("ready at \(self.server.config.baseURL)")
@@ -149,6 +155,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     add(menu, "Talk   (⌃ ⌃)", #selector(talk))
     add(menu, "Ask or capture…   (⌥Space)", #selector(type))
     wakeItem = add(menu, "Listen for “Darius”", #selector(toggleWake))
+    proactiveItem = NSMenuItem(title: "Proactive", action: nil, keyEquivalent: "")
+    proactiveItem.submenu = proactiveMenu
+    menu.addItem(proactiveItem)
     homeItem = add(menu, "Move the chat back to the bottom", #selector(moveHome))
     gridItem = NSMenuItem(title: "Agent Grid", action: nil, keyEquivalent: "")
     gridItem.submenu = gridMenu
@@ -189,7 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   }
 
   func menuWillOpen(_ menu: NSMenu) {
-    guard menu !== focusMenu, menu !== modelMenu, menu !== memoryMenu, !isGridMenu(menu) else { return }
+    guard menu !== focusMenu, menu !== modelMenu, menu !== memoryMenu, menu !== proactiveMenu, !isGridMenu(menu) else { return }
     refreshWakeItem()
     homeItem.isHidden = panel.placement == nil
     refreshPermissionsMenu()
@@ -197,6 +206,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     refreshModelMenu()
     refreshKeysItem()
     refreshMemoryMenu()
+    refreshProactiveMenu()
     refreshConnectionsItem()
     refreshGridMenu()
     loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
@@ -732,6 +742,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       }
       self.memoryItem.title = (state["ready"] as? Bool ?? true) && on ? "Memory" : "Memory ⚠︎"
     }
+  }
+
+  // MARK: the heartbeat
+
+  /// Off, Proactive (it offers and waits for a yes) or Proactive+ (it prepares things on its own and shows you).
+  private func refreshProactiveMenu() {
+    guard ready else { return }
+    server.getJSON("api/heartbeat") { [weak self] obj in
+      guard let self, let state = obj as? [String: Any] else { return }
+      self.proactiveMenu.removeAllItems()
+      let mode = state["mode"] as? String ?? "off"
+      let hints = ["off": "Never writes first", "proactive": "Offers, and waits for your yes", "plus": "Prepares drafts on its own, then shows you"]
+      for m in state["modes"] as? [[String: Any]] ?? [] {
+        guard let id = m["id"] as? String, let name = m["name"] as? String else { continue }
+        let item = NSMenuItem(title: name, action: #selector(self.selectProactive(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = id
+        item.state = id == mode ? .on : .off
+        item.toolTip = hints[id]
+        self.proactiveMenu.addItem(item)
+      }
+      self.proactiveMenu.addItem(.separator())
+      if let last = state["last"] as? [String: Any], let outcome = last["outcome"] as? String {
+        let line = NSMenuItem(title: "Last look: \(outcome)", action: nil, keyEquivalent: "")
+        line.isEnabled = false
+        line.attributedTitle = NSAttributedString(string: "Last look: \(outcome)", attributes: [.font: NSFont.systemFont(ofSize: 11)])
+        self.proactiveMenu.addItem(line)
+      }
+      let look = NSMenuItem(title: "Look now", action: #selector(self.lookNow), keyEquivalent: "")
+      look.target = self
+      look.isEnabled = mode != "off"
+      self.proactiveMenu.addItem(look)
+      let log = NSMenuItem(title: "What it's been doing…", action: #selector(self.openHeartbeatLog(_:)), keyEquivalent: "")
+      log.target = self
+      log.representedObject = state["log"] as? String
+      self.proactiveMenu.addItem(log)
+      self.proactiveItem.title = mode == "plus" ? "Proactive+" : mode == "off" ? "Proactive: off" : "Proactive"
+    }
+  }
+
+  @objc private func selectProactive(_ sender: NSMenuItem) {
+    guard let mode = sender.representedObject as? String else { return }
+    server.postJSON("api/heartbeat", ["mode": mode]) { _ in Log.write("proactive → \(mode)") }
+  }
+
+  @objc private func lookNow() {
+    server.postJSON("api/heartbeat/tick", [:]) { obj in
+      let r = obj as? [String: Any]
+      Log.write("heartbeat, looked now: \(r?["outcome"] as? String ?? "?") \(r?["why"] as? String ?? "")")
+    }
+  }
+
+  @objc private func openHeartbeatLog(_ sender: NSMenuItem) {
+    guard let path = sender.representedObject as? String else { return }
+    if !FileManager.default.fileExists(atPath: path) {
+      alert("Nothing yet.", "It hasn't looked yet. It checks every half hour while the app is open.")
+      return
+    }
+    NSWorkspace.shared.open(URL(fileURLWithPath: path))
+  }
+
+  /// A notification was clicked: that chat becomes the current one, and the pill opens on it.
+  private func openChat(_ id: String) {
+    guard ready else { return }
+    let show = { [weak self] in
+      guard let self else { return }
+      self.setView("pill")
+      self.panel.show()
+      self.panel.eval("cosShell.openChat()")
+    }
+    if id.isEmpty { show(); return }
+    server.postJSON("api/conversation/open", ["id": id]) { _ in show() }
   }
 
   /// Keep the menu honest about whether anything can answer, and offer the window once when nothing can.

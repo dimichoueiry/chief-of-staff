@@ -69,6 +69,25 @@ Install the morning trigger so it speaks first:
 cos scheduler install        # launchd: 07:00 brief, 18:00 wrap, daily silence check
 ```
 
+## It writes first: the heartbeat
+
+While the app (or `cos ui`) runs, it looks every half hour at what's coming up in the next two days
+(reminders, now with a time: "2026-09-23 09:00 · Module 2 posts go out"; calendar events; project
+cadence days) and at what you said in recent chats. When it can do real work on something before
+you ask, it writes to you: a message in the chat, like *"Want Wednesday's Module 2 post tuned for
+shares and saves?"* with **Yes, do it** / **Not now**, and a notification that opens that chat. A
+yes does the work and hands back a document in the chat. Most looks end in silence, and cost no
+model call unless something changed.
+
+- **✦ › Proactive** switches it: **Off**, **Proactive** (offers, waits for your yes) or **Proactive+**
+  (anything that only needs a document or page written, it does first and shows you; anything that
+  would send, post, schedule or change your memory still waits for a yes). Or `cos heartbeat off|proactive|plus`.
+- It never speaks aloud unasked, writes at most 3 times a day, 90 minutes apart, not between 22:00
+  and 08:00 (`COS_QUIET_HOURS`, e.g. `23-7` or `off`), and never offers the same thing twice.
+- Your standing rules for it go in `selfhub/goals/heartbeat.md` ("nothing about drawcal until October").
+- Why it spoke, or didn't: `~/.cos/heartbeat.md`, or ✦ › Proactive › What it's been doing…
+- `cos heartbeat now` (or ✦ › Proactive › Look now) looks right away.
+
 ## The desktop app
 
 A native menubar app hosts the pill. It runs entirely on your Mac.

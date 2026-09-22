@@ -486,7 +486,7 @@ program
   .option("--no-open", "do not open the browser")
   .action(async (o: { port: string; open: boolean }) => {
     const cfg = config();
-    const server = createUiServer({ config: cfg, modelFlag: modelFlag(), today: program.opts<{ today?: string }>().today, agentWatch: {} });
+    const server = createUiServer({ config: cfg, modelFlag: modelFlag(), today: program.opts<{ today?: string }>().today, agentWatch: {}, heartbeat: {} });
     readyPlayer(); // build the audio player now, so the first reply doesn't play with afplay's pauses
     const port = Number(o.port) || 4747;
     await new Promise<void>((resolveListen, reject) => {
@@ -593,6 +593,34 @@ program
     if (what !== "wrap") fail("nudge: only 'wrap' is defined");
     const ok = await notify("Wrap up your day", "Two lines: what did you touch, what's next? → cos wrap");
     console.log(ok ? "Nudged." : "Notifications are not available here.");
+  });
+
+program
+  .command("heartbeat")
+  .argument("[mode]", "off | proactive | plus, or now: look right away (needs the app or cos ui running)")
+  .option("--port <n>", "port of the running app", process.env.COS_UI_PORT ?? "4747")
+  .description("whether it writes to you first: off, proactive (offers, waits for a yes) or plus (Proactive+: prepares things on its own)")
+  .action(async (mode: string | undefined, o: { port: string }) => {
+    const hb = await import("../logic/heartbeat.js");
+    if (mode === "now") {
+      try {
+        const r = await fetch(`http://127.0.0.1:${Number(o.port) || 4747}/api/heartbeat/tick`, { method: "POST" });
+        const out = (await r.json()) as { outcome: string; why?: string; offer?: { title: string } };
+        console.log(`${out.outcome}${out.offer ? `: ${out.offer.title}` : ""}${out.why ? dim(`  (${out.why})`) : ""}`);
+      } catch {
+        fail("The app isn't running. The heartbeat lives in the app (calendar access belongs to it); open it, or run cos ui.");
+      }
+      return;
+    }
+    if (mode !== undefined) {
+      const m = mode === "proactive+" ? "plus" : mode;
+      if (!hb.isMode(m)) fail(`mode must be one of: ${hb.MODES.join(", ")}, or now`);
+      hb.setMode(m);
+    }
+    const st = hb.readState();
+    console.log(`${hb.MODE_NAMES[st.mode]}${st.last ? dim(`  · last looked ${st.last.at.slice(0, 16).replace("T", " ")}: ${st.last.outcome}`) : ""}`);
+    for (const x of st.offers.slice(-5).reverse()) console.log(`  ${x.status.padEnd(8)} ${x.title}`);
+    console.log(dim(`Log: ${hb.logFile()}. Your rules for it: ${config().selfhubDir}/goals/heartbeat.md`));
   });
 
 const scheduler = program.command("scheduler").description("make it speak first: launchd jobs for the brief, the silence check and the wrap-up nudge");
