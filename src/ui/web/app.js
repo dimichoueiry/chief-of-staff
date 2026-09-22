@@ -923,7 +923,7 @@ $("live-toggle").addEventListener("click", async () => {
   liveMode.start();
 });
 window.addEventListener("pagehide", () => {
-  if (liveMode.session) navigator.sendBeacon("/api/live/stop", JSON.stringify({ session: liveMode.session }));
+  if (liveMode.session) fetch("/api/live/stop", { method: "POST", keepalive: true, headers: { "content-type": "application/json" }, body: JSON.stringify({ session: liveMode.session }) }).catch(() => {});
   toShell({ type: "stopLive" });
 });
 
