@@ -1,59 +1,61 @@
-/* Everything the assistant has made, newest first: the same cards as the chat, with the two
- * things a kept draft needs — save it somewhere of your own, or throw it away. */
+/* Everything the assistant has made, newest first, as a gallery: each card shows the thing itself.
+ * A kept draft needs two things here — save it somewhere of your own, or throw it away. */
 const { $, el, get, post, when } = window.cosDom;
+const { glyph, toast } = window.cosPage;
 
 let artifacts = [];
 let kind = "all";
 
-const say = (text, tone = "") => {
-  $("said").textContent = text;
-  $("said").dataset.tone = tone;
-};
+const KINDS = { image: "Image", page: "Page", doc: "Document" };
+const viewUrl = (a) => `/artifact.html?id=${encodeURIComponent(a.id)}`;
 
-const KINDS = { image: "Picture", page: "Page", doc: "Document" };
-const label = (a) => `${KINDS[a.kind] || "Page"} · ${when(a.createdAt)}`;
-
-/** Delete asks first, in place: the second tap is the answer. */
+/** Delete asks first, in place: the second click is the answer. */
 function deleteButton(a) {
-  const button = el("button", { class: "chip", onclick: () => ask() }, "delete");
-  const ask = () => {
-    button.textContent = "sure?";
-    button.className = "chip chip-kill";
-    button.onclick = null;
-    button.addEventListener("click", remove, { once: true });
-    setTimeout(() => {
-      if (!button.isConnected || button.textContent !== "sure?") return;
-      button.textContent = "delete";
-      button.className = "chip";
-      button.replaceWith(deleteButton(a));
-    }, 4000);
-  };
-  const remove = async () => {
-    button.disabled = true;
+  const b = el("button", { class: "btn small plain danger", type: "button", title: "Delete", "aria-label": `Delete ${a.title}` }, "Delete");
+  let armed = false;
+  b.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (!armed) {
+      armed = true;
+      b.textContent = "Delete?";
+      setTimeout(() => {
+        armed = false;
+        if (b.isConnected) b.textContent = "Delete";
+      }, 3500);
+      return;
+    }
+    b.disabled = true;
     const r = await post("/api/artifacts/delete", { id: a.id });
-    if (r.error) return say(r.error, "error");
-    say(r.message);
-    artifacts = r.artifacts ?? [];
+    if (r.error) return toast(r.error, "error");
+    toast("Deleted");
+    artifacts = r.artifacts ?? artifacts.filter((x) => x.id !== a.id);
     draw();
-  };
-  return button;
+  });
+  return b;
+}
+
+function card(a) {
+  const open = () => (location.href = viewUrl(a));
+  const thumb = el("div", { class: "thumb", role: "link", tabindex: "0", "aria-label": `Open ${a.title}`, onclick: open });
+  thumb.addEventListener("keydown", (e) => e.key === "Enter" && open());
+  thumb.append(cosArtifacts.preview(a, open));
+  return el("figure", { class: "artifact" },
+    thumb,
+    el("figcaption", {},
+      el("div", { class: "cap-main" }, el("div", { class: "cap-title", title: a.title }, a.title), el("div", { class: "cap-meta" }, `${KINDS[a.kind] || "Page"} · ${when(a.createdAt)}`)),
+      el("div", { class: "cap-actions" },
+        el("a", { class: "btn small plain", href: cosArtifacts.fileUrl(a.id), download: a.file, onclick: (e) => e.stopPropagation() }, "Save"),
+        deleteButton(a))));
 }
 
 function draw() {
   const shown = artifacts.filter((a) => kind === "all" || a.kind === kind);
-  $("count").textContent = artifacts.length
-    ? `${shown.length} of ${artifacts.length} · they live in ~/.cos/artifacts`
-    : "Nothing yet.";
-  for (const b of $("filters").children) b.className = b.dataset.kind === kind ? "chip chip-accent" : "chip";
+  $("count").textContent = artifacts.length ? `${artifacts.length} made for you · kept in ~/.cos/artifacts` : "Nothing yet.";
+  for (const b of $("filters").children) b.setAttribute("aria-selected", String(b.dataset.kind === kind));
   $("gallery").replaceChildren(
     ...(shown.length
-      ? shown.map((a) =>
-          cosArtifacts.card(a, {
-            meta: label(a),
-            extra: [el("a", { class: "chip", href: cosArtifacts.fileUrl(a.id), download: a.file }, "save"), deleteButton(a)],
-          }),
-        )
-      : [el("p", { class: "empty" }, artifacts.length ? "Nothing of that kind yet." : "Nothing yet. Ask for a post, a picture, a content calendar or a write-up.")]),
+      ? shown.map(card)
+      : [el("div", { class: "group", style: "grid-column:1/-1" }, el("p", { class: "empty-note" }, artifacts.length ? "Nothing of that kind yet." : "Nothing yet. Ask it for a post, a picture, a content calendar or a write-up."))]),
   );
 }
 
@@ -69,4 +71,4 @@ get("/api/artifacts")
     artifacts = r.artifacts ?? [];
     draw();
   })
-  .catch(() => say("The app isn't answering.", "error"));
+  .catch(() => toast("The app isn't answering.", "error"));

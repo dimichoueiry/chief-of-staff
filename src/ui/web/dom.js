@@ -29,7 +29,7 @@
   function when(iso) {
     const d = new Date(iso);
     const days = Math.round((new Date().setHours(0, 0, 0, 0) - new Date(iso).setHours(0, 0, 0, 0)) / 86_400_000);
-    if (days === 0) return d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    if (days === 0) return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
     if (days === 1) return "yesterday";
     if (days < 7) return d.toLocaleDateString(undefined, { weekday: "short" });
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });

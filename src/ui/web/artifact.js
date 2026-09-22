@@ -1,6 +1,7 @@
 /* One picture, page or document, full size, with the two things you do with it: save it, copy it.
  * Everything else about it — changing it, making another — is said to the assistant. */
 const { $, el, get } = window.cosDom;
+const { toast } = window.cosPage;
 const id = new URLSearchParams(location.search).get("id") || "";
 
 const when = (iso) => {
@@ -13,23 +14,19 @@ const KINDS = { image: "Picture", page: "Page", doc: "Document" };
 function fail(text) {
   $("title").textContent = "Not here";
   $("meta").textContent = text;
-  for (const b of document.querySelectorAll('.head-actions > *:not([href="/artifacts.html"])')) b.remove();
+  for (const b of document.querySelectorAll("#copy, #raw, #save")) b.remove();
 }
 
 /** Copy the picture itself, or the page's HTML. Not every format can go on the clipboard; say so when it can't. */
 async function copyIt(a, url) {
-  const button = $("copy");
-  const said = (text) => {
-    button.textContent = text;
-    setTimeout(() => (button.textContent = "copy"), 2500);
-  };
+  const said = (text) => toast(text, text.startsWith("Copied") ? "" : "error");
   try {
     const res = await fetch(url);
     if (a.kind !== "image") await navigator.clipboard.writeText(await res.text());
     else await navigator.clipboard.write([new ClipboardItem({ [a.mediaType]: await res.blob() })]);
-    said("copied");
+    said(a.kind === "image" ? "Copied the picture" : a.kind === "doc" ? "Copied the text" : "Copied the HTML");
   } catch {
-    said(a.kind === "image" ? "save it instead" : "couldn't copy");
+    said(a.kind === "image" ? "This picture can't go on the clipboard. Save it instead." : "Couldn't copy it.");
   }
 }
 
@@ -45,6 +42,7 @@ async function load() {
 
   const url = `/artifacts/${encodeURIComponent(a.id)}`;
   document.title = `${a.title} — Chief of Staff`;
+  $("bar-title").textContent = a.title;
   $("title").textContent = a.title;
   $("meta").textContent = [KINDS[a.kind] || "Page", a.model, when(a.createdAt)].filter(Boolean).join(" · ");
   $("save").href = url;
