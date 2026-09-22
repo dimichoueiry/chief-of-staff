@@ -3,6 +3,7 @@ import { AgentGrid, formatOrchestrator, type AgentStart } from "./agentgrid.js";
 import { sharedBrowser, type AssistantBrowser, type Element } from "./browser.js";
 import { macOpen, performOpen, type OpenAction, type Runner } from "./open.js";
 import type { Pending } from "./pending.js";
+import { saveAccess } from "./access.js";
 import { performTicketChange, type TicketChange } from "./tickets.js";
 import { classifyCommand, formatResult, runCommand, runVisible, type CommandRequest, type Shell } from "./terminal.js";
 
@@ -62,6 +63,11 @@ export async function performPending(p: Pending, deps: PerformDeps = {}): Promis
     }
     case "ticket":
       return done(await performTicketChange(p.payload as TicketChange, deps.agentGrid ?? new AgentGrid()));
+    case "access": {
+      const { what } = p.payload as { what: ("browser" | "terminal" | "agents" | "links")[] };
+      saveAccess(Object.fromEntries(what.map((k) => [k, "auto"])));
+      return done(`It no longer asks first for ${what.join(", ")}. The riskiest things still ask.`);
+    }
     case "browser-site": {
       const { url } = p.payload as { url: string };
       const browser = deps.browser ?? sharedBrowser();

@@ -112,6 +112,37 @@ function rhythmSection(rhythm) {
     })), { foot: "Projects with a day of their own. Set one by telling it “MLGuerrilla on Thursdays”." });
 }
 
+// ---------- Asking first ----------
+const ASKING = [
+  { id: "browser", title: "Its browser", icon: ["cursor", "indigo"], ask: "Asks before it sends, posts, buys or deletes on a page.", auto: "Clicks Send, Post and Delete itself." },
+  { id: "terminal", title: "Commands", icon: ["terminal", "gray"], ask: "Asks before a command that changes something.", auto: "Runs them itself. The riskiest still ask." },
+  { id: "agents", title: "Agents", icon: ["agent", "teal"], ask: "Asks before starting or messaging an agent.", auto: "Starts and messages agents itself." },
+  { id: "links", title: "Web pages", icon: ["globe", "blue"], ask: "Asks before opening an address it found or built.", auto: "Opens them straight away." },
+];
+const MODE_NAMES = { off: "Off", ask: "Ask", auto: "Don't Ask" };
+
+function askingSection(access) {
+  const rows = ASKING.map((c) => {
+    const control = el("div", { class: "segmented", role: "radiogroup", "aria-label": c.title });
+    for (const m of ["off", "ask", "auto"]) {
+      control.append(el("button", {
+        class: "seg",
+        role: "radio",
+        "aria-checked": String(access[c.id] === m),
+        onclick: async () => {
+          const r = await post("/api/access", { capability: c.id, mode: m });
+          if (r.error) return toast(r.error, "error");
+          toast(`${c.title}: ${MODE_NAMES[m]}`);
+          load();
+        },
+      }, MODE_NAMES[m]));
+    }
+    const sub = access[c.id] === "off" ? "It can't use this at all." : access[c.id] === "auto" ? c.auto : c.ask;
+    return item({ icon: glyph(...c.icon), title: c.title, sub, trail: [control] });
+  });
+  return group("Asking first", rows, { foot: "Don't Ask still stops for the riskiest things, and some things are never allowed. Saying “stop asking me” works too; it needs one tap to confirm." });
+}
+
 // ---------- Approvals ----------
 const KIND = { open: ["globe", "blue"], command: ["terminal", "gray"], "browser-act": ["cursor", "indigo"], offer: ["spark", "orange"] };
 const iconFor = (kind) => KIND[kind] || (/agent|orchestrator|ticket/.test(kind) ? ["agent", "teal"] : /browser/.test(kind) ? ["cursor", "indigo"] : ["check", "green"]);
@@ -179,7 +210,7 @@ async function load() {
   const open = a.reminders.length;
   $("state").textContent = `${a.heartbeat.mode === "off" ? "Not writing to you first" : names[a.heartbeat.mode]} · ${open} reminder${open === 1 ? "" : "s"} open`;
   $("scheduled").replaceChildren(...proactiveSection(a.heartbeat), ...remindersSection(a.reminders, a.today), ...rhythmSection(a.rhythm));
-  $("approvals").replaceChildren(...approvalsPanel(a.approvals));
+  $("approvals").replaceChildren(...askingSection(a.access), ...approvalsPanel(a.approvals));
   showTab(tab);
 }
 

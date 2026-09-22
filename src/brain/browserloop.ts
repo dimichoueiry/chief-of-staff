@@ -79,6 +79,17 @@ function verbFor(el: Element): "click" | "type" | "select" {
 
 export async function runGoal(jev: Jev, browser: AssistantBrowser, o: GoalRequest): Promise<GoalOutcome> {
   const steps: string[] = [];
+  try {
+    return await walk(jev, browser, o, steps);
+  } catch (err) {
+    // A click that opened a file chooser, or a page that stopped answering: say what was done and
+    // why it stopped, rather than an error that loses both. The page itself may not be readable.
+    const page = await browser.read().catch(() => "");
+    return { kind: "handover", why: (err as Error).message, page, steps };
+  }
+}
+
+async function walk(jev: Jev, browser: AssistantBrowser, o: GoalRequest, steps: string[]): Promise<GoalOutcome> {
   const maxSteps = o.maxSteps ?? 15;
   let page = "";
   let previous = "";
@@ -155,8 +166,15 @@ export async function runGoal(jev: Jev, browser: AssistantBrowser, o: GoalReques
       return { kind: "confirm", ask: { action: "click", element: el, url: browser.address }, page, steps };
     }
 
-    page = await browser.click(el);
-    steps.push(`clicked ${describeElement(el)}`);
+    const did = `clicked ${describeElement(el)}`;
+    try {
+      page = await browser.click(el);
+    } catch (err) {
+      // The click itself landed; it is reading the page after that fails when a chooser opened.
+      if (/file chooser is open/i.test((err as Error).message)) steps.push(did);
+      throw err;
+    }
+    steps.push(did);
   }
   return { kind: "handover", why: `it took ${maxSteps} steps without getting there`, page, steps };
 }

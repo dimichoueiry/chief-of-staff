@@ -47,7 +47,7 @@ import { loadLastBrief, notify, saveBrief } from "../output/notify.js";
 import { markdownToSpeech, renderBriefSpeech } from "../output/render.js";
 import { eventsInRange } from "../sensors/calendar.js";
 import { activityRoots, applyActivity, scanActivity } from "../sensors/git.js";
-import { readAccess } from "../actions/access.js";
+import { ACCESS_MODES, isAccessMode, readAccess, saveAccess } from "../actions/access.js";
 import {
   CATALOGUE, REGISTRY_URL, describe as describeConnection, missingEnv, readConnections, removeConnection,
   saveConnection, setEnabled, validate, type Connection,
@@ -1413,6 +1413,18 @@ export function createUiServer(o: UiOptions): Server {
         await job;
         return json(res, 200, { ok: true, text: "Not now. I won't bring it up again." });
       }
+      case "GET /api/access":
+        return json(res, 200, { access: access(), modes: ACCESS_MODES });
+      case "POST /api/access": {
+        // Which things wait for their OK. Set by them on the Activity page; the model can only ask.
+        const b = await body(req);
+        const what = String(b.capability ?? "");
+        const mode = String(b.mode ?? "");
+        if (!["browser", "terminal", "agents", "links"].includes(what) || !isAccessMode(mode)) return json(res, 400, { error: "Unknown setting." });
+        const next = saveAccess({ [what]: mode });
+        Log(`access: ${what} ${mode}`);
+        return json(res, 200, { access: next });
+      }
       case "GET /api/activity": {
         // What it's running for you and what you've allowed: the activity page.
         const st = readState();
@@ -1428,6 +1440,7 @@ export function createUiServer(o: UiOptions): Server {
             .filter((p) => normalizeStatus(p.status) === "active" && describeCadence(p))
             .map((p) => ({ name: p.name, cadence: describeCadence(p), next: p.next ?? "", idle: daysIdle(p, today()) })),
           approvals: listApprovals(80),
+          access: access(),
         });
       }
       case "POST /api/reminders/done": {

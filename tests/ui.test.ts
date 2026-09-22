@@ -123,6 +123,16 @@ describe("ui server (offline)", () => {
     delete process.env.COS_HOME;
   });
 
+  it("lets them choose what it asks about first, and remembers it", async () => {
+    const get0 = await (await fetch(`${base}/api/access`)).json();
+    expect(get0.access).toMatchObject({ browser: "ask", terminal: "ask" });
+    const set = await fetch(`${base}/api/access`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ capability: "browser", mode: "auto" }) });
+    expect(set.status).toBe(200);
+    expect((await (await fetch(`${base}/api/activity`)).json()).access.browser).toBe("auto");
+    const bad = await fetch(`${base}/api/access`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ capability: "screen", mode: "auto" }) });
+    expect(bad.status).toBe(400);
+  });
+
   it("serves the page and static assets", async () => {
     const html = await (await fetch(`${base}/`)).text();
     expect(html).toContain('id="pill"');

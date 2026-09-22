@@ -22,7 +22,7 @@ import { Journal } from "../core/journal.js";
 import { Ledger, PROJECT_STATUSES, findProject, type Project, type ProjectPatch } from "../core/ledger.js";
 import { Notes } from "../core/notes.js";
 import { Reminders, cleanTime } from "../core/reminders.js";
-import { readAccess, type Access, type AccessMode } from "../actions/access.js";
+import { readAccess, saveAccess, type Access, type AccessMode } from "../actions/access.js";
 import {
   AGENT_ENGINES, AgentGrid, findOrchestrator, findSession, formatModels, formatOrchestrator, formatOrchestrators, formatSessions, formatTranscript, resolveModel,
   type AgentEngine, type AgentStart,
@@ -464,6 +464,21 @@ export const TOOLS: Record<string, ToolSpec> = {
         ref: s("Scroll to this element instead, from the page as last read"),
       },
       required: ["to"],
+    },
+  },
+  set_asking: {
+    name: "set_asking",
+    description:
+      "Change whether you ask before acting, when they tell you to: \"stop asking me\", \"don't ask before posting\", \"ask me first again\". " +
+      "browser is clicking Send, Post or Delete on a page; terminal is commands that change things; agents is starting or messaging one; links is opening addresses you found. " +
+      "Asking again takes effect at once. Asking less needs their tap or yes once, so a page can never talk you into it. Only when they asked for it in their own words.",
+    parameters: {
+      type: "object",
+      properties: {
+        what: { type: "array", items: { type: "string", enum: ["browser", "terminal", "agents", "links"] }, description: "Which kinds; all four when they didn't say" },
+        ask: { type: "boolean", description: "True to ask first again, false to stop asking" },
+      },
+      required: ["ask"],
     },
   },
   browser_upload: {
@@ -1364,6 +1379,22 @@ private async pursue(goal: string, rawValues: unknown): Promise<string> {
         if (!["down", "up", "top", "bottom", "auto", "stop"].includes(to)) throw new Error('"to" must be down, up, top, bottom, auto or stop');
         const speed = this.str(input, "speed") as ScrollSpeed;
         return this.browser().scroll({ to, screens: Number(input.screens) || undefined, speed: speed || undefined, ref: this.str(input, "ref") || undefined });
+      }
+      case "set_asking": {
+        const all = ["browser", "terminal", "agents", "links"] as const;
+        const raw = Array.isArray(input.what) && input.what.length ? input.what.map(String) : [...all];
+        const what = all.filter((k) => raw.includes(k));
+        if (!what.length) throw new Error('"what" must be browser, terminal, agents or links');
+        const names = what.join(", ");
+        if (input.ask === true) {
+          saveAccess(Object.fromEntries(what.map((k) => [k, "ask"])));
+          return `Done: it asks first again for ${names}.`;
+        }
+        const detail = `Stop asking before acting for ${names} (the riskiest things still ask)`;
+        const twice = this.repeated("access", detail);
+        if (twice) return twice;
+        this.pending.push(queue("access", { what }, { label: `stop asking for ${names}`, detail, verb: "Stop Asking" }));
+        return "Not changed yet: turning asking off needs their OK once. Ask them in one short sentence to confirm. They can just say yes.";
       }
       case "browser_upload": {
         this.browserAllowed();

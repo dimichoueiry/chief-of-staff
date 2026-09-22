@@ -355,6 +355,10 @@ export interface Settle {
   thinMs?: number;
 }
 
+const CHOOSER_MESSAGE =
+  "A file chooser is open on the page and nothing can be read or clicked until it is answered. Use browser_upload with the file, or with nothing to close it.";
+const CHOOSER_OPEN = /A file chooser is open on the page/;
+
 /** A page outline this short is a frame still loading, not a page. */
 const THIN_PAGE = 1200;
 
@@ -376,8 +380,10 @@ export class AssistantBrowser {
     try {
       return await this.driver.call(tool, args);
     } catch (err) {
-      if (/does not handle the modal state/i.test((err as Error).message)) {
-        throw new Error("A file chooser is open on the page and nothing can be read or clicked until it is answered. Use browser_upload with the picture's id, or with nothing to close it.");
+      const message = (err as Error).message;
+      if (/does not handle the modal state/i.test(message)) throw new Error(CHOOSER_MESSAGE);
+      if (/can only be used when there is related modal state/i.test(message)) {
+        throw new Error("No file chooser is open. Click the page's upload or add-photo button first, then call browser_upload.");
       }
       throw err;
     }
@@ -542,6 +548,17 @@ export class AssistantBrowser {
   async upload(paths: string[]): Promise<string> {
     const staged = paths.map((from) => this.stage(from));
     await this.call("browser_file_upload", staged.length ? { paths: staged } : {});
+    // More than one can be waiting: a second click on an upload button, or one they clicked by hand
+    // in this window, where Playwright holds every chooser back. Answering only the first left the
+    // page frozen behind the rest, so the rest are closed empty until the page can be read.
+    for (let left = 5; left > 0; left--) {
+      try {
+        return await this.settled();
+      } catch (err) {
+        if (!CHOOSER_OPEN.test((err as Error).message)) throw err;
+        await this.call("browser_file_upload", {});
+      }
+    }
     return this.settled();
   }
 
