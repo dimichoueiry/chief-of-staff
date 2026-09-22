@@ -90,6 +90,11 @@ model call unless something changed.
 - **Activity** (the chip in the chat's header, or ✦ › Activity…) shows what it's running for you: the
   heartbeat and its mode, your reminders (tick one off there), your projects' rhythm, and every action
   that waited for your OK, how you answered, and what your settings let it do on its own.
+- **Goals & memory** (✦ › Goals & memory…, or the link on the Activity page): your projects as goals
+  (tick one done, park it, change its next action in place), and your memory as files to open and
+  edit: **Soul** (your instructions for how it behaves), the heartbeat's rules, who you are, the
+  stores and the journal. Every save is a commit; a file the assistant changed since you opened it
+  isn't overwritten.
 - When a reply ends on a question with a few obvious answers, they appear under it as buttons; tapping
   one sends it as your reply.
 

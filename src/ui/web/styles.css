@@ -400,3 +400,51 @@ html[data-pill="compact"] .pill[data-state="speaking"] { background: rgba(30, 33
 .sub-head { color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; margin: 0 8px 2px; }
 .sub-list .row-icon { width: 28px; height: 28px; }
 .sub-list .row-title { font-size: 13px; }
+
+/* ---------- you: goals, and memory as files ---------- */
+.panel.you { width: min(640px, 100%); }
+.act-section h2.tracking { display: flex; align-items: center; gap: 8px; color: var(--success); }
+.act-section h2 .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 4px rgba(111, 199, 154, 0.15); }
+.goal { display: flex; align-items: flex-start; gap: 12px; padding: 10px 8px; border-radius: 10px; }
+.goal:hover { background: #20242c; }
+.goal-check { flex: none; width: 20px; height: 20px; margin-top: 2px; border-radius: 5px; border: 1.5px solid #6b7280; background: transparent; cursor: pointer; padding: 0; }
+.goal-check:hover { border-color: var(--success); }
+.goal-check.on { background: var(--success); border-color: var(--success); box-shadow: inset 0 0 0 3px #1e2129; }
+.goal-main { flex: 1; min-width: 0; }
+.goal-name { color: var(--text); font-size: 15px; font-weight: 550; }
+.goal-next { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 2px 0; margin: 2px 0 0; color: #c3c8d2; font: 13.5px/1.45 var(--sans); cursor: text; }
+.goal-next:hover:not(.static) { color: var(--text); }
+.goal-next.empty-next { color: var(--muted); font-style: italic; }
+.goal-input { width: 100%; margin-top: 2px; background: #1a1d24; color: var(--text); border: 1px solid var(--accent); border-radius: 8px; padding: 5px 8px; font: 13.5px var(--sans); outline: none; }
+.goal-meta { color: var(--muted); font-size: 12px; margin-top: 3px; }
+.goal.overdue .goal-meta { color: var(--attention); }
+.goal-actions { flex: none; display: flex; gap: 6px; opacity: 0; transition: opacity 0.12s; }
+.goal:hover .goal-actions, .goal:focus-within .goal-actions { opacity: 1; }
+.finished summary { cursor: pointer; color: var(--muted); font-size: 13px; margin-bottom: 4px; }
+.finished .goal-name { color: var(--muted); text-decoration: line-through; }
+
+.heroes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 16px; }
+.hero-card { position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-height: 150px; padding: 16px 18px; border: 0; border-radius: 18px; color: #fff; text-align: left; cursor: pointer; overflow: hidden; }
+.hero-card:hover { filter: brightness(1.08); }
+.hero-card.soul { background: radial-gradient(circle at 80% 90%, #f07b6c 0%, transparent 55%), linear-gradient(135deg, #b8323a, #7e1d2a); }
+.hero-card.rules { background: radial-gradient(circle at 75% 85%, #9bb8ff 0%, transparent 55%), linear-gradient(135deg, #3b56c9, #26348a); }
+.hero-name { font-size: 19px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; }
+.hero-line { font: 11px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.8; }
+.hero-date { position: absolute; left: 18px; bottom: 14px; font: 15px var(--mono); opacity: 0.9; }
+.file-row { width: 100%; border: 0; background: transparent; text-align: left; cursor: pointer; font: inherit; color: inherit; align-items: center; }
+.file-row .file-badge { flex: none; font: 600 10px var(--mono); color: var(--muted); background: #2a2e38; border: 1px solid var(--line); border-radius: 5px; padding: 4px 6px; }
+
+.editor-panel { display: flex; flex-direction: column; }
+.editor-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding-bottom: 12px; border-bottom: 1px solid #2a2f3a; }
+.editor-name { flex: 1; min-width: 160px; }
+.editor-name h1 { margin: 0; font-size: 18px; font-weight: 600; }
+.toolbar { display: flex; align-items: center; gap: 2px; }
+.toolbar button { background: transparent; border: 0; border-radius: 6px; color: #c3c8d2; font: 13px var(--sans); padding: 5px 8px; cursor: pointer; }
+.toolbar button:hover { background: #2a2e38; color: var(--text); }
+.toolbar .sep { width: 1px; height: 16px; background: var(--line); margin: 0 4px; }
+.toolbar.off { opacity: 0.35; pointer-events: none; }
+.md-editor { min-height: 60vh; font: 14.5px/1.65 var(--sans); padding: 18px 20px; }
+.md-preview { margin-top: 14px; border: 1px solid var(--line); border-radius: 12px; min-height: 60vh; }
+.activity-head .head-link { margin-left: auto; text-decoration: none; }
+.editor-panel[hidden], .md-editor[hidden], .md-preview[hidden] { display: none; }
+.md-preview { padding: 22px 26px; font-size: 14.5px; line-height: 1.6; background: var(--surface); }

@@ -474,7 +474,7 @@ program
   .description("answer a keep / park / kill question")
   .action(async (project: string, choice: string) => {
     const c = choice.toLowerCase();
-    if (!isChoice(c)) fail("choice must be keep, park or kill");
+    if (!isChoice(c)) fail("choice must be keep, park, kill or done");
     const r = await decide(new Ledger(config().selfhubDir), project, c, today());
     console.log(r.message);
   });

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>You — Chief of Staff</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body class="page-body">
+  <main class="stage">
+    <section class="panel activity you" id="home">
+      <header class="activity-head">
+        <div class="activity-mark" aria-hidden="true">✦</div>
+        <div>
+          <h1>You</h1>
+          <p class="headline" id="state">What you're working toward, and what it knows about you</p>
+        </div>
+        <a class="chip head-link" href="/activity.html">activity</a>
+      </header>
+      <nav class="tabs" role="tablist">
+        <button class="tab" role="tab" data-tab="goals" aria-selected="true">Goals</button>
+        <button class="tab" role="tab" data-tab="memory" aria-selected="false">Memory</button>
+      </nav>
+      <div id="goals" role="tabpanel"></div>
+      <div id="memory" role="tabpanel" hidden></div>
+      <footer class="panel-foot" id="said"></footer>
+    </section>
+
+    <section class="panel wide editor-panel" id="editor" hidden>
+      <header class="editor-head">
+        <button class="chip icon" id="back" title="Back" aria-label="Back">‹</button>
+        <div class="editor-name">
+          <h1 id="file-title">File</h1>
+          <p class="headline" id="file-note"></p>
+        </div>
+        <div class="toolbar" id="toolbar" role="toolbar" aria-label="Formatting">
+          <button data-md="bold" title="Bold (⌘B)"><b>B</b></button>
+          <button data-md="italic" title="Italic (⌘I)"><i>I</i></button>
+          <span class="sep"></span>
+          <button data-md="h1" title="Heading 1">H1</button>
+          <button data-md="h2" title="Heading 2">H2</button>
+          <button data-md="h3" title="Heading 3">H3</button>
+          <span class="sep"></span>
+          <button data-md="ul" title="Bulleted list">•</button>
+          <button data-md="ol" title="Numbered list">1.</button>
+        </div>
+        <div class="head-actions">
+          <button class="chip" id="preview-btn">preview</button>
+          <button class="chip chip-accent" id="save-btn" title="Save (⌘S)">save</button>
+        </div>
+      </header>
+      <textarea class="editor md-editor" id="text" spellcheck="true"></textarea>
+      <article class="doc doc-full md-preview" id="preview" hidden></article>
+      <footer class="panel-foot" id="editor-said"></footer>
+    </section>
+  </main>
+  <script src="/dom.js"></script>
+  <script src="/markdown.js"></script>
+  <script src="/you.js"></script>
+</body>
+</html>

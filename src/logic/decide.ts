@@ -1,8 +1,8 @@
-/** Answer a keep / park / kill question. Shared by the CLI and the UI. */
+/** Answer a keep / park / kill question, or mark a project done. Shared by the CLI and the UI. */
 import { Ledger } from "../core/ledger.js";
 
-export type Choice = "keep" | "park" | "kill";
-export const CHOICES: readonly Choice[] = ["keep", "park", "kill"];
+export type Choice = "keep" | "park" | "kill" | "done";
+export const CHOICES: readonly Choice[] = ["keep", "park", "kill", "done"];
 
 export function isChoice(s: string): s is Choice {
   return (CHOICES as readonly string[]).includes(s);
@@ -24,11 +24,11 @@ export async function decide(
       message: `Keeping ${p.name}. Last touched reset to today; it will resurface if it goes quiet again.`,
     };
   }
-  const status = choice === "park" ? "parked" : "killed";
+  const status = choice === "park" ? "parked" : choice === "done" ? "done" : "killed";
   await ledger.writeProject(p.name, { status, lastTouched: today }, `cos: ${choice} "${p.name}"`);
   return {
     project: p.name,
     status,
-    message: `${p.name} → ${status}.${choice === "park" ? " It comes back for review in a month." : ""}`,
+    message: choice === "done" ? `${p.name} is done. Well done.` : `${p.name} → ${status}.${choice === "park" ? " It comes back for review in a month." : ""}`,
   };
 }
