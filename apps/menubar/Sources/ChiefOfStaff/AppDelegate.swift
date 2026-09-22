@@ -166,6 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     focus.submenu = focusMenu
     menu.addItem(focus)
     add(menu, "Activity…", #selector(showActivity))
+    add(menu, "Goals & memory…", #selector(showYou))
     add(menu, "Artifacts…", #selector(showArtifacts))
     let model = NSMenuItem(title: "Model", action: nil, keyEquivalent: "")
     model.submenu = modelMenu
@@ -580,6 +581,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   /// Everything it has made, newest first.
   /// What it's running for you and what you've approved.
   @objc private func showActivity() { NSWorkspace.shared.open(server.config.baseURL.appendingPathComponent("activity.html")) }
+
+  /// Your goals, and your memory as files to open and edit (Soul first).
+  @objc private func showYou() { NSWorkspace.shared.open(server.config.baseURL.appendingPathComponent("you.html")) }
 
   @objc private func showArtifacts() { NSWorkspace.shared.open(server.config.baseURL.appendingPathComponent("artifacts.html")) }
 

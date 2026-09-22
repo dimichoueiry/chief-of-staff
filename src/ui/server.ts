@@ -38,6 +38,7 @@ import { catchUpHistory, ensureStores, ensureStoresOnFirstRun, memoryState } fro
 import { installDeveloperTools, resetGit } from "../core/git.js";
 import { Ledger, normalizeStatus } from "../core/ledger.js";
 import { describeCadence } from "../logic/cadence.js";
+import { EditConflict, memoryFiles, readMemoryFile, saveMemoryFile } from "../core/files.js";
 import { buildBrief } from "../logic/brief.js";
 import { daysIdle } from "../logic/cadence.js";
 import { decide, isChoice } from "../logic/decide.js";
@@ -1250,7 +1251,7 @@ export function createUiServer(o: UiOptions): Server {
       case "POST /api/decide": {
         const b = await body(req);
         const choice = String(b.choice ?? "");
-        if (!isChoice(choice)) return json(res, 400, { error: "choice must be keep, park or kill" });
+        if (!isChoice(choice)) return json(res, 400, { error: "choice must be keep, park, kill or done" });
         const r = await decide(new Ledger(config.selfhubDir), String(b.project ?? ""), choice, today());
         return json(res, 200, r);
       }
@@ -1432,6 +1433,45 @@ export function createUiServer(o: UiOptions): Server {
         const hit = await new Reminders(config.selfhubDir).complete(text);
         if (!hit) return json(res, 404, { error: "That reminder isn't open anymore." });
         return json(res, 200, { ok: true, text: `Done: ${hit.text}` });
+      }
+      case "GET /api/goals": {
+        // Every project as a goal: what it's for, where it stands, and what's next.
+        const projects = await new Ledger(config.selfhubDir).read();
+        const shown = projects.map((p) => ({
+          name: p.name, status: normalizeStatus(p.status), why: p.why ?? "", next: p.next ?? "", deadline: p.deadline && p.deadline !== "none" ? p.deadline : "",
+          cadence: describeCadence(p), idle: daysIdle(p, today()), lastTouched: p.lastTouched ?? "",
+        }));
+        return json(res, 200, { today: today(), goals: shown });
+      }
+      case "POST /api/goals/next": {
+        const b = await body(req);
+        const ledger = new Ledger(config.selfhubDir);
+        const p = await ledger.find(String(b.project ?? ""));
+        if (!p) return json(res, 404, { error: "That project isn't in the ledger anymore." });
+        const next = String(b.next ?? "").replace(/\s+/g, " ").trim();
+        await ledger.writeProject(p.name, { next }, `cos: next for "${p.name}" → ${next || "(none)"}`);
+        return json(res, 200, { ok: true, project: p.name, next });
+      }
+      case "GET /api/files": {
+        return json(res, 200, { dir: config.selfhubDir, groups: await memoryFiles(config.selfhubDir), soul: { file: instructionsFile(), chars: readInstructions().length, max: MAX_INSTRUCTIONS } });
+      }
+      case "GET /api/files/read": {
+        try {
+          return json(res, 200, await readMemoryFile(config.selfhubDir, url.searchParams.get("path") ?? ""));
+        } catch (err) {
+          return json(res, 400, { error: (err as Error).message });
+        }
+      }
+      case "POST /api/files/save": {
+        const b = await body(req);
+        try {
+          const base = b.base === null ? null : typeof b.base === "string" ? b.base : undefined;
+          const r = await saveMemoryFile(config.selfhubDir, String(b.path ?? ""), String(b.text ?? ""), base);
+          Log(`memory: edited ${b.path}${r.commit ? ` (commit ${r.commit})` : ""}`);
+          return json(res, 200, { ok: true, ...r, message: r.commit ? "Saved. Kept in its history too." : "Saved." });
+        } catch (err) {
+          return json(res, err instanceof EditConflict ? 409 : 400, { error: (err as Error).message });
+        }
       }
       case "GET /api/notices": {
         // The menubar app asks every few seconds and shows new ones as its own notifications.
