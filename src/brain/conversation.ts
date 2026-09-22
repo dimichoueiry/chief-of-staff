@@ -587,40 +587,49 @@ export interface HistoryOptions {
  * start of the next thing the user says.
  */
 export function historyMessages(c: Conversation, o: HistoryOptions = {}): ChatMessage[] {
-  const maxChars = o.maxChars ?? 24_000;
-  const maxExchanges = o.maxExchanges ?? 12;
+  const maxChars = o.maxChars ?? 48_000;
+  const maxExchanges = o.maxExchanges ?? 20;
   const maxToolChars = o.maxToolChars ?? 1_500;
+  /** The last few exchanges keep their tool results in detail; older ones keep the gist. */
+  const recent = 2;
+  const olderToolChars = 300;
+  const maxEventChars = 400;
 
-  const exchanges: ChatMessage[][] = [];
+  type Exchange = { user: ChatMessage; steps: ChatMessage[]; reply?: ChatMessage };
+  const exchanges: Exchange[] = [];
   let events: string[] = [];
-  let open: ChatMessage[] | null = null;
+  let open: Exchange | null = null;
   for (const t of c.turns) {
     if (t.offer) {
       // It spoke first: that is something that happened before their next message, not a reply to one.
       events.push(offerLine(t));
     } else if (t.role === "event") {
-      events.push(t.text);
+      // What happened in between is kept by what it was, not with the page or agent report it carried.
+      events.push(cut(withoutPage(t.text), maxEventChars));
     } else if (t.role === "user") {
       // Events stay pending until a reply lands, so a message that never got one doesn't swallow them.
-      open = [{ role: "user", content: withEvents(events, t.text) }];
+      open = { user: { role: "user", content: withEvents(events, t.text) }, steps: [] };
       exchanges.push(open);
     } else if (open) {
-      const n = exchanges.length;
-      for (const step of t.steps ?? []) open.push(cleanStep(step, n, maxToolChars));
-      open.push({ role: "assistant", text: t.text.trim() || "(no reply)", toolCalls: [] });
+      open.steps = t.steps ?? [];
+      open.reply = { role: "assistant", text: t.text.trim() || "(no reply)", toolCalls: [] };
       open = null;
       events = [];
     }
   }
 
   // Only complete exchanges: a message with no reply yet is the one being answered now.
-  const complete = exchanges.filter((e) => e.at(-1)?.role === "assistant");
+  const complete = exchanges.map((e, i) => ({ e, n: i + 1 })).filter(({ e }) => e.reply);
   const kept: ChatMessage[][] = [];
   let size = 0;
-  for (const e of [...complete].reverse()) {
-    const s = JSON.stringify(e).length;
+  for (const { e, n } of [...complete].reverse()) {
+    // What was said stays word for word however old; what a tool returned shrinks with age, since
+    // by then the model needs what it did, not the output it did it with.
+    const toolChars = kept.length < recent ? maxToolChars : olderToolChars;
+    const messages = [e.user, ...e.steps.map((step) => cleanStep(step, n, toolChars)), e.reply!];
+    const s = JSON.stringify(messages).length;
     if (kept.length && (kept.length >= maxExchanges || size + s > maxChars)) break;
-    kept.unshift(e);
+    kept.unshift(messages);
     size += s;
   }
   // Say what was left out, so the model looks it up instead of assuming the conversation began here.
@@ -630,6 +639,26 @@ export function historyMessages(c: Conversation, o: HistoryOptions = {}): ChatMe
     kept[0][0] = { role: "user", content: `${note}\n\n${kept[0][0].content}` };
   }
   return kept.flat();
+}
+
+function cut(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}\n… (cut)` : text;
+}
+
+/**
+ * A browser step's result carries the whole page it left behind, and in history that page is
+ * always out of date. Kept, one LinkedIn post filled the history on its own, and everything said
+ * before it — the post's own words — was dropped from what the model was shown. What it did stays;
+ * the page is reduced to its title.
+ */
+function withoutPage(text: string): string {
+  // At the start of a line from a tool, or straight after "Result: " in the line a yes leaves behind.
+  const m = /(?:^|Result: )(Page: )/m.exec(text);
+  if (!m) return text;
+  const at = m.index + m[0].length - m[1].length;
+  const did = text.slice(0, at).trim();
+  const title = text.slice(at).split("\n", 1)[0];
+  return `${did ? `${did}\n` : ""}${title} (as it was then; read it again to see it now)`;
 }
 
 function cleanStep(m: ChatMessage, exchange: number, maxToolChars: number): ChatMessage {
@@ -643,7 +672,7 @@ function cleanStep(m: ChatMessage, exchange: number, maxToolChars: number): Chat
       results: m.results.map((r) => ({
         ...r,
         id: id(r.id),
-        content: r.content.length > maxToolChars ? `${r.content.slice(0, maxToolChars)}\n… (cut)` : r.content,
+        content: cut(withoutPage(r.content), maxToolChars),
       })),
     };
   }

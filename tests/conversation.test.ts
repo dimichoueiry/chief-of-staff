@@ -266,6 +266,37 @@ describe("history sent to the model", () => {
     expect(h[2]).toEqual({ role: "user", content: "(Since your last reply: They confirmed, and https://tauri.app/ was opened.)\n\nthanks, now the menubar guide" });
   });
 
+  it("still has the post it was given after several turns of clicking through LinkedIn", () => {
+    // What happened on 2026-09-22: the post was dictated first, then each browser turn carried whole
+    // pages back into history and pushed the post out, so it asked for it again.
+    const page = `Page: Feed | LinkedIn\nAddress: https://www.linkedin.com/feed/\n${"- button \"Like\" [ref=e1]\n".repeat(400)}`;
+    const turns: Conversation["turns"] = [
+      { role: "user", text: "Here is my post: For the past few months I have been thinking about my personal AI setup.", at },
+      { role: "assistant", text: "Got it. Want me to put it on LinkedIn?", at },
+    ];
+    for (let i = 0; i < 6; i++) {
+      turns.push(
+        { role: "event", text: `They said yes and it is already done: click Next. Result: ${page}`, at },
+        { role: "user", text: `click next ${i}`, at },
+        {
+          role: "assistant", text: "Clicked it.", at,
+          steps: [
+            { role: "assistant", text: "", toolCalls: [{ id: `t${i}`, name: "browser_do", input: { goal: "click next" } }] },
+            { role: "tool", results: [{ id: `t${i}`, content: `Did this, in order: clicked button "Next".\n${page}` }] },
+          ],
+        },
+      );
+    }
+    const h = historyMessages(convo(turns));
+    const said = h.filter((m) => m.role === "user").map((m) => (m.role === "user" ? m.content : ""));
+    expect(said[0]).toMatch(/personal AI setup/);
+    expect(said).toHaveLength(7);
+    // What it did survives; the stale page is reduced to its title.
+    const results = h.flatMap((m) => (m.role === "tool" ? m.results.map((r) => r.content) : []));
+    expect(results.at(-1)).toBe('Did this, in order: clicked button "Next".\nPage: Feed | LinkedIn (as it was then; read it again to see it now)');
+    expect(said[1]).not.toMatch(/ref=e1/);
+  });
+
   it("keeps the newest exchanges that fit, dropping whole exchanges", () => {
     const turns: Conversation["turns"] = [];
     for (let i = 1; i <= 6; i++) turns.push({ role: "user", text: `question ${i}`, at }, { role: "assistant", text: "a".repeat(200), at });
