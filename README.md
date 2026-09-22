@@ -87,6 +87,11 @@ model call unless something changed.
 - Your standing rules for it go in `selfhub/goals/heartbeat.md` ("nothing about drawcal until October").
 - Why it spoke, or didn't: `~/.cos/heartbeat.md`, or ✦ › Proactive › What it's been doing…
 - `cos heartbeat now` (or ✦ › Proactive › Look now) looks right away.
+- **Activity** (the chip in the chat's header, or ✦ › Activity…) shows what it's running for you: the
+  heartbeat and its mode, your reminders (tick one off there), your projects' rhythm, and every action
+  that waited for your OK, how you answered, and what your settings let it do on its own.
+- When a reply ends on a question with a few obvious answers, they appear under it as buttons; tapping
+  one sends it as your reply.
 
 ## The desktop app
 

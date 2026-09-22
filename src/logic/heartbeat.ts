@@ -374,6 +374,9 @@ export class Heartbeat {
   private timer: NodeJS.Timeout | null = null;
   private first: NodeJS.Timeout | null = null;
   private running = false;
+  /** When the timer next fires, for the activity page. */
+  private next = 0;
+  private every = 0;
 
   constructor(private readonly d: HeartbeatDeps) {}
 
@@ -473,11 +476,21 @@ export class Heartbeat {
   /** Look every `everyMs`, and once shortly after starting. */
   start(everyMs = 30 * 60_000, firstAfterMs = 2 * 60_000): void {
     if (this.timer) return;
-    const run = () => void this.tick();
+    this.every = everyMs;
+    this.next = Date.now() + firstAfterMs;
+    const run = () => {
+      this.next = Date.now() + everyMs;
+      void this.tick();
+    };
     this.first = setTimeout(run, firstAfterMs);
     this.first.unref?.();
     this.timer = setInterval(run, everyMs);
     this.timer.unref?.();
+  }
+
+  /** The timer: how often it looks and when next, or null when it isn't running (tests, cos ui without it). */
+  schedule(): { everyMs: number; nextAt: string } | null {
+    return this.timer ? { everyMs: this.every, nextAt: new Date(this.next).toISOString() } : null;
   }
 
   stop(): void {

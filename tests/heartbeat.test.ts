@@ -393,7 +393,7 @@ describe("the heartbeat in the app", () => {
     );
     const tick = await post("/api/heartbeat/tick");
     expect(tick).toMatchObject({ outcome: "done", offer: { status: "done" } });
-    expect(requests[1].tools.map((t) => t.name).sort()).toEqual(["get_calendar", "get_conversations", "get_git_log", "get_project", "make_document", "make_page"]);
+    expect(requests[1].tools.map((t) => t.name).sort()).toEqual(["get_calendar", "get_conversations", "get_git_log", "get_project", "make_document", "make_page", "offer_choices"]);
     const convo = await get("/api/conversation");
     expect(convo.turns[0]).toMatchObject({ kind: "offer", text: expect.stringContaining("I drafted"), offer: { mode: "done" }, artifacts: [{ kind: "doc" }] });
     expect(notified[0]).toMatch(/^Done: Wednesday's Module 2 post tuned for shares and saves \| I drafted/);

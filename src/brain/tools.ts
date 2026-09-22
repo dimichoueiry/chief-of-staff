@@ -12,6 +12,7 @@ import type { Config } from "../config.js";
 import type { ImageInput, ServerTools, ToolSpec } from "./llm/types.js";
 import { openRouterImages, type ImageMaker } from "./images.js";
 import { formatSpec, resolveImageModel } from "./llm/registry.js";
+import { recordApproval } from "../core/approvals.js";
 import { artifactsDir, getArtifact, readArtifact, ref, saveArtifact, type ArtifactRef } from "../core/artifacts.js";
 import { describeShot, helperCapturer, type ScreenCapturer } from "../sensors/screen.js";
 import { Conversations } from "./conversation.js";
@@ -570,6 +571,21 @@ export const TOOLS: Record<string, ToolSpec> = {
       required: ["title", "html"],
     },
   },
+  offer_choices: {
+    name: "offer_choices",
+    description:
+      "Put two to four answers under your reply as buttons. Use it whenever your reply ends on a question they could answer in a few words: " +
+      '"Swap in the revised caption" / "Keep the approved caption", "Schedule all three" / "Just Instagram". Write each the way they would say it, a few words, ' +
+      "specific to this moment; tapping one sends it as their reply. Not for open questions, not for yes/no on an action that already has a button, and never more than once per reply. " +
+      "Ask the question in your reply as usual; the buttons only save them typing.",
+    parameters: {
+      type: "object",
+      properties: {
+        options: { type: "array", items: { type: "string" }, minItems: 2, maxItems: 4, description: "The answers, in their words, most likely first" },
+      },
+      required: ["options"],
+    },
+  },
   make_document: {
     name: "make_document",
     description:
@@ -609,7 +625,7 @@ export const ACTIONS = [
  * What the heartbeat may use when it works without being asked (Proactive+): reading, and writing
  * a document or page for them to look at. Nothing that opens, sends, runs, spends or remembers.
  */
-export const PREPARE_TOOLS = ["get_project", "get_calendar", "get_conversations", "get_git_log", "make_document", "make_page"];
+export const PREPARE_TOOLS = ["get_project", "get_calendar", "get_conversations", "get_git_log", "make_document", "make_page", "offer_choices"];
 
 /** Tools that change memory. Everything else only reads or opens. */
 export const WRITES = ["upsert_project", "skip_cadence", "touch_project", "add_reminder", "complete_reminder", "add_note", "append_journal", "add_shortcut"];
@@ -625,7 +641,7 @@ export function toolsFor(intent: Intent): ToolSpec[] {
       "get_project", "upsert_project", "get_git_log", "get_calendar", "open", "get_conversations", "find_folder", "run_command", "get_agents", "start_agent",
       "get_agent_models", "get_agent_output", "confirm_pending", "look_at_screen", "get_work_areas", "get_tickets", "change_ticket",
       "get_orchestrators", "start_orchestrator", "stop_orchestrator", "message_orchestrator", "respond_orchestrator_approval",
-      "make_image", "make_page", "make_document",
+      "make_image", "make_page", "make_document", "offer_choices",
     ],
     wrap: ["get_project", "append_journal", "touch_project", "upsert_project", "get_git_log", "get_conversations"],
   };
@@ -669,6 +685,10 @@ export class ToolRuntime {
   readonly done: { kind: string; detail: string }[] = [];
   /** Pictures and pages made in this run, shown with the reply and kept with the conversation. */
   readonly artifacts: ArtifactRef[] = [];
+  /** Details of what they OK'd in words this run (confirm_pending), so it isn't listed as done on its own. */
+  readonly confirmed: string[] = [];
+  /** Answers offered as buttons under the reply (offer_choices), the latest call's. */
+  choices: string[] = [];
   readonly shortcuts: Shortcuts;
 
   constructor(
@@ -939,15 +959,19 @@ private async pursue(goal: string, rawValues: unknown): Promise<string> {
           if (!p) continue;
           if (!yes) {
             lines.push(`Dropped, as they said: ${p.label}.`);
+            recordApproval({ kind: p.kind, label: p.label, detail: p.detail, outcome: "declined", how: "said" });
             continue;
           }
+          this.confirmed.push(p.detail);
           try {
             const out = await performPending(p, { run: this.actions.run, shell: this.actions.shell, agentGrid: this.actions.agentGrid, browser: this.actions.browser });
+            recordApproval({ kind: p.kind, label: p.label, detail: p.detail, outcome: "allowed", how: "said" });
             if (out.finished) this.done.push({ kind: p.kind, detail: p.detail });
             lines.push(out.finished
               ? `Done, as they said (already done: do not do it again): ${p.label}. Result: ${out.text}`
               : `Started, as they said, but not finished: ${p.label}. Result: ${out.text}`);
           } catch (err) {
+            recordApproval({ kind: p.kind, label: p.label, detail: p.detail, outcome: "failed", how: "said" });
             lines.push(`They said yes, but it failed: ${p.label}: ${(err as Error).message}`);
           }
         }
@@ -997,6 +1021,13 @@ private async pursue(goal: string, rawValues: unknown): Promise<string> {
         this.artifacts.push(ref(artifact));
         this.done.push({ kind: "page", detail: artifact.title });
         return `The page is on their screen: id ${artifact.id}. Say in one line what it is and ask what to change. To change it, call make_page again with the whole page.`;
+      }
+      case "offer_choices": {
+        const raw = Array.isArray(input.options) ? input.options : [];
+        const options = [...new Set(raw.map((o) => String(o ?? "").replace(/\s+/g, " ").trim()).filter(Boolean))].map((o) => (o.length > 80 ? `${o.slice(0, 79).trimEnd()}…` : o)).slice(0, 4);
+        if (options.length < 2) throw new Error("Give two to four options.");
+        this.choices = options;
+        return `Shown as buttons under your reply: ${options.map((o) => `"${o}"`).join(", ")}. Finish your reply with the question they answer; don't list the options again.`;
       }
       case "make_document": {
         const from = this.str(input, "from");

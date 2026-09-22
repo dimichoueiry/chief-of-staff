@@ -47,6 +47,8 @@ export interface Turn {
   offer?: OfferView;
   /** user: the offer this message answers, by its title, shown above it like a quoted reply. */
   replyTo?: string;
+  /** assistant: answers offered as buttons under the reply; tapping one sends it as theirs. */
+  choices?: string[];
 }
 
 /** What an offer turn carries: enough to draw it, and to tell the model what yes means. */

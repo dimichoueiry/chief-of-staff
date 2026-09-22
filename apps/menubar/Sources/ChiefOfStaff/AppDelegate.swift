@@ -165,6 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     let focus = NSMenuItem(title: "Focus a project", action: nil, keyEquivalent: "")
     focus.submenu = focusMenu
     menu.addItem(focus)
+    add(menu, "Activity…", #selector(showActivity))
     add(menu, "Artifacts…", #selector(showArtifacts))
     let model = NSMenuItem(title: "Model", action: nil, keyEquivalent: "")
     model.submenu = modelMenu
@@ -577,6 +578,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   @objc private func showSettings() { NSWorkspace.shared.open(server.config.baseURL.appendingPathComponent("settings.html")) }
 
   /// Everything it has made, newest first.
+  /// What it's running for you and what you've approved.
+  @objc private func showActivity() { NSWorkspace.shared.open(server.config.baseURL.appendingPathComponent("activity.html")) }
+
   @objc private func showArtifacts() { NSWorkspace.shared.open(server.config.baseURL.appendingPathComponent("artifacts.html")) }
 
   /// The grid menu and the per-area submenus under it don't refresh the whole status menu when they open.
@@ -774,7 +778,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
       look.target = self
       look.isEnabled = mode != "off"
       self.proactiveMenu.addItem(look)
-      let log = NSMenuItem(title: "What it's been doing…", action: #selector(self.openHeartbeatLog(_:)), keyEquivalent: "")
+      let activity = NSMenuItem(title: "Activity…", action: #selector(self.showActivity), keyEquivalent: "")
+      activity.target = self
+      self.proactiveMenu.addItem(activity)
+      let log = NSMenuItem(title: "Why it spoke or didn't (log)…", action: #selector(self.openHeartbeatLog(_:)), keyEquivalent: "")
       log.target = self
       log.representedObject = state["log"] as? String
       self.proactiveMenu.addItem(log)
