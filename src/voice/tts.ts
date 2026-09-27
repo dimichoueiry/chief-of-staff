@@ -13,10 +13,16 @@
  * In a voice conversation the voice can be wrapped in cues (see cues.ts): a quiet
  * one as it starts and a chime after the last word, before the mic opens. Cues play
  * through the same playback, so they never overlap the voice and stop with it.
+ *
+ * An acknowledgement (ack.ts, speak with ack: true) gives way to the reply that follows:
+ * if it isn't audible yet it is dropped, and if it is the reply waits for it to end
+ * (at most ACK_WAIT_MS), so the two never overlap and no word is cut in half.
+ * stopSpeaking() silences both.
  */
 import { spawn, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import OpenAI from "openai";
@@ -50,6 +56,8 @@ export interface VoiceSettings {
   /** The menubar app waits for its name: "<wakeName> wake up" listens, "… listen" interrupts, "… sleep" closes. */
   wake: boolean;
   wakeName: string;
+  /** Say a few words ("Looking into it.") the moment a spoken request arrives. */
+  ack: boolean;
 }
 
 export const LISTEN_PAUSE = { min: 1, max: 10 } as const;
@@ -67,6 +75,7 @@ export const DEFAULT_VOICE: VoiceSettings = {
   cues: "both",
   wake: true,
   wakeName: "Darius",
+  ack: true,
 };
 
 export function voiceSettingsFile(): string {
@@ -92,6 +101,7 @@ export function readVoiceSettings(env: NodeJS.ProcessEnv = process.env, file: st
   if (!["auto", "openai", "say"].includes(merged.provider)) merged.provider = "auto";
   if (!CUE_MODES.includes(merged.cues)) merged.cues = DEFAULT_VOICE.cues;
   if (typeof merged.wake !== "boolean") merged.wake = DEFAULT_VOICE.wake;
+  if (typeof merged.ack !== "boolean") merged.ack = DEFAULT_VOICE.ack;
   merged.wakeName = typeof merged.wakeName === "string" && isWakeName(merged.wakeName) ? merged.wakeName.trim() : DEFAULT_VOICE.wakeName;
   merged.speed = Math.min(4, Math.max(0.25, Number(merged.speed) || 1));
   merged.listenPause = Math.min(LISTEN_PAUSE.max, Math.max(LISTEN_PAUSE.min, Number(merged.listenPause) || DEFAULT_VOICE.listenPause));
@@ -210,13 +220,24 @@ export const systemEngine: SpeechEngine = {
 
 // ---------- playback ----------
 
+/** How long a reply waits for an acknowledgement that is already being heard. Acks are a second or less. */
+export const ACK_WAIT_MS = 2_500;
+
 class Playback {
   readonly controller = new AbortController();
   child: ChildProcess | null = null;
   stopped = false;
+  /** Something is coming out of the speakers (or did): a player or `say` has started. */
+  audible = false;
+  private ended!: () => void;
+  /** Settles when this playback is over, however it ended. */
+  readonly done = new Promise<void>((resolve) => (this.ended = resolve));
+
+  constructor(readonly ack = false) {}
 
   track = (child: ChildProcess) => {
     this.child = child;
+    this.audible = true;
     if (this.stopped) child.kill();
   };
 
@@ -224,21 +245,30 @@ class Playback {
     this.stopped = true;
     this.controller.abort();
     this.child?.kill();
+    this.ended();
+  }
+
+  end() {
+    this.ended();
   }
 }
 
 let current: Playback | null = null;
+/** An acknowledgement being heard out while the reply after it waits. */
+let yielding: Playback | null = null;
 
-/** Stop whatever is being spoken. Returns true if something was playing. */
+/** Stop whatever is being spoken, and an acknowledgement a reply is waiting on. Returns true if something was playing. */
 export function stopSpeaking(): boolean {
-  if (!current) return false;
-  current.stop();
+  const any = current !== null || yielding !== null;
+  current?.stop();
+  yielding?.stop();
   current = null;
-  return true;
+  yielding = null;
+  return any;
 }
 
 export function isSpeaking(): boolean {
-  return current !== null;
+  return current !== null || yielding !== null;
 }
 
 export interface SpeakOptions {
@@ -251,6 +281,10 @@ export interface SpeakOptions {
   cues?: Partial<Record<CueName, boolean>>;
   /** Where a cue's sound is. */
   cueFile?: (name: CueName) => Promise<string>;
+  /** An acknowledgement: the next speech drops it if it isn't audible yet, or waits for it to end. */
+  ack?: boolean;
+  /** Keep synthesised pieces here, by text and voice, and reuse them (for phrases said often, like acks). */
+  cacheDir?: string;
 }
 
 export interface SpeakResult {
@@ -262,17 +296,91 @@ export interface SpeakResult {
   cued: CueName[];
 }
 
+/** The cached audio for this text in this voice. Every setting that changes the sound is in the name. */
+export function cacheFile(dir: string, text: string, s: VoiceSettings): string {
+  const key = createHash("sha1").update(JSON.stringify([text, s.voice, s.model, s.instructions, s.speed])).digest("hex").slice(0, 16);
+  return join(dir, `speech-${key}.mp3`);
+}
+
+async function cached(dir: string, text: string, s: VoiceSettings): Promise<string | null> {
+  const file = cacheFile(dir, text, s);
+  try {
+    await access(file);
+    return file;
+  } catch {
+    return null;
+  }
+}
+
+async function keep(dir: string, text: string, s: VoiceSettings, audio: Buffer): Promise<void> {
+  await mkdir(dir, { recursive: true });
+  const file = cacheFile(dir, text, s);
+  const partial = `${file}.${process.pid}.tmp`;
+  await writeFile(partial, audio);
+  await rename(partial, file);
+}
+
+/**
+ * Synthesise these into the cache ahead of time, so the first time one is said it starts at once.
+ * Only for the OpenAI voice; the Mac voice has nothing to wait for. Returns how many were made.
+ */
+export async function preload(texts: string[], dir: string, o: { settings?: VoiceSettings; engine?: SpeechEngine } = {}): Promise<number> {
+  const s = o.settings ?? readVoiceSettings();
+  if (activeTts(s) !== "openai") return 0;
+  const engine = o.engine ?? systemEngine;
+  let made = 0;
+  for (const text of texts) {
+    if (await cached(dir, text, s)) continue;
+    await keep(dir, text, s, await engine.synthesize(text, s, AbortSignal.timeout(15_000)));
+    made++;
+  }
+  return made;
+}
+
 export async function speak(text: string, o: SpeakOptions = {}): Promise<SpeakResult> {
   const s = o.settings ?? readVoiceSettings();
   const engine = o.engine ?? systemEngine;
-  stopSpeaking();
-  const pb = new Playback();
+  // An acknowledgement never talks over other speech: a reply, or an agent's news, carries on.
+  if (o.ack && ((current && !current.ack) || yielding)) return { engine: activeTts(s), pieces: 0, stopped: true, cued: [] };
+  // An acknowledgement already being heard is let finish; anything else, or one still being made, stops here.
+  const before = current;
+  current = null;
+  if (before?.ack && before.audible && !before.stopped && !o.ack) {
+    yielding?.stop();
+    yielding = before;
+  } else {
+    before?.stop();
+  }
+  const pb = new Playback(o.ack === true);
   current = pb;
   const cued: CueName[] = [];
   const finish = (r: Omit<SpeakResult, "cued">): SpeakResult => {
     if (current === pb) current = null;
+    pb.end();
     return { ...r, stopped: pb.stopped, cued };
   };
+  const waitFor = yielding;
+  if (waitFor && waitFor !== pb) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([waitFor.done, pb.done, new Promise<void>((r) => (timer = setTimeout(r, ACK_WAIT_MS)))]);
+    clearTimeout(timer);
+    if (pb.stopped) return finish({ engine: activeTts(s), pieces: 0, stopped: true });
+    waitFor.stop();
+    if (yielding === waitFor) yielding = null;
+  }
+  try {
+    return await speakNow(text, s, engine, pb, o, cued, finish);
+  } finally {
+    // However it ended, even by throwing, nothing waits on it any longer.
+    if (current === pb) current = null;
+    pb.end();
+  }
+}
+
+async function speakNow(
+  text: string, s: VoiceSettings, engine: SpeechEngine, pb: Playback, o: SpeakOptions, cued: CueName[],
+  finish: (r: Omit<SpeakResult, "cued">) => SpeakResult,
+): Promise<SpeakResult> {
   /** Play a cue to its end. A missing or broken cue never costs the voice. */
   const cue = async (name: CueName) => {
     if (!o.cues?.[name] || s.cues === "off" || (s.cues === "turn" && name !== "turn") || pb.stopped) return;
@@ -298,9 +406,12 @@ export async function speak(text: string, o: SpeakOptions = {}): Promise<SpeakRe
   const lookahead = o.lookahead ?? 2;
   const pending: Promise<string>[] = [];
   const start = (i: number) => {
-    pending[i] ??= engine.synthesize(pieces[i], s, pb.controller.signal).then(async (audio) => {
+    pending[i] ??= (o.cacheDir ? cached(o.cacheDir, pieces[i], s) : Promise.resolve(null)).then(async (hit) => {
+      if (hit) return hit;
+      const audio = await engine.synthesize(pieces[i], s, pb.controller.signal);
       const file = join(dir, `${String(i).padStart(3, "0")}.mp3`);
       await writeFile(file, audio);
+      if (o.cacheDir) await keep(o.cacheDir, pieces[i], s, audio).catch(() => {});
       return file;
     });
     // Don't leave an unhandled rejection if playback stops before this piece is awaited.

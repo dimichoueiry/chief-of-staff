@@ -72,7 +72,8 @@ import { findFolders, formatFolderSearch } from "../actions/folders.js";
 import { Shortcuts } from "../actions/shortcuts.js";
 import { slateBoards, type SlateBoard } from "../actions/slate.js";
 import { refuse } from "./guard.js";
-import { readVoiceSettings, speak, stopSpeaking, type SpeakOptions, type SpeakResult } from "../voice/tts.js";
+import { preload, readVoiceSettings, speak, stopSpeaking, type SpeakOptions, type SpeakResult } from "../voice/tts.js";
+import { ACK_COPY, ackCacheDir, ackFor } from "../voice/ack.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const WEB_DIR = join(here, "web");
@@ -542,6 +543,13 @@ export function createUiServer(o: UiOptions): Server {
   };
   const deps = { run: openRunner, shell: o.shell, agentGrid: o.agentGrid, browser: o.browser };
   let pillQueue: Promise<unknown> = Promise.resolve();
+  /**
+   * Every message is numbered as it arrives. A stop (Esc, the stop button, talking over it) hushes every
+   * message that has arrived so far, so a reply still being worked out is shown but never read aloud:
+   * POST /api/speak refuses a reply whose number was hushed. Read-aloud buttons send no number.
+   */
+  let speechTurns = 0;
+  let hushedThrough = 0;
   let summarizing = false;
   let summarizeAgain = false;
 
@@ -719,6 +727,31 @@ export function createUiServer(o: UiOptions): Server {
     emit({ type: "start", conversation: convo.id, user: said, ...(reply.replyTo ? { replyTo: reply.replyTo } : {}) });
     await syncActivity().catch(() => undefined);
     return traced(said, mode, () => answer(said, command, mode, focusOn, convo, emit, reply));
+  }
+
+  /**
+   * A few words for a spoken request the moment it arrives (voice/ack.ts): "Looking into it.", "On it.".
+   * Chosen from what's already known, by rules, with nothing slow in the way, and never awaited: the
+   * turn starts at the same moment. It gives way to the reply (tts.ts) and stops with it.
+   */
+  function acknowledge(b: Record<string, unknown>): void {
+    const speaker = o.speaker ?? (o.allowSpeech === false ? null : speak);
+    const mode = String(b.mode ?? "auto");
+    if (!speaker || mode === "focus") return;
+    const settings = readVoiceSettings();
+    if (!settings.ack) return;
+    const said = String(b.text ?? "").trim();
+    const command = String(b.command ?? "").trim() || said;
+    const waiting = awaiting(conversations.current()).length > 0;
+    const ack = ackFor(command, {
+      mode,
+      consent: waiting ? readConsent(said) : undefined,
+      opens: mode !== "capture" && (OPEN_SHAPE.test(command) || FAST_OPEN_SHAPE.test(command)),
+      looks: LOOK_REQUEST.test(command),
+    });
+    if (!ack) return;
+    Log(`ack: "${ack.text}" (${ack.intent}, ${ack.source})`);
+    speaker(ack.text, { ack: true, settings, cacheDir: ackCacheDir() }).catch((err) => Log(`ack: couldn't say it: ${(err as Error).message}`));
   }
 
   /** The turn itself, so everything it reaches can note what it did (see util/trace.ts). */
@@ -1281,14 +1314,18 @@ export function createUiServer(o: UiOptions): Server {
           res.write(`${JSON.stringify(event)}\n`);
         };
         const stream = b.stream === true;
+        const speechTurn = ++speechTurns;
+        // Heard at once, even when it waits behind another message or on Jev.
+        if (b.voice === true) acknowledge(b);
         // One message at a time, so each reply is saved before the next message reads the conversation.
         replying++;
         const turn = pillQueue.then(() => pill(b, stream ? line : () => {})).finally(() => replying--);
         pillQueue = turn.catch(() => undefined);
         try {
           const r = await turn;
-          if (!res.headersSent) return json(res, r.status, r.body);
-          line({ type: "done", result: r.body });
+          const result = { ...r.body, speechTurn };
+          if (!res.headersSent) return json(res, r.status, result);
+          line({ type: "done", result });
         } catch (err) {
           if (!res.headersSent) throw err;
           line({ type: "error", error: (err as Error).message });
@@ -1510,12 +1547,19 @@ export function createUiServer(o: UiOptions): Server {
         if (!text) return json(res, 400, { error: "empty" });
         const speaker = o.speaker ?? (o.allowSpeech === false ? null : speak);
         if (!speaker) return json(res, 200, { ok: true, muted: true });
+        // A reply to a message that was stopped while it was being worked out stays unspoken.
+        const speechTurn = Number(b.speechTurn);
+        if (Number.isSafeInteger(speechTurn) && speechTurn > 0 && speechTurn <= hushedThrough) {
+          Log(`speak: reply ${speechTurn} not read aloud, it was stopped while thinking`);
+          return json(res, 200, { ok: true, stopped: true, hushed: true, cued: [] });
+        }
         // Cues are for voice conversations: the pill asks for them, read-aloud buttons don't.
         const asked = (b.cues ?? {}) as { start?: unknown; turn?: unknown };
         const spoken = await speaker(markdownToSpeech(text), { cues: { start: asked.start === true, turn: asked.turn === true } });
         return json(res, 200, { ok: true, engine: spoken.engine, fellBack: spoken.fellBack ?? null, stopped: spoken.stopped, cued: spoken.cued });
       }
       case "POST /api/speak/stop":
+        hushedThrough = speechTurns;
         return json(res, 200, { ok: true, stopped: stopSpeaking() });
       default:
         return json(res, 404, { error: "not found" });
@@ -1580,6 +1624,11 @@ export function createUiServer(o: UiOptions): Server {
       await json(res, 500, { error: (err as Error).message });
     }
   });
+
+  // Acknowledgements are made once per voice, ahead of time, so the first one isn't late. Only for the real speakers.
+  if (!o.speaker && o.allowSpeech !== false && !o.offline) {
+    preload([...new Set(Object.values(ACK_COPY))], ackCacheDir()).catch((err) => Log(`ack: couldn't prepare the voice: ${(err as Error).message}`));
+  }
 
   if (o.heartbeat) {
     const every = o.heartbeat.everyMs;
