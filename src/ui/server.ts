@@ -543,6 +543,13 @@ export function createUiServer(o: UiOptions): Server {
   };
   const deps = { run: openRunner, shell: o.shell, agentGrid: o.agentGrid, browser: o.browser };
   let pillQueue: Promise<unknown> = Promise.resolve();
+  /**
+   * Every message is numbered as it arrives. A stop (Esc, the stop button, talking over it) hushes every
+   * message that has arrived so far, so a reply still being worked out is shown but never read aloud:
+   * POST /api/speak refuses a reply whose number was hushed. Read-aloud buttons send no number.
+   */
+  let speechTurns = 0;
+  let hushedThrough = 0;
   let summarizing = false;
   let summarizeAgain = false;
 
@@ -1307,6 +1314,7 @@ export function createUiServer(o: UiOptions): Server {
           res.write(`${JSON.stringify(event)}\n`);
         };
         const stream = b.stream === true;
+        const speechTurn = ++speechTurns;
         // Heard at once, even when it waits behind another message or on Jev.
         if (b.voice === true) acknowledge(b);
         // One message at a time, so each reply is saved before the next message reads the conversation.
@@ -1315,8 +1323,9 @@ export function createUiServer(o: UiOptions): Server {
         pillQueue = turn.catch(() => undefined);
         try {
           const r = await turn;
-          if (!res.headersSent) return json(res, r.status, r.body);
-          line({ type: "done", result: r.body });
+          const result = { ...r.body, speechTurn };
+          if (!res.headersSent) return json(res, r.status, result);
+          line({ type: "done", result });
         } catch (err) {
           if (!res.headersSent) throw err;
           line({ type: "error", error: (err as Error).message });
@@ -1538,12 +1547,19 @@ export function createUiServer(o: UiOptions): Server {
         if (!text) return json(res, 400, { error: "empty" });
         const speaker = o.speaker ?? (o.allowSpeech === false ? null : speak);
         if (!speaker) return json(res, 200, { ok: true, muted: true });
+        // A reply to a message that was stopped while it was being worked out stays unspoken.
+        const speechTurn = Number(b.speechTurn);
+        if (Number.isSafeInteger(speechTurn) && speechTurn > 0 && speechTurn <= hushedThrough) {
+          Log(`speak: reply ${speechTurn} not read aloud, it was stopped while thinking`);
+          return json(res, 200, { ok: true, stopped: true, hushed: true, cued: [] });
+        }
         // Cues are for voice conversations: the pill asks for them, read-aloud buttons don't.
         const asked = (b.cues ?? {}) as { start?: unknown; turn?: unknown };
         const spoken = await speaker(markdownToSpeech(text), { cues: { start: asked.start === true, turn: asked.turn === true } });
         return json(res, 200, { ok: true, engine: spoken.engine, fellBack: spoken.fellBack ?? null, stopped: spoken.stopped, cued: spoken.cued });
       }
       case "POST /api/speak/stop":
+        hushedThrough = speechTurns;
         return json(res, 200, { ok: true, stopped: stopSpeaking() });
       default:
         return json(res, 404, { error: "not found" });

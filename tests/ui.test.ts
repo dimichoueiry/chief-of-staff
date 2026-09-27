@@ -416,6 +416,55 @@ describe("ui server (offline)", () => {
     }
   });
 
+  it("stopping while it thinks keeps the reply on its way from being read aloud, not only the acknowledgement", async () => {
+    const heard: string[] = [];
+    let jevStarted!: () => void;
+    const jevAsked = new Promise<void>((r) => (jevStarted = r));
+    const server = createUiServer({
+      config: loadConfig({ COS_SELFHUB: dir, COS_PROJECT_ROOTS: "/nonexistent" }), today: THU, offline: true,
+      openRunner: async () => {},
+      speaker: async (text) => (heard.push(text), { engine: "say", pieces: 1, stopped: false, cued: [] }),
+      // Slow enough that the stop lands while the turn is still being worked out.
+      jev: async (): Promise<JevResult> => {
+        jevStarted();
+        await new Promise((r) => setTimeout(r, 200));
+        throw new Error("slow");
+      },
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const post = async (path: string, b: Record<string, unknown>) =>
+      (await fetch(`${url}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) })).json();
+    try {
+      // Esc while thinking: the page (or the menubar app, talking over it) posts a stop mid-turn.
+      const pending = post("/api/pill", { text: "Darius, can you get my canvas up", command: "can you get my canvas up", voice: true });
+      await jevAsked;
+      await post("/api/speak/stop", {});
+      const r = await pending;
+      expect(r.text).toBeTruthy(); // the reply still arrives, for the chat
+      expect(heard).toEqual(["On it."]); // only the acknowledgement, said before the stop
+      const refused = await post("/api/speak", { text: r.text, cues: { start: true, turn: true }, speechTurn: r.speechTurn });
+      expect(refused).toMatchObject({ ok: true, stopped: true, hushed: true });
+      expect(heard).toEqual(["On it."]); // the reply was never spoken
+
+      // The next message is heard as usual, and read-aloud buttons (no number) never are refused.
+      const next = await post("/api/pill", { text: "what is the plan", voice: true });
+      expect(next.speechTurn).toBe(r.speechTurn + 1);
+      expect(await post("/api/speak", { text: next.text, speechTurn: next.speechTurn })).toMatchObject({ stopped: false });
+      expect(await post("/api/speak", { text: "Read aloud." })).toMatchObject({ stopped: false });
+      expect(heard).toHaveLength(4); // its acknowledgement, its reply, the read-aloud
+      expect(heard.slice(0, 2)).toEqual(["On it.", "Looking into it."]);
+      expect(heard.at(-1)).toBe("Read aloud.");
+
+      // A stop after a reply was read hushes nothing new: the following message is still spoken.
+      await post("/api/speak/stop", {});
+      const later = await post("/api/pill", { text: "why is the sky blue", voice: true });
+      expect(await post("/api/speak", { text: later.text, speechTurn: later.speechTurn })).toMatchObject({ stopped: false });
+    } finally {
+      server.close();
+    }
+  });
+
   it("acknowledges a yes to something waiting with a plain okay", async () => {
     const heard: string[] = [];
     const server = createUiServer({

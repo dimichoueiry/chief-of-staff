@@ -145,14 +145,15 @@ function markStale() {
  * In a conversation, cues.start asks for a quiet cue as the voice begins and cues.turn for a chime after
  * the last word. The server plays them in line with the voice, so this resolves after the chime has ended.
  */
-async function speakText(text, cues = {}) {
+async function speakText(text, cues = {}, speechTurn) {
   if (liveMode.active) liveMode.stop();
   if (!text) return null;
   setState("speaking", "Reading it to you…");
   let spoken = null;
   let result = null;
   try {
-    result = await post("/api/speak", { text, cues });
+    // The reply's number lets the app refuse it if it was stopped while being worked out, whoever stopped it.
+    result = await post("/api/speak", { text, cues, ...(speechTurn ? { speechTurn } : {}) });
     if (!result.stopped && !result.error && !result.muted && pill.dataset.state === "speaking") spoken = { cued: result.cued || [] };
   } catch {
     result = null; // couldn't even reach the app
@@ -199,7 +200,19 @@ function voicePlaying() {
   return pill.dataset.state === "speaking" || pill.dataset.state === "thinking";
 }
 
+// Each message sent is numbered here too. Stopping while thinking hushes the ones sent so far: their
+// replies still land in the chat but aren't read aloud. The app refuses them as well (speechTurn).
+let sentCount = 0;
+let hushedCount = 0;
+
+/** Stop the voice. While thinking, the reply on its way is hushed too, not only the acknowledgement. */
+function stopVoice() {
+  if (pill.dataset.state === "thinking") hushedCount = sentCount;
+  if (voicePlaying()) post("/api/speak/stop", {});
+}
+
 async function stopSpeaking() {
+  if (pill.dataset.state === "thinking") hushedCount = sentCount;
   await post("/api/speak/stop", {});
   setState("idle");
 }
@@ -737,6 +750,7 @@ async function postStream(url, body, onEvent) {
 async function send(body, thinking, fromVoice = false) {
   if (liveMode.active) liveMode.stop();
   busy = true;
+  const sent = ++sentCount;
   setState("thinking", thinking);
   let pending = null;
   let live = "";
@@ -785,8 +799,10 @@ async function send(body, thinking, fromVoice = false) {
   // Spoken questions get spoken replies, then a chime and the mic reopens for the answer.
   // Typed ones stay quiet unless you press read aloud. Opening something ends the exchange, so no chime.
   if (!fromVoice || !r.text) return;
+  // Stopped while it was being worked out: it's in the chat, and stays quiet.
+  if (sent <= hushedCount) return;
   const expectsReply = !["action", "confirm"].includes(r.kind);
-  const spoken = await speakText(r.text, { start: true, turn: expectsReply });
+  const spoken = await speakText(r.text, { start: true, turn: expectsReply }, r.speechTurn);
   if (spoken && expectsReply) listenForReply(spoken);
 }
 
@@ -967,7 +983,7 @@ function browserListen() {
     if (notice) noticeThenClear(notice.text, notice.tone, 5000);
     else setState("idle");
   };
-  if (voicePlaying()) post("/api/speak/stop", {});
+  stopVoice();
   setState("listening", followUp ? "Your turn…" : "Listening…");
   rec.start();
 }
@@ -1023,7 +1039,7 @@ window.cosShell = {
       return;
     }
     // Talking over a reply (or the few words said while it's worked out) stops it, so the mic doesn't hear the voice.
-    if (voicePlaying()) post("/api/speak/stop", {});
+    stopVoice();
     setState("listening", followUp ? "Your turn…" : "Listening…");
     if (followUp) {
       clearTimeout(followUpTimer);
@@ -1065,7 +1081,7 @@ window.cosShell = {
       typingOpen = false;
       applyPillSize();
     }
-    if (voicePlaying()) post("/api/speak/stop", {});
+    stopVoice();
     input.value = "";
     setState("idle");
   },
