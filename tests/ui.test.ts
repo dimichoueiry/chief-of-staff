@@ -16,6 +16,7 @@ import { decide } from "../src/logic/decide.js";
 import { resolveDate, scribe } from "../src/logic/scribe.js";
 import { saveAccess } from "../src/actions/access.js";
 import { ScreenPermissionError } from "../src/sensors/screen.js";
+import { saveVoiceSettings } from "../src/voice/tts.js";
 import { createUiServer } from "../src/ui/server.js";
 import { makeTmpSelfhub } from "./helpers/tmp-selfhub.js";
 
@@ -361,6 +362,77 @@ describe("ui server (offline)", () => {
         ["Read aloud.", { start: false, turn: false }],
         ["Odd.", { start: false, turn: false }],
       ]);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("acknowledges a spoken request the moment it arrives, before Jev and without holding the reply", async () => {
+    const order: string[] = [];
+    const heard: { text: string; ack?: boolean }[] = [];
+    let jevAsked = 0;
+    const server = createUiServer({
+      config: loadConfig({ COS_SELFHUB: dir, COS_PROJECT_ROOTS: "/nonexistent" }), today: THU, offline: true,
+      openRunner: async () => {},
+      // A speaker that never finishes: the reply must not wait on the acknowledgement.
+      speaker: (text, o) => {
+        order.push(`ack ${text}`);
+        heard.push({ text, ack: o.ack });
+        return new Promise(() => {});
+      },
+      // A Jev that takes its whole timeout: the acknowledgement must not wait on it.
+      jev: async (_req: JevRequest): Promise<JevResult> => {
+        order.push("jev");
+        jevAsked++;
+        await new Promise((r) => setTimeout(r, 300));
+        throw new Error("slow");
+      },
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const pill = async (b: Record<string, unknown>) => (await fetch(`${url}/api/pill`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) })).json();
+    try {
+      const r = await pill({ text: "Darius, can you get my canvas up", command: "can you get my canvas up", voice: true });
+      expect(r.kind).toBe("answer"); // offline and Jev failed: the rules answered, the ack never held it
+      expect(jevAsked).toBe(1);
+      expect(order).toEqual(["ack On it.", "jev"]); // the server's open rule knew it's an action, before Jev was asked
+      expect(heard[0]).toMatchObject({ ack: true });
+
+      heard.length = 0;
+      await pill({ text: "what's on my calendar today", voice: true });
+      await pill({ text: "Sam prefers mornings", mode: "capture", voice: true });
+      await pill({ text: "thanks", voice: true });
+      await pill({ text: "what's on my calendar today" }); // typed: stays quiet
+      await pill({ text: "Chief of Staff", mode: "focus", voice: true });
+      expect(heard.map((h) => h.text)).toEqual(["Let me check.", "Got it."]);
+
+      // Their saved setting turns it off.
+      saveVoiceSettings({ ack: false }, join(home, "voice.json"));
+      heard.length = 0;
+      await pill({ text: "why is the sky blue", voice: true });
+      expect(heard).toEqual([]);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("acknowledges a yes to something waiting with a plain okay", async () => {
+    const heard: string[] = [];
+    const server = createUiServer({
+      config: loadConfig({ COS_SELFHUB: dir, COS_PROJECT_ROOTS: "/nonexistent" }), today: THU, offline: true,
+      openRunner: async () => {},
+      speaker: async (text) => (heard.push(text), { engine: "say", pieces: 1, stopped: false, cued: [] }),
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const pill = async (b: Record<string, unknown>) => (await fetch(`${url}/api/pill`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(b) })).json();
+    try {
+      saveAccess({ links: "ask", screen: "auto", browser: "ask" });
+      const link = await pill({ text: "open https://example.com/page", voice: true });
+      expect(link.kind).toBe("confirm");
+      const yes = await pill({ text: "okay", voice: true });
+      expect(yes.text).toMatch(/Opened https:\/\/example\.com\/page/);
+      expect(heard).toEqual(["On it.", "Okay."]);
     } finally {
       server.close();
     }

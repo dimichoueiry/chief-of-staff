@@ -194,6 +194,11 @@ function endFollowUp() {
   followUpTimer = null;
 }
 
+/** The voice may be heard: a reply, or while thinking the acknowledgement said as a spoken request arrived. */
+function voicePlaying() {
+  return pill.dataset.state === "speaking" || pill.dataset.state === "thinking";
+}
+
 async function stopSpeaking() {
   await post("/api/speak/stop", {});
   setState("idle");
@@ -742,7 +747,8 @@ async function send(body, thinking, fromVoice = false) {
   };
   let r;
   try {
-    r = await postStream("/api/pill", body, (ev) => {
+    // Spoken: the server says a few words at once ("Looking into it.") while it works on the reply.
+    r = await postStream("/api/pill", fromVoice ? { ...body, voice: true } : body, (ev) => {
       if (ev.type === "start") begin(ev.conversation, ev.user, ev.replyTo);
       else if (ev.type === "status") {
         live = "";
@@ -961,7 +967,7 @@ function browserListen() {
     if (notice) noticeThenClear(notice.text, notice.tone, 5000);
     else setState("idle");
   };
-  if (pill.dataset.state === "speaking") post("/api/speak/stop", {});
+  if (voicePlaying()) post("/api/speak/stop", {});
   setState("listening", followUp ? "Your turn…" : "Listening…");
   rec.start();
 }
@@ -1016,8 +1022,8 @@ window.cosShell = {
       if (pill.dataset.state === "listening") setState("idle");
       return;
     }
-    // Talking over a reply stops it, so the mic doesn't hear the voice.
-    if (pill.dataset.state === "speaking") post("/api/speak/stop", {});
+    // Talking over a reply (or the few words said while it's worked out) stops it, so the mic doesn't hear the voice.
+    if (voicePlaying()) post("/api/speak/stop", {});
     setState("listening", followUp ? "Your turn…" : "Listening…");
     if (followUp) {
       clearTimeout(followUpTimer);
@@ -1059,7 +1065,7 @@ window.cosShell = {
       typingOpen = false;
       applyPillSize();
     }
-    if (pill.dataset.state === "speaking") post("/api/speak/stop", {});
+    if (voicePlaying()) post("/api/speak/stop", {});
     input.value = "";
     setState("idle");
   },

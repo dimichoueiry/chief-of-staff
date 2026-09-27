@@ -933,7 +933,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
   private func beginPushToTalk() {
     guard ready else { return }
     if speech.liveSession != nil { panel.eval("cosShell.stopLive()"); speech.cancel() }
-    if pageState == "speaking" { server.postJSON("api/speak/stop", [:]) }
+    // While thinking, the acknowledgement may still be playing: the mic shouldn't hear it.
+    if pageState == "speaking" || pageState == "thinking" { server.postJSON("api/speak/stop", [:]) }
     setView("pill")
     panel.show()
     startListening()
