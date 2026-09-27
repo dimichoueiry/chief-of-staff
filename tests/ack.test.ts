@@ -115,8 +115,12 @@ function timedEngine() {
     synthesize: (text, _s, signal) =>
       new Promise((resolve, reject) => {
         log.push(`synth ${text}`);
-        synths.push({ text, resolve, reject });
-        signal.addEventListener("abort", () => reject(new Error("aborted")));
+        const entry = { text, resolve, reject };
+        synths.push(entry);
+        signal.addEventListener("abort", () => {
+          synths.splice(synths.indexOf(entry), 1);
+          reject(new Error("aborted"));
+        });
       }),
     play: (file, track) => sound(file.split("/").pop()!, track),
     say: (text, _s, track) => sound(text, track),
@@ -125,14 +129,16 @@ function timedEngine() {
     engine, log, synths, plays,
     get mostAtOnce() { return mostAtOnce; },
     get playing() { return playing; },
-    /** Finish synthesising the oldest piece still being made. */
-    synthDone(text: string) {
+    /** Finish synthesising this piece, once it has been asked for. */
+    async synthDone(text: string) {
+      await until(() => synths.some((s) => s.text === text), `synthesis of "${text}"`);
       const i = synths.findIndex((s) => s.text === text);
       synths.splice(i, 1)[0].resolve(Buffer.from(text));
     },
-    /** End whatever is playing now. */
-    endPlaying() {
-      plays[0]?.end();
+    /** End what is playing, once something is. */
+    async endPlaying() {
+      await until(() => plays.length > 0, "something playing");
+      plays[0].end();
     },
   };
 }
@@ -140,6 +146,18 @@ function timedEngine() {
 const openai: VoiceSettings = { ...DEFAULT_VOICE, provider: "openai", cues: "off" };
 const mac: VoiceSettings = { ...DEFAULT_VOICE, provider: "say", cues: "off" };
 const tick = () => new Promise((r) => setTimeout(r, 5));
+
+/**
+ * Wait for a condition rather than a fixed time, so a busy machine (the full suite runs files in
+ * parallel) can't make a step look at state that hasn't happened yet.
+ */
+async function until(ok: () => boolean, what: string, ms = 2_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!ok()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await tick();
+  }
+}
 
 describe("an acknowledgement gives way to the reply", () => {
   afterEach(() => {
@@ -149,13 +167,11 @@ describe("an acknowledgement gives way to the reply", () => {
   it("is dropped, never heard, when the reply is ready before the acknowledgement could be", async () => {
     const e = timedEngine();
     const ack = speak("Looking into it.", { ack: true, settings: openai, engine: e.engine });
-    await tick(); // still synthesising: nothing audible yet
+    await until(() => e.synths.length === 1, "the acknowledgement being made"); // nothing audible yet
     const reply = speak("It's 14 degrees.", { settings: openai, engine: e.engine });
     expect((await ack).stopped).toBe(true);
-    await tick();
-    e.synthDone("It's 14 degrees.");
-    await tick();
-    e.endPlaying();
+    await e.synthDone("It's 14 degrees.");
+    await e.endPlaying();
     const r = await reply;
     expect(r.stopped).toBe(false);
     expect(e.log.filter((l) => l.startsWith("start"))).toHaveLength(1); // only the reply was ever played
@@ -165,15 +181,14 @@ describe("an acknowledgement gives way to the reply", () => {
   it("is heard to its end when already playing, and the reply starts only after: never both at once", async () => {
     const e = timedEngine();
     const ack = speak("On it.", { ack: true, settings: mac, engine: e.engine });
-    await tick();
-    expect(e.playing).toBe(1);
+    await until(() => e.playing === 1, "the acknowledgement playing");
     const reply = speak("Opened Cursor.", { settings: mac, engine: e.engine });
     await tick();
     expect(e.log).toEqual(["start On it."]); // the reply waits; the ack isn't cut mid-word
-    e.endPlaying(); // the ack ends by itself
-    await tick();
+    await e.endPlaying(); // the ack ends by itself
+    await until(() => e.log.includes("start Opened Cursor."), "the reply starting");
     expect(e.log).toEqual(["start On it.", "end On it.", "start Opened Cursor."]);
-    e.endPlaying();
+    await e.endPlaying();
     expect((await reply).stopped).toBe(false);
     expect((await ack).stopped).toBe(false);
     expect(e.mostAtOnce).toBe(1);
@@ -182,25 +197,25 @@ describe("an acknowledgement gives way to the reply", () => {
   it("is cut if it runs past ACK_WAIT_MS, so a stuck player can't hold the reply", async () => {
     const e = timedEngine();
     speak("On it.", { ack: true, settings: mac, engine: e.engine });
-    await tick();
+    await until(() => e.playing === 1, "the acknowledgement playing");
     const started = Date.now();
     const reply = speak("Opened Cursor.", { settings: mac, engine: e.engine });
-    while (!e.log.includes("start Opened Cursor.")) await tick();
+    await until(() => e.log.includes("start Opened Cursor."), "the reply starting", ACK_WAIT_MS + 2_000);
     expect(Date.now() - started).toBeGreaterThanOrEqual(ACK_WAIT_MS - 50);
     expect(e.log).toContain("killed On it.");
     expect(e.mostAtOnce).toBe(1);
-    e.endPlaying();
+    await e.endPlaying();
     await reply;
   }, ACK_WAIT_MS + 3_000);
 
   it("never talks over speech already under way", async () => {
     const e = timedEngine();
     const news = speak("Your agent finished the docs.", { settings: mac, engine: e.engine });
-    await tick();
+    await until(() => e.playing === 1, "the news playing");
     const ack = await speak("Looking into it.", { ack: true, settings: mac, engine: e.engine });
     expect(ack).toMatchObject({ stopped: true, pieces: 0 });
     expect(e.log).toEqual(["start Your agent finished the docs."]);
-    e.endPlaying();
+    await e.endPlaying();
     expect((await news).stopped).toBe(false);
   });
 });
@@ -213,7 +228,7 @@ describe("stopping an acknowledgement", () => {
   it("stops it at once while it plays", async () => {
     const e = timedEngine();
     const ack = speak("Looking into it.", { ack: true, settings: mac, engine: e.engine });
-    await tick();
+    await until(() => e.playing === 1, "the acknowledgement playing");
     expect(isSpeaking()).toBe(true);
     expect(stopSpeaking()).toBe(true);
     expect((await ack).stopped).toBe(true);
@@ -224,7 +239,7 @@ describe("stopping an acknowledgement", () => {
   it("stops both the acknowledgement and the reply waiting behind it", async () => {
     const e = timedEngine();
     const ack = speak("On it.", { ack: true, settings: mac, engine: e.engine });
-    await tick();
+    await until(() => e.playing === 1, "the acknowledgement playing");
     const reply = speak("Opened Cursor.", { settings: mac, engine: e.engine });
     await tick();
     expect(stopSpeaking()).toBe(true);
@@ -239,7 +254,7 @@ describe("stopping an acknowledgement", () => {
   it("cancels synthesis of one not yet heard, so it can't start late", async () => {
     const e = timedEngine();
     const ack = speak("Looking into it.", { ack: true, settings: openai, engine: e.engine });
-    await tick();
+    await until(() => e.synths.length === 1, "the acknowledgement being made");
     stopSpeaking();
     expect((await ack).stopped).toBe(true);
     await tick();
